@@ -10,6 +10,8 @@ import {
   View,
 } from 'react-native';
 
+import BatchGeocodeMap from './BatchGeocodeMap';
+
 // Points at the geocoding-server Express API (C:\software\geocoding\geocoding-server).
 // The file path is read on the server (it has local filesystem access),
 // not in the app, so this only works when server and app share a filesystem
@@ -134,6 +136,13 @@ export default function BatchGeocodeForm() {
   }, [filePath]);
 
   const successCount = results ? results.filter((r) => r.success).length : 0;
+  const successMarkers = (results ?? [])
+    .filter((r): r is Extract<BatchResult, { success: true }> => r.success)
+    .map((r) => ({
+      address: r.address,
+      latitude: r.coordinates.latitude,
+      longitude: r.coordinates.longitude,
+    }));
 
   return (
     <View style={styles.container}>
@@ -179,6 +188,7 @@ export default function BatchGeocodeForm() {
               )}
             </View>
           ))}
+          {successMarkers.length > 0 && <BatchGeocodeMap markers={successMarkers} />}
         </View>
       )}
 

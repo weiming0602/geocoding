@@ -1,29 +1,13 @@
-import type { StyleSpecification } from 'maplibre-gl';
 import { Map as MapLibreMap, Marker, NavigationControl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import React, { useEffect, useRef } from 'react';
 import { View } from 'react-native';
 
+import { OSM_RASTER_STYLE } from './osmStyle';
+
 type Props = {
   latitude: number;
   longitude: number;
-};
-
-// MapLibre's own demotiles style has no street-level detail outside a
-// handful of demo areas. OpenStreetMap's raster tiles have full worldwide
-// coverage and need no API key (fine for this dev tool's traffic level;
-// swap for a hosted vector style/API key before any real production use).
-const OSM_RASTER_STYLE: StyleSpecification = {
-  version: 8,
-  sources: {
-    osm: {
-      type: 'raster',
-      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
-      tileSize: 256,
-      attribution: '&copy; OpenStreetMap contributors',
-    },
-  },
-  layers: [{ id: 'osm', type: 'raster', source: 'osm' }],
 };
 
 export default function GeocodeMap({ latitude, longitude }: Props) {
