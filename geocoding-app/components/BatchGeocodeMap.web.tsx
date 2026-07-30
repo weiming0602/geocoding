@@ -3,6 +3,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import React, { useEffect, useRef } from 'react';
 import { View } from 'react-native';
 
+import { attachHoverLabel } from './mapHoverLabel';
 import { OSM_RASTER_STYLE } from './osmStyle';
 
 export type MarkerPoint = {
@@ -47,9 +48,11 @@ export default function BatchGeocodeMap({ markers }: Props) {
     if (!map) return;
 
     markerInstancesRef.current.forEach((marker) => marker.remove());
-    markerInstancesRef.current = markers.map((point) =>
-      new Marker().setLngLat([point.longitude, point.latitude]).addTo(map)
-    );
+    markerInstancesRef.current = markers.map((point) => {
+      const marker = new Marker().setLngLat([point.longitude, point.latitude]).addTo(map);
+      attachHoverLabel(marker, map, point.address);
+      return marker;
+    });
 
     if (markers.length === 0) return;
 

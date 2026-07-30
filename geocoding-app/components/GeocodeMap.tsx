@@ -1,17 +1,19 @@
 import React from 'react';
-import { Button, Linking, Platform, View } from 'react-native';
+import { Button, Linking, Platform, Text, View } from 'react-native';
 
 type Props = {
   latitude: number;
   longitude: number;
+  label?: string;
 };
 
 // Inline maps need expo-maps (iOS/Android only, alpha, needs a Google Maps
 // API key on Android) or @maplibre/maplibre-react-native (needs a custom
 // dev client, not plain Expo Go) - neither of which this project has set
 // up yet. Until then, native platforms open the coordinates in the
-// device's own Maps app instead of rendering an inline map.
-export default function GeocodeMap({ latitude, longitude }: Props) {
+// device's own Maps app instead of rendering an inline map, so there's no
+// marker to hover; `label` is just shown as text instead.
+export default function GeocodeMap({ latitude, longitude, label }: Props) {
   const handleOpenMaps = () => {
     const url = Platform.select({
       ios: `maps:0,0?q=${latitude},${longitude}`,
@@ -28,6 +30,7 @@ export default function GeocodeMap({ latitude, longitude }: Props) {
 
   return (
     <View style={{ marginTop: 12 }}>
+      {label && <Text style={{ marginBottom: 4, color: '#666' }}>{label}</Text>}
       <Button title="Open in Maps" onPress={handleOpenMaps} />
     </View>
   );
