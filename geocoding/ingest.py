@@ -44,10 +44,20 @@ def _shape_to_wkt(shape) -> Optional[str]:
 
 
 def ingest(shp_path: Path, db_path: Path) -> int:
-    """Ingest one edges shapefile into db_path, creating tables as needed."""
+    """Ingest one edges shapefile into db_path, creating tables as needed.
+
+    Rows are keyed by TLID (TIGER/Line ID, unique nationwide), so
+    re-ingesting a file already loaded — or one that overlaps an
+    already-loaded county — silently skips rows that exist already
+    instead of duplicating or erroring. Returns the number of rows
+    newly inserted (not the number read from the shapefile).
+    """
     conn = sqlite3.connect(db_path)
     try:
         conn.executescript(CREATE_TABLE_SQL)
+        # Indexes (including the unique index on tlid) must exist before
+        # inserting so "INSERT OR IGNORE" can actually detect duplicates.
+        conn.executescript(CREATE_INDEXES_SQL)
 
         reader = shapefile.Reader(str(shp_path))
         field_names = [f[0] for f in reader.fields[1:]]  # skip the deletion flag
@@ -60,7 +70,7 @@ def ingest(shp_path: Path, db_path: Path) -> int:
         columns += [FIELD_MAP[name] for name in available]
         placeholders = ", ".join("?" for _ in columns)
         insert_sql = (
-            f"INSERT INTO streets ({', '.join(columns)}) "
+            f"INSERT OR IGNORE INTO streets ({', '.join(columns)}) "
             f"VALUES ({placeholders})"
         )
 
@@ -73,10 +83,9 @@ def ingest(shp_path: Path, db_path: Path) -> int:
             row = [wkt, *bbox, *(record.get(name) for name in available)]
             rows.append(row)
 
-        conn.executemany(insert_sql, rows)
-        conn.executescript(CREATE_INDEXES_SQL)
+        cursor = conn.executemany(insert_sql, rows)
         conn.commit()
-        return len(rows)
+        return cursor.rowcount
     finally:
         conn.close()
 
@@ -92,7 +101,7 @@ def main() -> None:
     args = parser.parse_args()
 
     count = ingest(args.shapefile, args.database)
-    print(f"Ingested {count} street edges into {args.database}")
+    print(f"Inserted {count} new street edges into {args.database}")
 
 
 if __name__ == "__main__":

@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS streets (
 """
 
 CREATE_INDEXES_SQL = """
-CREATE INDEX IF NOT EXISTS idx_streets_tlid ON streets (tlid);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_streets_tlid_unique ON streets (tlid);
 CREATE INDEX IF NOT EXISTS idx_streets_fullname ON streets (fullname);
 CREATE INDEX IF NOT EXISTS idx_streets_zip ON streets (zipl, zipr);
 CREATE INDEX IF NOT EXISTS idx_streets_bbox ON streets (minx, miny, maxx, maxy);
