@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   Button,
+  Platform,
   StyleSheet,
   Text,
   TextInput,
@@ -15,6 +16,7 @@ import {
 // (e.g. both on your dev machine) or the path is reachable from wherever
 // geocoding-server actually runs.
 const BATCH_GEOCODE_API_URL = 'http://localhost:3001/geocode/batch';
+const BATCH_DOWNLOAD_API_URL = 'http://localhost:3001/geocode/batch/download';
 
 type Coordinates = {
   latitude: number;
@@ -46,6 +48,7 @@ type BatchErrorResponse = {
 export default function BatchGeocodeForm() {
   const [filePath, setFilePath] = useState('');
   const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [results, setResults] = useState<BatchResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -85,6 +88,51 @@ export default function BatchGeocodeForm() {
     }
   }, [filePath]);
 
+  const handleDownload = useCallback(async () => {
+    const trimmedPath = filePath.trim();
+    if (!trimmedPath) {
+      setError('Enter a file path first.');
+      return;
+    }
+
+    if (Platform.OS !== 'web') {
+      Alert.alert('Not supported', 'Downloading a ZIP is only supported in the web build.');
+      return;
+    }
+
+    setDownloading(true);
+    setError(null);
+
+    try {
+      const response = await fetch(BATCH_DOWNLOAD_API_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath: trimmedPath }),
+      });
+
+      if (!response.ok) {
+        const body = (await response.json().catch(() => null)) as BatchErrorResponse | null;
+        throw new Error(body?.error ?? `Download failed (${response.status}).`);
+      }
+
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = 'batch-geocode-results.zip';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Download failed.';
+      setError(message);
+      Alert.alert('Download error', message);
+    } finally {
+      setDownloading(false);
+    }
+  }, [filePath]);
+
   const successCount = results ? results.filter((r) => r.success).length : 0;
 
   return (
@@ -97,14 +145,21 @@ export default function BatchGeocodeForm() {
         onChangeText={setFilePath}
         autoCapitalize="none"
         autoCorrect={false}
-        editable={!loading}
+        editable={!loading && !downloading}
         returnKeyType="search"
         onSubmitEditing={handleBatchGeocode}
       />
 
-      <Button title="Batch Geocode" onPress={handleBatchGeocode} disabled={loading} />
+      <View style={styles.buttonRow}>
+        <View style={styles.buttonSpacer}>
+          <Button title="Batch Geocode" onPress={handleBatchGeocode} disabled={loading || downloading} />
+        </View>
+        <View style={styles.buttonSpacer}>
+          <Button title="Download Results" onPress={handleDownload} disabled={loading || downloading} />
+        </View>
+      </View>
 
-      {loading && <ActivityIndicator style={styles.spacing} size="small" />}
+      {(loading || downloading) && <ActivityIndicator style={styles.spacing} size="small" />}
 
       {!loading && results && (
         <View style={styles.spacing}>
@@ -127,7 +182,7 @@ export default function BatchGeocodeForm() {
         </View>
       )}
 
-      {!loading && error && (
+      {!loading && !downloading && error && (
         <Text style={[styles.spacing, styles.errorText]}>{error}</Text>
       )}
     </View>
@@ -150,6 +205,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 8,
     marginBottom: 12,
+  },
+  buttonRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  buttonSpacer: {
+    flex: 1,
   },
   spacing: {
     marginTop: 16,
