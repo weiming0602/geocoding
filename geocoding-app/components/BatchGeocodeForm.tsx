@@ -20,6 +20,11 @@ import BatchGeocodeMap from './BatchGeocodeMap';
 const BATCH_GEOCODE_API_URL = 'http://localhost:3001/geocode/batch';
 const BATCH_DOWNLOAD_API_URL = 'http://localhost:3001/geocode/batch/download';
 
+// Rendering a marker per result works well up to a few hundred, but a
+// few thousand DOM-backed MapLibre markers noticeably bogs down the
+// browser. Skip the map above this and point at the list/download instead.
+const MAX_MARKERS_FOR_MAP = 300;
+
 type Coordinates = {
   latitude: number;
   longitude: number;
@@ -188,7 +193,15 @@ export default function BatchGeocodeForm() {
               )}
             </View>
           ))}
-          {successMarkers.length > 0 && <BatchGeocodeMap markers={successMarkers} />}
+          {successMarkers.length > 0 && successMarkers.length < MAX_MARKERS_FOR_MAP && (
+            <BatchGeocodeMap markers={successMarkers} />
+          )}
+          {successMarkers.length >= MAX_MARKERS_FOR_MAP && (
+            <Text style={[styles.spacing, styles.mapSkippedText]}>
+              Map skipped: {successMarkers.length} successful results is too many to render as
+              markers smoothly. Use Download Results to get the coordinates instead.
+            </Text>
+          )}
         </View>
       )}
 
@@ -238,6 +251,10 @@ const styles = StyleSheet.create({
   },
   resultAddress: {
     fontWeight: '500',
+  },
+  mapSkippedText: {
+    color: '#666',
+    fontStyle: 'italic',
   },
   errorText: {
     color: '#c0392b',
