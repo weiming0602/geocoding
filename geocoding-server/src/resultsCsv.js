@@ -13,7 +13,7 @@ function rowsToCsv(rows) {
 /** Splits geocodeBatch() results into a successes CSV and a failures CSV. */
 function resultsToCsv(results) {
   const successRows = [
-    ['address', 'latitude', 'longitude', 'rangeSide', 'matchFullname', 'streetId'],
+    ['address', 'latitude', 'longitude', 'rangeSide', 'matchFullname'],
   ];
   const errorRows = [['address', 'error']];
 
@@ -25,7 +25,6 @@ function resultsToCsv(results) {
         result.coordinates.longitude,
         result.rangeSide,
         result.match.fullname,
-        result.match.id,
       ]);
     } else {
       errorRows.push([result.address, result.error]);
