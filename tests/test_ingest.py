@@ -56,6 +56,43 @@ def test_ingest_creates_rows(tmp_path):
     assert rows[1][4].startswith("LINESTRING")
 
 
+def test_ingest_skips_non_road_features(tmp_path):
+    shp_path = tmp_path / "edges"
+    db_path = tmp_path / "streets.db"
+
+    writer = shapefile.Writer(str(shp_path), shapeType=shapefile.POLYLINE)
+    writer.field("TLID", "C")
+    writer.field("FULLNAME", "C")
+    writer.field("LFROMADD", "C")
+    writer.field("LTOADD", "C")
+    writer.field("RFROMADD", "C")
+    writer.field("RTOADD", "C")
+    writer.field("ZIPL", "C")
+    writer.field("ZIPR", "C")
+    writer.field("MTFCC", "C")
+    writer.field("STATEFP", "C")
+    writer.field("COUNTYFP", "C")
+
+    writer.line([[(-122.42, 37.77), (-122.41, 37.78)]])
+    writer.record("101", "Main St", "100", "198", "101", "199", "94110", "94110", "S1400", "06", "075")
+
+    writer.line([[(-122.40, 37.76), (-122.39, 37.75)]])
+    writer.record("200", "", "", "", "", "", "", "", "R1011", "06", "075")  # railroad
+
+    writer.line([[(-122.30, 37.60), (-122.29, 37.61)]])
+    writer.record("300", "Sample Creek", "", "", "", "", "", "", "H3010", "06", "075")  # hydrography
+
+    writer.close()
+
+    count = ingest(shp_path.with_suffix(".shp"), db_path)
+    assert count == 1
+
+    conn = sqlite3.connect(db_path)
+    tlids = {row[0] for row in conn.execute("SELECT tlid FROM streets")}
+    conn.close()
+    assert tlids == {"101"}
+
+
 def test_ingest_is_idempotent_on_repeat_runs(tmp_path):
     shp_path = tmp_path / "edges"
     db_path = tmp_path / "streets.db"

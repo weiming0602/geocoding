@@ -2,7 +2,9 @@
 
 TIGER/Line edges (tl_<year>_<statecounty>_edges.shp) carry per-side
 address ranges and ZIP codes, which is what makes house-number
-interpolation geocoding possible later on.
+interpolation geocoding possible later on. The edges layer also
+includes non-road features (rail, hydrography, boundaries); only rows
+with a road MTFCC (codes starting with "S") are kept.
 """
 
 import argparse
@@ -78,6 +80,11 @@ def ingest(shp_path: Path, db_path: Path) -> int:
         for shape_record in reader.iterShapeRecords():
             shape = shape_record.shape
             record = shape_record.record.as_dict()
+            # TIGER/Line edges cover every linear feature (roads, rail,
+            # hydrography, boundaries, ...), not just streets. MTFCC codes
+            # starting with "S" are roads; skip everything else.
+            if "MTFCC" in available and not (record.get("MTFCC") or "").startswith("S"):
+                continue
             wkt = _shape_to_wkt(shape)
             bbox = list(shape.bbox) if shape.points else [None, None, None, None]
             row = [wkt, *bbox, *(record.get(name) for name in available)]
