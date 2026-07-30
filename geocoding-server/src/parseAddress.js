@@ -3,15 +3,19 @@ const { ValidationError } = require('./errors');
 const MAX_ADDRESS_LENGTH = 200;
 
 /**
- * Parses a free-text address into { number, streetName, zip }.
+ * Parses a free-text address into { number, streetName, zip, state }.
  *
  * Handles the common shapes:
  *   "996 Pequawket Trl, Standish, ME 04091"
+ *   "996 Pequawket Trl, Standish, Maine 04091"
  *   "996 Pequawket Trl ME 04091"
  * Basic by design: assumes a leading house number and a trailing
- * 5-digit ZIP, and takes everything between them (up to the first
- * comma, if any, and stripping a trailing 2-letter state code) as the
- * street name.
+ * 5-digit ZIP. Street name is everything up to the first comma (or,
+ * with no comma, everything before the ZIP minus a trailing 2-letter
+ * state code, if one is present). `state` is whatever sits between the
+ * last comma and the ZIP — a 2-letter abbreviation or a full name — or
+ * null if it can't be confidently isolated (e.g. no comma and no
+ * trailing 2-letter code).
  */
 function parseAddress(input) {
   if (typeof input !== 'string') {
@@ -40,18 +44,25 @@ function parseAddress(input) {
     throw new ValidationError('address must include a 5-digit ZIP code');
   }
   const zip = zipMatches[zipMatches.length - 1][0];
+  const zipIndexInAfterNumber = zipMatches[zipMatches.length - 1].index - numberMatch[0].length;
+  const beforeZip = afterNumber.slice(0, zipIndexInAfterNumber);
 
-  const commaIndex = afterNumber.indexOf(',');
-  let streetPart = commaIndex >= 0 ? afterNumber.slice(0, commaIndex) : afterNumber;
+  const commaIndex = beforeZip.indexOf(',');
+  let streetPart;
+  let state = null;
 
-  // If there was no comma, strip the ZIP itself and a trailing state code
-  // (e.g. "Pequawket Trl ME 04091" -> "Pequawket Trl").
-  if (commaIndex < 0) {
-    const zipIndexInStreetPart = streetPart.lastIndexOf(zip);
-    if (zipIndexInStreetPart >= 0) {
-      streetPart = streetPart.slice(0, zipIndexInStreetPart);
+  if (commaIndex >= 0) {
+    streetPart = beforeZip.slice(0, commaIndex);
+    const lastCommaIndex = beforeZip.lastIndexOf(',');
+    const stateCandidate = beforeZip.slice(lastCommaIndex + 1).trim();
+    state = stateCandidate || null;
+  } else {
+    streetPart = beforeZip;
+    const trailingStateMatch = /\s+([A-Za-z]{2})\s*$/.exec(streetPart);
+    if (trailingStateMatch) {
+      streetPart = streetPart.slice(0, trailingStateMatch.index);
+      state = trailingStateMatch[1].toUpperCase();
     }
-    streetPart = streetPart.replace(/\s+[A-Za-z]{2}\s*$/, '');
   }
 
   streetPart = streetPart.trim().replace(/\s+/g, ' ');
@@ -59,7 +70,7 @@ function parseAddress(input) {
     throw new ValidationError('address must include a street name');
   }
 
-  return { number, streetName: streetPart, zip };
+  return { number, streetName: streetPart, zip, state };
 }
 
 module.exports = { parseAddress };

@@ -3,20 +3,26 @@ const { parseLinestring, interpolateAlongLine } = require('./interpolate');
 const { NotFoundError, OutOfRangeError } = require('./errors');
 
 /**
- * Finds every streets row matching fullname (case-insensitive) and left
- * ZIP. A single named street is typically split into many `edges`
- * segments, each covering a different address sub-range, so callers
- * must pick the segment whose range actually contains the target number.
+ * Finds every streets row matching fullname (case-insensitive), left ZIP,
+ * and (if provided) state. A 2-letter state is matched against
+ * state_abbr; anything else is matched against the full state name. A
+ * single named street is typically split into many `edges` segments,
+ * each covering a different address sub-range, so callers must pick the
+ * segment whose range actually contains the target number.
  */
-function candidateStreets(db, streetName, zip) {
+function candidateStreets(db, streetName, zip, state) {
+  const stateColumn = state && state.length === 2 ? 'state_abbr' : 'state';
+  const stateClause = state ? `AND UPPER(${stateColumn}) = UPPER(?)` : '';
+  const stateParam = state ? [state] : [];
+
   const exact = db
-    .prepare('SELECT * FROM streets WHERE UPPER(fullname) = UPPER(?) AND zipl = ?')
-    .all(streetName, zip);
+    .prepare(`SELECT * FROM streets WHERE UPPER(fullname) = UPPER(?) AND zipl = ? ${stateClause}`)
+    .all(streetName, zip, ...stateParam);
   if (exact.length > 0) return exact;
 
   return db
-    .prepare('SELECT * FROM streets WHERE UPPER(fullname) LIKE UPPER(?) AND zipl = ?')
-    .all(`%${streetName}%`, zip);
+    .prepare(`SELECT * FROM streets WHERE UPPER(fullname) LIKE UPPER(?) AND zipl = ? ${stateClause}`)
+    .all(`%${streetName}%`, zip, ...stateParam);
 }
 
 /**
@@ -26,15 +32,16 @@ function candidateStreets(db, streetName, zip) {
  * numbers use the right range (rfromadd/rtoadd) and are offset right.
  */
 function geocode(db, addressInput, { offsetFeet = 20 } = {}) {
-  const { number, streetName, zip } = parseAddress(addressInput);
+  const { number, streetName, zip, state } = parseAddress(addressInput);
 
   const rangeSide = number % 2 === 1 ? 'left' : 'right';
   const offsetSide = rangeSide;
   const [fromCol, toCol] = rangeSide === 'left' ? ['lfromadd', 'ltoadd'] : ['rfromadd', 'rtoadd'];
 
-  const candidates = candidateStreets(db, streetName, zip);
+  const candidates = candidateStreets(db, streetName, zip, state);
   if (candidates.length === 0) {
-    throw new NotFoundError(`no street found matching "${streetName}" in ZIP ${zip}`);
+    const stateSuffix = state ? ` (state ${state})` : '';
+    throw new NotFoundError(`no street found matching "${streetName}" in ZIP ${zip}${stateSuffix}`);
   }
 
   let matchedRow = null;
@@ -65,7 +72,7 @@ function geocode(db, addressInput, { offsetFeet = 20 } = {}) {
   const [longitude, latitude] = interpolateAlongLine(points, fraction, offsetFeet, offsetSide);
 
   return {
-    input: { number, streetName, zip },
+    input: { number, streetName, zip, state },
     match: {
       id: matchedRow.id,
       tlid: matchedRow.tlid,

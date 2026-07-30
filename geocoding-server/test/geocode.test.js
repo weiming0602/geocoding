@@ -65,3 +65,34 @@ test('invalid address throws ValidationError', () => {
   assert.throws(() => geocode(db, ''), ValidationError);
   db.close();
 });
+
+test('a 2-letter state disambiguates via state_abbr', () => {
+  const db = makeDb();
+  const result = geocode(db, '150 Pequawket Trl, Somewhere, NH 04091');
+  assert.equal(result.match.id, 99);
+  db.close();
+});
+
+test('a full state name disambiguates via state', () => {
+  const db = makeDb();
+  const result = geocode(db, '150 Pequawket Trl, Somewhere, New Hampshire 04091');
+  assert.equal(result.match.id, 99);
+  db.close();
+});
+
+test('a different 2-letter state matches the Maine rows, not New Hampshire', () => {
+  const db = makeDb();
+  const result = geocode(db, '997 Pequawket Trl, Standish, ME 04091');
+  assert.equal(result.match.id, 12);
+  db.close();
+});
+
+test('no state in the address searches across all states (fullname+zip only)', () => {
+  const db = makeDb();
+  // No comma and no trailing 2-letter code, so parseAddress can't isolate
+  // a state; candidates come from every state sharing this fullname+zip,
+  // and the range check alone picks the right segment (997 only fits id=12).
+  const result = geocode(db, '997 Pequawket Trl 04091');
+  assert.equal(result.match.id, 12);
+  db.close();
+});
