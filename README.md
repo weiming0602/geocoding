@@ -41,5 +41,13 @@ centerline and onto the correct side of the street.
 
 - [x] Ingest TIGER/Line edges shapefiles into SQLite
 - [x] Address-range interpolation to lat/lng, with perpendicular offset
+- [x] Query interface that resolves a full address to coordinates (see `geocoding-server`)
 - [ ] Street name normalization / matching
-- [ ] Query interface that resolves a full address to a `(street_id, number)` lookup
+
+## Related projects (this repo)
+
+- [`geocoding-server`](geocoding-server) — Express + better-sqlite3 API that
+  parses a free-text address, matches it against `streets`, and interpolates
+  coordinates (odd numbers → left range/offset, even → right range/offset)
+- [`geocoding-app`](geocoding-app) — Expo/React Native app with a text input
+  and "Geocode" button that calls `geocoding-server`
