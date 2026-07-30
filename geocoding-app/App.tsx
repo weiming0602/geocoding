@@ -3,9 +3,16 @@ import React, { useState } from 'react';
 import { SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import BatchGeocodeScreen from './screens/BatchGeocodeScreen';
+import ReverseGeocodeScreen from './screens/ReverseGeocodeScreen';
 import SingleGeocodeScreen from './screens/SingleGeocodeScreen';
 
-type Screen = 'single' | 'batch';
+type Screen = 'single' | 'batch' | 'reverse';
+
+const TABS: { key: Screen; label: string }[] = [
+  { key: 'single', label: 'Single Address' },
+  { key: 'batch', label: 'Batch Geocode' },
+  { key: 'reverse', label: 'Reverse Geocode' },
+];
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('single');
@@ -13,25 +20,22 @@ export default function App() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.tabBar}>
-        <TouchableOpacity
-          style={[styles.tab, screen === 'single' && styles.tabActive]}
-          onPress={() => setScreen('single')}
-        >
-          <Text style={[styles.tabLabel, screen === 'single' && styles.tabLabelActive]}>
-            Single Address
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.tab, screen === 'batch' && styles.tabActive]}
-          onPress={() => setScreen('batch')}
-        >
-          <Text style={[styles.tabLabel, screen === 'batch' && styles.tabLabelActive]}>
-            Batch Geocode
-          </Text>
-        </TouchableOpacity>
+        {TABS.map((tab) => (
+          <TouchableOpacity
+            key={tab.key}
+            style={[styles.tab, screen === tab.key && styles.tabActive]}
+            onPress={() => setScreen(tab.key)}
+          >
+            <Text style={[styles.tabLabel, screen === tab.key && styles.tabLabelActive]}>
+              {tab.label}
+            </Text>
+          </TouchableOpacity>
+        ))}
       </View>
 
-      {screen === 'single' ? <SingleGeocodeScreen /> : <BatchGeocodeScreen />}
+      {screen === 'single' && <SingleGeocodeScreen />}
+      {screen === 'batch' && <BatchGeocodeScreen />}
+      {screen === 'reverse' && <ReverseGeocodeScreen />}
 
       <StatusBar style="auto" />
     </SafeAreaView>

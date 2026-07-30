@@ -6,6 +6,7 @@ const { geocode } = require('./geocode');
 const { geocodeBatch } = require('./batchGeocode');
 const { resultsToCsv } = require('./resultsCsv');
 const { buildZip } = require('./zip');
+const { reverseGeocode } = require('./reverseGeocode');
 const { ValidationError, NotFoundError, OutOfRangeError } = require('./errors');
 
 const DB_PATH = process.env.GEOCODING_DB_PATH || 'C:\\software\\database\\sqlite3\\geocoding.sqlite';
@@ -67,6 +68,19 @@ app.post('/geocode/batch/download', (req, res) => {
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', 'attachment; filename="batch-geocode-results.zip"');
   res.send(zipBuffer);
+});
+
+app.post('/reverse-geocode', (req, res) => {
+  const { latitude, longitude } = req.body || {};
+  try {
+    const result = reverseGeocode(db, latitude, longitude);
+    res.json(result);
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
 });
 
 if (require.main === module) {

@@ -84,4 +84,4 @@ function interpolateAlongLine(points, fraction, offsetFeet = 0, offsetSide = 'ri
   return [x + offsetXDeg, y + offsetYDeg];
 }
 
-module.exports = { parseLinestring, interpolateAlongLine };
+module.exports = { parseLinestring, interpolateAlongLine, metersPerDegree };
