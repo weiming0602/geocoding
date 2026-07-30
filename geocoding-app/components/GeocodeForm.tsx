@@ -19,8 +19,13 @@ type Coordinates = {
   longitude: number;
 };
 
+type Match = {
+  fullname: string;
+  id: number;
+};
+
 type GeocodeResponse = {
-  match: { fullname: string; id: number };
+  match: Match;
   rangeSide: 'left' | 'right';
   coordinates: Coordinates;
 };
@@ -34,6 +39,7 @@ export default function GeocodeForm() {
   const [loading, setLoading] = useState(false);
   const [coordinates, setCoordinates] = useState<Coordinates | null>(null);
   const [matchedStreet, setMatchedStreet] = useState<string | null>(null);
+  const [match, setMatch] = useState<Match | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleGeocode = useCallback(async () => {
@@ -41,6 +47,7 @@ export default function GeocodeForm() {
     if (!trimmedAddress) {
       setCoordinates(null);
       setMatchedStreet(null);
+      setMatch(null);
       setError('Enter an address first.');
       return;
     }
@@ -49,6 +56,7 @@ export default function GeocodeForm() {
     setError(null);
     setCoordinates(null);
     setMatchedStreet(null);
+    setMatch(null);
 
     try {
       const response = await fetch(GEOCODE_API_URL, {
@@ -66,6 +74,7 @@ export default function GeocodeForm() {
 
       setCoordinates(body.coordinates);
       setMatchedStreet(`${body.match.fullname} (${body.rangeSide} side)`);
+      setMatch(body.match);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Geocoding failed.';
       setError(message);
@@ -99,6 +108,7 @@ export default function GeocodeForm() {
           <Text style={styles.resultLabel}>{matchedStreet}</Text>
           <Text>Latitude: {coordinates.latitude.toFixed(6)}</Text>
           <Text>Longitude: {coordinates.longitude.toFixed(6)}</Text>
+          {match && <Text>Street ID: {match.id}</Text>}
         </View>
       )}
 
