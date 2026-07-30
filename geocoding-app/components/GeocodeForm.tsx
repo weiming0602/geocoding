@@ -108,8 +108,9 @@ export default function GeocodeForm() {
       {!loading && coordinates && (
         <View style={styles.spacing}>
           <Text style={styles.resultLabel}>{matchedStreet}</Text>
-          <Text>Latitude: {coordinates.latitude.toFixed(6)}</Text>
-          <Text>Longitude: {coordinates.longitude.toFixed(6)}</Text>
+          <Text selectable>
+            latitude, longitude: {coordinates.latitude.toFixed(6)}, {coordinates.longitude.toFixed(6)}
+          </Text>
           {match && <Text>Street ID: {match.id}</Text>}
           <GeocodeMap
             latitude={coordinates.latitude}
