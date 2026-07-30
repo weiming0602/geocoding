@@ -108,3 +108,39 @@ test('no state in the address searches across all states (fullname+zip only)', (
   assert.equal(result.match.id, 12);
   db.close();
 });
+
+// Greely Rd (id=50) spans a ZIP boundary: zipl='04021' on the odd/left
+// side (201-291), zipr='04097' on the even/right side (200-292).
+test('odd house number matches on zipl, not zipr', () => {
+  const db = makeDb();
+  const result = geocode(db, '251 Greely Rd, Anywhere, ME 04021');
+  assert.equal(result.match.id, 50);
+  assert.equal(result.rangeSide, 'left');
+  db.close();
+});
+
+test('odd house number with the right-side ZIP does not match', () => {
+  const db = makeDb();
+  assert.throws(
+    () => geocode(db, '251 Greely Rd, Anywhere, ME 04097'),
+    NotFoundError
+  );
+  db.close();
+});
+
+test('even house number matches on zipr, not zipl', () => {
+  const db = makeDb();
+  const result = geocode(db, '250 Greely Rd, Anywhere, ME 04097');
+  assert.equal(result.match.id, 50);
+  assert.equal(result.rangeSide, 'right');
+  db.close();
+});
+
+test('even house number with the left-side ZIP does not match', () => {
+  const db = makeDb();
+  assert.throws(
+    () => geocode(db, '250 Greely Rd, Anywhere, ME 04021'),
+    NotFoundError
+  );
+  db.close();
+});

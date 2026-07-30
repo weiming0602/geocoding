@@ -42,6 +42,13 @@ function makeDb() {
      VALUES (99, '99999999', 'Pequawket Trl', '100', '198', '101', '199', '04091', '04091', 'New Hampshire', 'NH',
              'LINESTRING (-71.0 43.9, -71.01 43.91)')`
   ).run();
+  // A real-world shape (e.g. "Greely Rd" in the actual dataset): zipl and
+  // zipr differ, since the street runs along a ZIP boundary.
+  db.prepare(
+    `INSERT INTO streets (id, tlid, fullname, lfromadd, ltoadd, rfromadd, rtoadd, zipl, zipr, state, state_abbr, geometry)
+     VALUES (50, '50000000', 'Greely Rd', '201', '291', '200', '292', '04021', '04097', 'Maine', 'ME',
+             'LINESTRING (-70.2 43.9, -70.21 43.91)')`
+  ).run();
   return db;
 }
 

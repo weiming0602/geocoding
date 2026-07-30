@@ -3,33 +3,39 @@ const { parseLinestring, interpolateAlongLine } = require('./interpolate');
 const { NotFoundError, OutOfRangeError } = require('./errors');
 
 /**
- * Finds every streets row matching fullname (case-insensitive), left ZIP,
- * and (if provided) state. A 2-letter state is matched against
- * state_abbr; anything else is matched against the full state name. A
- * single named street is typically split into many `edges` segments,
- * each covering a different address sub-range, so callers must pick the
- * segment whose range actually contains the target number.
+ * Finds every streets row matching fullname (case-insensitive), the given
+ * side's ZIP (zipl for odd house numbers, zipr for even — TIGER edges can
+ * have a different ZIP on each side of the same segment), and (if
+ * provided) state. A 2-letter state is matched against state_abbr;
+ * anything else is matched against the full state name. A single named
+ * street is typically split into many `edges` segments, each covering a
+ * different address sub-range, so callers must pick the segment whose
+ * range actually contains the target number.
  */
-function candidateStreets(db, streetName, zip, state) {
+function candidateStreets(db, streetName, zip, zipColumn, state) {
+  if (zipColumn !== 'zipl' && zipColumn !== 'zipr') {
+    throw new Error(`zipColumn must be 'zipl' or 'zipr', got ${zipColumn}`);
+  }
   const stateColumn = state && state.length === 2 ? 'state_abbr' : 'state';
   const stateClause = state ? `AND UPPER(${stateColumn}) = UPPER(?)` : '';
   const stateParam = state ? [state] : [];
 
   const exact = db
-    .prepare(`SELECT * FROM streets WHERE UPPER(fullname) = UPPER(?) AND zipl = ? ${stateClause}`)
+    .prepare(`SELECT * FROM streets WHERE UPPER(fullname) = UPPER(?) AND ${zipColumn} = ? ${stateClause}`)
     .all(streetName, zip, ...stateParam);
   if (exact.length > 0) return exact;
 
   return db
-    .prepare(`SELECT * FROM streets WHERE UPPER(fullname) LIKE UPPER(?) AND zipl = ? ${stateClause}`)
+    .prepare(`SELECT * FROM streets WHERE UPPER(fullname) LIKE UPPER(?) AND ${zipColumn} = ? ${stateClause}`)
     .all(`%${streetName}%`, zip, ...stateParam);
 }
 
 /**
  * Resolves a free-text address to coordinates using the local `streets`
  * table: odd house numbers interpolate against the left range
- * (lfromadd/ltoadd) and are offset left of the centerline; even house
- * numbers use the right range (rfromadd/rtoadd) and are offset right.
+ * (lfromadd/ltoadd), match on zipl, and are offset left of the
+ * centerline; even house numbers use the right range (rfromadd/rtoadd),
+ * match on zipr, and are offset right.
  */
 function geocode(db, addressInput, { offsetFeet = 20 } = {}) {
   const { number, streetName, zip, state } = parseAddress(addressInput);
@@ -37,8 +43,9 @@ function geocode(db, addressInput, { offsetFeet = 20 } = {}) {
   const rangeSide = number % 2 === 1 ? 'left' : 'right';
   const offsetSide = rangeSide;
   const [fromCol, toCol] = rangeSide === 'left' ? ['lfromadd', 'ltoadd'] : ['rfromadd', 'rtoadd'];
+  const zipColumn = rangeSide === 'left' ? 'zipl' : 'zipr';
 
-  const candidates = candidateStreets(db, streetName, zip, state);
+  const candidates = candidateStreets(db, streetName, zip, zipColumn, state);
   if (candidates.length === 0) {
     const stateSuffix = state ? ` (state ${state})` : '';
     throw new NotFoundError(`no street found matching "${streetName}" in ZIP ${zip}${stateSuffix}`);
