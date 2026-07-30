@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# Ingested databases and raw shapefile inputs are large/local artifacts
+data/*
+!data/.gitkeep
+*.db
+*.sqlite
+*.sqlite3
