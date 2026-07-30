@@ -29,6 +29,8 @@ CREATE INDEX IF NOT EXISTS idx_streets_fullname ON streets (fullname);
 CREATE INDEX IF NOT EXISTS idx_streets_zip ON streets (zipl, zipr);
 CREATE INDEX IF NOT EXISTS idx_streets_bbox ON streets (minx, miny, maxx, maxy);
 CREATE INDEX IF NOT EXISTS idx_streets_state ON streets (state);
+CREATE INDEX IF NOT EXISTS idx_streets_fullname_zipl_zipr_state
+    ON streets (fullname, zipl, zipr, state);
 """
 
 
