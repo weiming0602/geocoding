@@ -9,6 +9,8 @@ import {
   View,
 } from 'react-native';
 
+import GeocodeMap from './GeocodeMap';
+
 // Points at the geocoding-server Express API (C:\software\geocoding-server).
 // On a physical device/simulator, "localhost" means the device itself, so
 // swap this for your dev machine's LAN IP (e.g. http://192.168.1.23:3001).
@@ -109,6 +111,7 @@ export default function GeocodeForm() {
           <Text>Latitude: {coordinates.latitude.toFixed(6)}</Text>
           <Text>Longitude: {coordinates.longitude.toFixed(6)}</Text>
           {match && <Text>Street ID: {match.id}</Text>}
+          <GeocodeMap latitude={coordinates.latitude} longitude={coordinates.longitude} />
         </View>
       )}
 
