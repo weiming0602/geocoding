@@ -3,6 +3,7 @@ const cors = require('cors');
 const Database = require('better-sqlite3');
 
 const { geocode } = require('./geocode');
+const { geocodeBatch } = require('./batchGeocode');
 const { ValidationError, NotFoundError, OutOfRangeError } = require('./errors');
 
 const DB_PATH = process.env.GEOCODING_DB_PATH || 'C:\\software\\database\\sqlite3\\geocoding.sqlite';
@@ -24,6 +25,19 @@ app.post('/geocode', (req, res) => {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
     if (err instanceof OutOfRangeError) return res.status(422).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+app.post('/geocode/batch', (req, res) => {
+  const filePath = req.body && req.body.filePath;
+  try {
+    const results = geocodeBatch(db, filePath, { offsetFeet: OFFSET_FEET });
+    res.json({ results });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: 'internal error' });
   }

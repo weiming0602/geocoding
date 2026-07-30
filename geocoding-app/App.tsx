@@ -1,14 +1,18 @@
 import { StatusBar } from 'expo-status-bar';
-import { StyleSheet, View } from 'react-native';
+import { SafeAreaView, ScrollView, StyleSheet } from 'react-native';
 
+import BatchGeocodeForm from './components/BatchGeocodeForm';
 import GeocodeForm from './components/GeocodeForm';
 
 export default function App() {
   return (
-    <View style={styles.container}>
-      <GeocodeForm />
+    <SafeAreaView style={styles.container}>
+      <ScrollView contentContainerStyle={styles.content}>
+        <GeocodeForm />
+        <BatchGeocodeForm />
+      </ScrollView>
       <StatusBar style="auto" />
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -16,6 +20,8 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     backgroundColor: '#fff',
-    justifyContent: 'center',
+  },
+  content: {
+    paddingVertical: 24,
   },
 });
