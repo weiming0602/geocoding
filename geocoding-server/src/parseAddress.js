@@ -2,6 +2,22 @@ const { ValidationError } = require('./errors');
 
 const MAX_ADDRESS_LENGTH = 200;
 
+// Used to guard the no-comma trailing-2-letter-code heuristic below: many
+// common street suffixes are also exactly 2 letters (Rd, St, Ln, Dr, Ct,
+// Cv, Pl, Sq), so without this check "123 Main Rd 04001" would misparse
+// as street="Main", state="RD". Requiring a real state/territory code
+// eliminates every one of those false positives except "Ct" (Court vs.
+// Connecticut), which is a genuine ambiguity no heuristic can resolve
+// without a comma to disambiguate.
+const US_STATE_CODES = new Set([
+  'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA',
+  'HI', 'ID', 'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MD',
+  'MA', 'MI', 'MN', 'MS', 'MO', 'MT', 'NE', 'NV', 'NH', 'NJ',
+  'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR', 'PA', 'RI', 'SC',
+  'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
+  'DC', 'PR', 'VI', 'GU', 'AS', 'MP',
+]);
+
 /**
  * Parses a free-text address into { number, streetName, zip, state }.
  *
@@ -59,7 +75,7 @@ function parseAddress(input) {
   } else {
     streetPart = beforeZip;
     const trailingStateMatch = /\s+([A-Za-z]{2})\s*$/.exec(streetPart);
-    if (trailingStateMatch) {
+    if (trailingStateMatch && US_STATE_CODES.has(trailingStateMatch[1].toUpperCase())) {
       streetPart = streetPart.slice(0, trailingStateMatch.index);
       state = trailingStateMatch[1].toUpperCase();
     }

@@ -44,6 +44,34 @@ test('parses an address with no commas and no trailing state code', () => {
   });
 });
 
+test('a street suffix that looks like a 2-letter code is not mistaken for a state', () => {
+  const result = parseAddress('123 Main Rd 04001');
+  assert.deepEqual(result, {
+    number: 123,
+    streetName: 'Main Rd',
+    zip: '04001',
+    state: null,
+  });
+});
+
+test('other common 2-letter street suffixes are not mistaken for a state either', () => {
+  for (const suffix of ['St', 'Ln', 'Dr', 'Cv', 'Pl', 'Sq']) {
+    const result = parseAddress(`123 Main ${suffix} 04001`);
+    assert.equal(result.streetName, `Main ${suffix}`, `suffix ${suffix}`);
+    assert.equal(result.state, null, `suffix ${suffix}`);
+  }
+});
+
+test('a real 2-letter state code with no comma still parses as state', () => {
+  const result = parseAddress('123 Main Rd NH 04001');
+  assert.deepEqual(result, {
+    number: 123,
+    streetName: 'Main Rd',
+    zip: '04001',
+    state: 'NH',
+  });
+});
+
 test('rejects a non-string address', () => {
   assert.throws(() => parseAddress(42), ValidationError);
 });
