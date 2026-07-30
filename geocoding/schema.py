@@ -15,6 +15,7 @@ CREATE TABLE IF NOT EXISTS streets (
     statefp TEXT,
     countyfp TEXT,
     state TEXT,
+    state_abbr TEXT,
     geometry TEXT,
     minx REAL,
     miny REAL,
@@ -29,18 +30,24 @@ CREATE INDEX IF NOT EXISTS idx_streets_fullname ON streets (fullname);
 CREATE INDEX IF NOT EXISTS idx_streets_zip ON streets (zipl, zipr);
 CREATE INDEX IF NOT EXISTS idx_streets_bbox ON streets (minx, miny, maxx, maxy);
 CREATE INDEX IF NOT EXISTS idx_streets_state ON streets (state);
+CREATE INDEX IF NOT EXISTS idx_streets_state_abbr ON streets (state_abbr);
 CREATE INDEX IF NOT EXISTS idx_streets_fullname_zipl_zipr_state
     ON streets (fullname, zipl, zipr, state);
 """
 
+# Columns that predate the initial CREATE TABLE for databases created
+# before they were added. CREATE_TABLE_SQL alone won't add them to an
+# existing table (CREATE TABLE IF NOT EXISTS is a no-op), so callers must
+# run ensure_columns() as a migration step for already-populated databases.
+_MIGRATED_COLUMNS = {
+    "state": "TEXT",
+    "state_abbr": "TEXT",
+}
 
-def ensure_state_column(conn) -> None:
-    """Adds the `state` column to an existing streets table if it predates it.
 
-    CREATE_TABLE_SQL only affects brand-new databases (CREATE TABLE IF NOT
-    EXISTS is a no-op otherwise), so already-populated databases need this
-    migration to pick up columns added after they were first created.
-    """
-    columns = {row[1] for row in conn.execute("PRAGMA table_info(streets)")}
-    if "state" not in columns:
-        conn.execute("ALTER TABLE streets ADD COLUMN state TEXT")
+def ensure_columns(conn) -> None:
+    """Adds any columns from _MIGRATED_COLUMNS missing from an existing streets table."""
+    existing = {row[1] for row in conn.execute("PRAGMA table_info(streets)")}
+    for column, column_type in _MIGRATED_COLUMNS.items():
+        if column not in existing:
+            conn.execute(f"ALTER TABLE streets ADD COLUMN {column} {column_type}")

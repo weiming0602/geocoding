@@ -7,28 +7,30 @@ import shapefile
 
 from geocoding.schema import CREATE_TABLE_SQL
 from geocoding.update_state_names import (
+    StateInfo,
     _download_and_extract_states_shp,
-    _read_state_names,
+    _read_state_lookup,
     update_state_names,
 )
 
 
 def _write_states_shapefile(base_path, states):
-    """states: list of (statefp, name) tuples."""
+    """states: list of (statefp, name, stusps) tuples."""
     writer = shapefile.Writer(str(base_path), shapeType=shapefile.POLYGON)
     writer.field("STATEFP", "C")
     writer.field("NAME", "C")
-    for statefp, name in states:
+    writer.field("STUSPS", "C")
+    for statefp, name, stusps in states:
         writer.poly([[(-70.0, 43.0), (-70.0, 44.0), (-69.0, 44.0), (-70.0, 43.0)]])
-        writer.record(statefp, name)
+        writer.record(statefp, name, stusps)
     writer.close()
 
 
-def _make_streets_db(db_path, rows, with_state_column=False):
+def _make_streets_db(db_path, rows, with_state_columns=False):
     """rows: list of (id, tlid, statefp) tuples. Mimics a pre-state-column DB
-    when with_state_column is False, to exercise the migration path."""
+    when with_state_columns is False, to exercise the migration path."""
     conn = sqlite3.connect(db_path)
-    if with_state_column:
+    if with_state_columns:
         conn.executescript(CREATE_TABLE_SQL)
     else:
         conn.execute(
@@ -51,15 +53,20 @@ def _make_streets_db(db_path, rows, with_state_column=False):
     conn.close()
 
 
-def test_read_state_names(tmp_path):
+def test_read_state_lookup(tmp_path):
     shp_base = tmp_path / "states"
-    _write_states_shapefile(shp_base, [("23", "Maine"), ("33", "New Hampshire")])
+    _write_states_shapefile(
+        shp_base, [("23", "Maine", "ME"), ("33", "New Hampshire", "NH")]
+    )
 
-    names = _read_state_names(shp_base.with_suffix(".shp"))
-    assert names == {"23": "Maine", "33": "New Hampshire"}
+    lookup = _read_state_lookup(shp_base.with_suffix(".shp"))
+    assert lookup == {
+        "23": StateInfo(name="Maine", abbr="ME"),
+        "33": StateInfo(name="New Hampshire", abbr="NH"),
+    }
 
 
-def test_read_state_names_raises_on_missing_fields(tmp_path):
+def test_read_state_lookup_raises_on_missing_fields(tmp_path):
     shp_base = tmp_path / "bad_states"
     writer = shapefile.Writer(str(shp_base), shapeType=shapefile.POLYGON)
     writer.field("STATEFP", "C")
@@ -67,8 +74,8 @@ def test_read_state_names_raises_on_missing_fields(tmp_path):
     writer.record("23")
     writer.close()
 
-    with pytest.raises(ValueError, match="STATEFP and NAME"):
-        _read_state_names(shp_base.with_suffix(".shp"))
+    with pytest.raises(ValueError, match="STATEFP"):
+        _read_state_lookup(shp_base.with_suffix(".shp"))
 
 
 def test_download_and_extract_states_shp_skips_download_if_cached(tmp_path):
@@ -84,7 +91,7 @@ def test_download_and_extract_states_shp_skips_download_if_cached(tmp_path):
 
 def test_download_and_extract_states_shp_downloads_when_nothing_cached(tmp_path):
     shp_base = tmp_path / "source"
-    _write_states_shapefile(shp_base, [("23", "Maine")])
+    _write_states_shapefile(shp_base, [("23", "Maine", "ME")])
 
     def fake_urlretrieve(url, dest):
         with zipfile.ZipFile(dest, "w") as zf:
@@ -105,11 +112,13 @@ def test_update_state_names_joins_by_statefp_and_migrates_old_schema(tmp_path):
     _make_streets_db(
         db_path,
         rows=[(1, "t1", "23"), (2, "t2", "33"), (3, "t3", "99")],  # 99 = no matching state
-        with_state_column=False,
+        with_state_columns=False,
     )
 
     shp_base = tmp_path / "states"
-    _write_states_shapefile(shp_base, [("23", "Maine"), ("33", "New Hampshire")])
+    _write_states_shapefile(
+        shp_base, [("23", "Maine", "ME"), ("33", "New Hampshire", "NH")]
+    )
 
     with patch(
         "geocoding.update_state_names._download_and_extract_states_shp",
@@ -120,18 +129,25 @@ def test_update_state_names_joins_by_statefp_and_migrates_old_schema(tmp_path):
     assert updated == 2
 
     conn = sqlite3.connect(db_path)
-    rows = dict(conn.execute("SELECT tlid, state FROM streets").fetchall())
+    rows = {
+        tlid: (state, abbr)
+        for tlid, state, abbr in conn.execute("SELECT tlid, state, state_abbr FROM streets")
+    }
     conn.close()
 
-    assert rows == {"t1": "Maine", "t2": "New Hampshire", "t3": None}
+    assert rows == {
+        "t1": ("Maine", "ME"),
+        "t2": ("New Hampshire", "NH"),
+        "t3": (None, None),
+    }
 
 
 def test_update_state_names_is_idempotent(tmp_path):
     db_path = tmp_path / "streets.db"
-    _make_streets_db(db_path, rows=[(1, "t1", "23")], with_state_column=False)
+    _make_streets_db(db_path, rows=[(1, "t1", "23")], with_state_columns=False)
 
     shp_base = tmp_path / "states"
-    _write_states_shapefile(shp_base, [("23", "Maine")])
+    _write_states_shapefile(shp_base, [("23", "Maine", "ME")])
 
     with patch(
         "geocoding.update_state_names._download_and_extract_states_shp",
