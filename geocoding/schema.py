@@ -33,6 +33,13 @@ CREATE INDEX IF NOT EXISTS idx_streets_state ON streets (state);
 CREATE INDEX IF NOT EXISTS idx_streets_state_abbr ON streets (state_abbr);
 CREATE INDEX IF NOT EXISTS idx_streets_fullname_zipl_zipr_state
     ON streets (fullname, zipl, zipr, state);
+-- geocode.js's actual queries compare UPPER(fullname), which the plain
+-- index above can't serve (SQLite can't use an index on a column through
+-- a function wrapping it). Without this, SQLite falls back to searching
+-- by zipl alone and filtering every row in that ZIP row-by-row -- fine
+-- for a single request, ~10x slower at batch scale (measured on 10k rows).
+CREATE INDEX IF NOT EXISTS idx_streets_fullname_upper_zip
+    ON streets (UPPER(fullname), zipl, zipr, state, state_abbr);
 """
 
 # Columns that predate the initial CREATE TABLE for databases created
