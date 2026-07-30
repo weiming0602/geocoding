@@ -184,9 +184,9 @@ export default function BatchGeocodeForm() {
             <View key={index} style={styles.resultRow}>
               <Text style={styles.resultAddress}>{result.address}</Text>
               {result.success ? (
-                <Text>
-                  {result.coordinates.latitude.toFixed(6)}, {result.coordinates.longitude.toFixed(6)}
-                  {' '}({result.rangeSide} side)
+                <Text selectable>
+                  latitude, longitude: {result.coordinates.latitude.toFixed(6)},{' '}
+                  {result.coordinates.longitude.toFixed(6)} ({result.rangeSide} side)
                 </Text>
               ) : (
                 <Text style={styles.errorText}>{result.error}</Text>
