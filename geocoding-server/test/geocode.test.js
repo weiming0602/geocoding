@@ -70,6 +70,8 @@ test('a 2-letter state disambiguates via state_abbr', () => {
   const db = makeDb();
   const result = geocode(db, '150 Pequawket Trl, Somewhere, NH 04091');
   assert.equal(result.match.id, 99);
+  assert.equal(result.match.state_abbr, 'NH');
+  assert.equal(result.match.state, undefined);
   db.close();
 });
 
@@ -77,6 +79,16 @@ test('a full state name disambiguates via state', () => {
   const db = makeDb();
   const result = geocode(db, '150 Pequawket Trl, Somewhere, New Hampshire 04091');
   assert.equal(result.match.id, 99);
+  assert.equal(result.match.state, 'New Hampshire');
+  assert.equal(result.match.state_abbr, undefined);
+  db.close();
+});
+
+test('no state parsed means match has neither state field', () => {
+  const db = makeDb();
+  const result = geocode(db, '997 Pequawket Trl 04091');
+  assert.equal(result.match.state, undefined);
+  assert.equal(result.match.state_abbr, undefined);
   db.close();
 });
 

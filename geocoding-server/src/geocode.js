@@ -71,15 +71,24 @@ function geocode(db, addressInput, { offsetFeet = 20 } = {}) {
   const points = parseLinestring(matchedRow.geometry);
   const [longitude, latitude] = interpolateAlongLine(points, fraction, offsetFeet, offsetSide);
 
+  const match = {
+    id: matchedRow.id,
+    tlid: matchedRow.tlid,
+    fullname: matchedRow.fullname,
+    zipl: matchedRow.zipl,
+    zipr: matchedRow.zipr,
+  };
+  if (state) {
+    if (state.length === 2) {
+      match.state_abbr = matchedRow.state_abbr;
+    } else {
+      match.state = matchedRow.state;
+    }
+  }
+
   return {
     input: { number, streetName, zip, state },
-    match: {
-      id: matchedRow.id,
-      tlid: matchedRow.tlid,
-      fullname: matchedRow.fullname,
-      zipl: matchedRow.zipl,
-      zipr: matchedRow.zipr,
-    },
+    match,
     rangeSide,
     offsetSide,
     offsetFeet,
