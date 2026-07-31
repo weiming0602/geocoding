@@ -37,11 +37,30 @@ python -m geocoding.interpolate data/streets.db <street_id> <number> \
 line by a real-world distance, e.g. to move the point off the
 centerline and onto the correct side of the street.
 
+## Step 3: turn `streets` into a real spatial layer (SpatiaLite)
+
+`streets.geometry` is plain WKT text — fine for `geocoding-server`'s own
+math, but invisible to GIS tools. `add_geometry_column.py` adds a proper
+SpatiaLite `geom` column (SRID 4326) plus an R-Tree spatial index, so the
+database opens directly in QGIS (or any SpatiaLite client) as a `streets`
+vector layer:
+
+```bash
+python -m geocoding.add_geometry_column C:\software\database\sqlite3\geocoding.sqlite
+```
+
+Requires `mod_spatialite` — the script points at the copy bundled with
+QGIS (`C:\Program Files\QGIS <version>\bin`) by default; edit
+`MOD_SPATIALITE_DIR` at the top of the script if yours lives elsewhere.
+Safe to re-run after ingesting more data: it only backfills rows where
+`geom IS NULL`, so already-converted rows aren't touched.
+
 ## Roadmap
 
 - [x] Ingest TIGER/Line edges shapefiles into SQLite
 - [x] Address-range interpolation to lat/lng, with perpendicular offset
 - [x] Query interface that resolves a full address to coordinates (see `geocoding-server`)
+- [x] Real spatial layer via SpatiaLite, for opening in QGIS
 - [ ] Street name normalization / matching
 
 ## Related projects (this repo)
