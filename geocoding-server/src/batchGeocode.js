@@ -5,12 +5,8 @@ const { ValidationError, NotFoundError } = require('./errors');
 
 const MAX_ADDRESSES = 5000;
 
-/**
- * Reads a plain-text file (one address per line) and geocodes each
- * line independently. A failure on one line doesn't stop the batch;
- * each result reports its own success/failure.
- */
-function geocodeBatch(db, filePath, options = {}) {
+/** Reads and validates a plain-text file (one address per line) into a list of addresses. */
+function readAddressLines(filePath) {
   if (typeof filePath !== 'string' || !filePath.trim()) {
     throw new ValidationError('filePath must be a non-empty string');
   }
@@ -35,10 +31,16 @@ function geocodeBatch(db, filePath, options = {}) {
   if (addresses.length === 0) {
     throw new ValidationError(`file has no addresses: ${resolvedPath}`);
   }
+  return addresses;
+}
+
+/**
+ * Geocodes each address independently. A failure on one line doesn't
+ * stop the batch; each result reports its own success/failure.
+ */
+function geocodeAddressList(db, addresses, options = {}) {
   if (addresses.length > MAX_ADDRESSES) {
-    throw new ValidationError(
-      `file has ${addresses.length} addresses; max is ${MAX_ADDRESSES}`
-    );
+    throw new ValidationError(`file has ${addresses.length} addresses; max is ${MAX_ADDRESSES}`);
   }
 
   return addresses.map((address) => {
@@ -51,4 +53,9 @@ function geocodeBatch(db, filePath, options = {}) {
   });
 }
 
-module.exports = { geocodeBatch, MAX_ADDRESSES };
+function geocodeBatch(db, filePath, options = {}) {
+  const addresses = readAddressLines(filePath);
+  return geocodeAddressList(db, addresses, options);
+}
+
+module.exports = { geocodeBatch, geocodeAddressList, readAddressLines, MAX_ADDRESSES };
