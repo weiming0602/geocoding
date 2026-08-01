@@ -33,6 +33,16 @@ function makeDb() {
       maxx REAL,
       maxy REAL
     );
+    CREATE TABLE street_names (
+      id INTEGER PRIMARY KEY,
+      tlid TEXT NOT NULL,
+      fullname TEXT NOT NULL,
+      paflag TEXT,
+      zipl TEXT,
+      zipr TEXT,
+      state TEXT,
+      state_abbr TEXT
+    );
   `);
 
   const insert = db.prepare(
@@ -81,6 +91,25 @@ function makeDb() {
     const [minx, miny, maxx, maxy] = bboxOf(row.geometry);
     insert.run({ ...row, minx, miny, maxx, maxy });
   }
+
+  const insertName = db.prepare(
+    `INSERT INTO street_names (tlid, fullname, paflag, zipl, zipr, state, state_abbr)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
+  // Every streets row needs its own fullname registered as the primary
+  // name, or exact/LIKE matching (which now goes through street_names,
+  // not streets.fullname directly) would find nothing. zipl/zipr/state/
+  // state_abbr are denormalized copies of the matching streets row (see
+  // sync_street_names_zip_state in ingest_featnames.py) -- candidateStreets
+  // filters on street_names' own copies, not streets', so a mismatch here
+  // would silently break matching in tests but not reflect a real bug.
+  for (const row of rows) {
+    insertName.run(row.tlid, row.fullname, 'P', row.zipl, row.zipr, row.state, row.state_abbr);
+  }
+  // A real alternate name from the actual dataset: TLID 78056932 (id=12,
+  // "Pequawket Trl") is also officially "State Rte 113".
+  const primary = rows.find((row) => row.tlid === '78056932');
+  insertName.run('78056932', 'State Rte 113', 'A', primary.zipl, primary.zipr, primary.state, primary.state_abbr);
 
   return db;
 }

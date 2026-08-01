@@ -144,3 +144,35 @@ test('even house number with the left-side ZIP does not match', () => {
   );
   db.close();
 });
+
+// TLID 78056932 (id=12) is registered under two real TIGER names:
+// "Pequawket Trl" (primary) and "State Rte 113" (alternate).
+test('a real alternate name (State Rte 113) resolves to the same street as its primary name', () => {
+  const db = makeDb();
+  const byPrimary = geocode(db, '997 Pequawket Trl, Standish, ME 04091');
+  const byAlias = geocode(db, '997 State Rte 113, Standish, ME 04091');
+
+  assert.equal(byAlias.match.id, 12);
+  assert.equal(byAlias.match.id, byPrimary.match.id);
+  assert.deepEqual(byAlias.coordinates, byPrimary.coordinates);
+  // The response still reports the row's actual primary fullname, not
+  // whatever alias the caller happened to search by.
+  assert.equal(byAlias.match.fullname, 'Pequawket Trl');
+  db.close();
+});
+
+test('an alternate name also respects the LIKE fallback for partial matches', () => {
+  const db = makeDb();
+  const result = geocode(db, '997 State Rte, Standish, ME 04091');
+  assert.equal(result.match.id, 12);
+  db.close();
+});
+
+test('a name with no street_names entry at all does not match', () => {
+  const db = makeDb();
+  assert.throws(
+    () => geocode(db, '997 Totally Unregistered Rd, Standish, ME 04091'),
+    NotFoundError
+  );
+  db.close();
+});

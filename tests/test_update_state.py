@@ -24,6 +24,19 @@ def _write_sample_shapefile(base_path):
     writer.close()
 
 
+def _write_sample_featnames(base_path):
+    # Real featnames tables are attribute-only (.dbf, no .shp) -- NULL
+    # shape type mirrors that: no geometry, just records.
+    writer = shapefile.Writer(str(base_path), shapeType=shapefile.NULL)
+    writer.field("TLID", "C")
+    writer.field("FULLNAME", "C")
+    writer.field("PAFLAG", "C")
+    writer.field("MTFCC", "C")
+    writer.null()
+    writer.record("999", "Test Rd", "P", "S1400")
+    writer.close()
+
+
 def test_states_registry_has_maine_and_new_hampshire():
     assert STATES["ME"]["fips"] == "23"
     assert len(STATES["ME"]["counties"]) == 16
@@ -42,7 +55,9 @@ def test_download_and_extract_skips_download_if_shp_already_present(tmp_path):
     shp_path.write_text("already here")
 
     with patch("geocoding.update_state.urllib.request.urlretrieve") as mock_urlretrieve:
-        result = _download_and_extract("33", "011", 2024, tmp_path)
+        result = _download_and_extract(
+            "33", "011", 2024, tmp_path, layer="edges", layer_dir="EDGES", primary_ext="shp"
+        )
 
     mock_urlretrieve.assert_not_called()
     assert result == shp_path
@@ -62,11 +77,36 @@ def test_download_and_extract_downloads_when_nothing_cached(tmp_path):
     with patch(
         "geocoding.update_state.urllib.request.urlretrieve", side_effect=fake_urlretrieve
     ) as mock_urlretrieve:
-        result = _download_and_extract("33", "011", 2024, tmp_path)
+        result = _download_and_extract(
+            "33", "011", 2024, tmp_path, layer="edges", layer_dir="EDGES", primary_ext="shp"
+        )
 
     mock_urlretrieve.assert_called_once()
     assert "tl_2024_33011_edges.zip" in mock_urlretrieve.call_args[0][0]
     assert result == tmp_path / "tl_2024_33011_edges.shp"
+    assert result.exists()
+
+
+def test_download_and_extract_works_for_featnames_layer(tmp_path):
+    import zipfile as zipfile_module
+
+    featnames_base = tmp_path / "source"
+    _write_sample_featnames(featnames_base)
+
+    def fake_urlretrieve(url, dest):
+        assert "FEATNAMES" in url
+        with zipfile_module.ZipFile(dest, "w") as zf:
+            for ext in (".dbf",):
+                zf.write(featnames_base.with_suffix(ext), f"tl_2024_33011_featnames{ext}")
+
+    with patch(
+        "geocoding.update_state.urllib.request.urlretrieve", side_effect=fake_urlretrieve
+    ):
+        result = _download_and_extract(
+            "33", "011", 2024, tmp_path, layer="featnames", layer_dir="FEATNAMES", primary_ext="dbf"
+        )
+
+    assert result == tmp_path / "tl_2024_33011_featnames.dbf"
     assert result.exists()
 
 
@@ -82,20 +122,29 @@ def test_update_state_ingests_every_county_without_network(tmp_path):
     _write_sample_shapefile(shapefile_base)
     shp_path = shapefile_base.with_suffix(".shp")
 
+    featnames_base = tmp_path / "source_names"
+    _write_sample_featnames(featnames_base)
+    dbf_path = featnames_base.with_suffix(".dbf")
+
     db_path = tmp_path / "streets.db"
 
+    def fake_download(state_fips, county_fips, year, data_dir, *, layer, **kwargs):
+        return shp_path if layer == "edges" else dbf_path
+
     with patch(
-        "geocoding.update_state._download_and_extract", return_value=shp_path
+        "geocoding.update_state._download_and_extract", side_effect=fake_download
     ) as mock_download:
         update_state("NH", db_path, 2024, tmp_path / "cache")
 
-    assert mock_download.call_count == len(STATES["NH"]["counties"])
+    assert mock_download.call_count == len(STATES["NH"]["counties"]) * 2
 
     import sqlite3
 
     conn = sqlite3.connect(db_path)
-    count = conn.execute("SELECT COUNT(*) FROM streets").fetchone()[0]
+    street_count = conn.execute("SELECT COUNT(*) FROM streets").fetchone()[0]
+    name_count = conn.execute("SELECT COUNT(*) FROM street_names").fetchone()[0]
     conn.close()
     # Every county "download" points at the same TLID 999, so only the
     # first ingest inserts it — later ones are deduped.
-    assert count == 1
+    assert street_count == 1
+    assert name_count == 1

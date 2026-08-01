@@ -3,30 +3,47 @@ const { parseLinestring, interpolateAlongLine } = require('./interpolate');
 const { NotFoundError, OutOfRangeError } = require('./errors');
 
 /**
- * Finds every streets row matching fullname (case-insensitive), the given
- * side's ZIP (zipl for odd house numbers, zipr for even — TIGER edges can
- * have a different ZIP on each side of the same segment), and (if
- * provided) state. A 2-letter state is matched against state_abbr;
- * anything else is matched against the full state name. A single named
- * street is typically split into many `edges` segments, each covering a
- * different address sub-range, so callers must pick the segment whose
- * range actually contains the target number.
+ * Finds every streets row known by `streetName` — checking not just its
+ * primary fullname but every alternate name TIGER records for that TLID
+ * in street_names (e.g. "Pequawket Trl" and "State Rte 113" can be the
+ * same physical segment) — matching the given side's ZIP (zipl for odd
+ * house numbers, zipr for even — TIGER edges can have a different ZIP on
+ * each side of the same segment), and (if provided) state. A 2-letter
+ * state is matched against state_abbr; anything else against the full
+ * state name. A single named street is typically split into many `edges`
+ * segments, each covering a different address sub-range, so callers must
+ * pick the segment whose range actually contains the target number.
  */
 function candidateStreets(db, streetName, zip, zipColumn, state) {
   if (zipColumn !== 'zipl' && zipColumn !== 'zipr') {
     throw new Error(`zipColumn must be 'zipl' or 'zipr', got ${zipColumn}`);
   }
   const stateColumn = state && state.length === 2 ? 'state_abbr' : 'state';
-  const stateClause = state ? `AND UPPER(${stateColumn}) = UPPER(?)` : '';
+  const stateClause = state ? `AND UPPER(street_names.${stateColumn}) = UPPER(?)` : '';
   const stateParam = state ? [state] : [];
 
+  // Driving the query from street_names (filtered by its own
+  // UPPER(fullname)+zip+state composite index) rather than from streets
+  // matters: street_names carries denormalized copies of zipl/zipr/state
+  // for exactly this reason (see schema.py). Filtering streets first and
+  // joining to street_names per matched row turns into a per-row nested
+  // lookup for every segment in the ZIP -- measured ~15x slower at batch
+  // scale. Filtering street_names first hits its composite index directly
+  // and only touches streets (via its unique tlid index) for the few rows
+  // that actually match.
+  const buildQuery = (nameClause) => `
+    SELECT DISTINCT streets.* FROM street_names
+    JOIN streets ON streets.tlid = street_names.tlid
+    WHERE ${nameClause} AND street_names.${zipColumn} = ? ${stateClause}
+  `;
+
   const exact = db
-    .prepare(`SELECT * FROM streets WHERE UPPER(fullname) = UPPER(?) AND ${zipColumn} = ? ${stateClause}`)
+    .prepare(buildQuery('UPPER(street_names.fullname) = UPPER(?)'))
     .all(streetName, zip, ...stateParam);
   if (exact.length > 0) return exact;
 
   return db
-    .prepare(`SELECT * FROM streets WHERE UPPER(fullname) LIKE UPPER(?) AND ${zipColumn} = ? ${stateClause}`)
+    .prepare(buildQuery('UPPER(street_names.fullname) LIKE UPPER(?)'))
     .all(`%${streetName}%`, zip, ...stateParam);
 }
 
