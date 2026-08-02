@@ -3,30 +3,10 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const zlib = require('zlib');
 const { execFileSync } = require('child_process');
 
 const { buildZip } = require('../src/zip');
-
-/** Parses local file header entries back out of a ZIP built by buildZip(). */
-function parseZipEntries(buffer) {
-  const entries = [];
-  let offset = 0;
-  while (offset < buffer.length && buffer.readUInt32LE(offset) === 0x04034b50) {
-    const method = buffer.readUInt16LE(offset + 8);
-    const compressedSize = buffer.readUInt32LE(offset + 18);
-    const nameLength = buffer.readUInt16LE(offset + 26);
-    const extraLength = buffer.readUInt16LE(offset + 28);
-    const nameStart = offset + 30;
-    const name = buffer.toString('utf8', nameStart, nameStart + nameLength);
-    const dataStart = nameStart + nameLength + extraLength;
-    const compressed = buffer.subarray(dataStart, dataStart + compressedSize);
-    const content = method === 8 ? zlib.inflateRawSync(compressed) : compressed;
-    entries.push({ name, content: content.toString('utf8') });
-    offset = dataStart + compressedSize;
-  }
-  return entries;
-}
+const { parseZipEntries } = require('./helpers');
 
 test('buildZip round-trips entries (self-parsed)', () => {
   const zipBuffer = buildZip([
