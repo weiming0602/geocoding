@@ -1,8 +1,174 @@
+import { useCallback, useRef, useState } from 'react';
+
+import { batchGeocode, batchGeocodeDownload } from '../../../shared/api/client';
+import type { BatchResult, BatchSource } from '../../../shared/api/types';
+import BatchMapView from '../components/BatchMapView';
+
+// A few thousand DOM-backed MapLibre markers noticeably bogs the browser
+// down; skip the map above this and point at the download instead.
+const MAX_MARKERS_FOR_MAP = 300;
+
 export default function Batch() {
+  const [filePath, setFilePath] = useState('');
+  const [pickedFile, setPickedFile] = useState<{ name: string; content: string } | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
+  const [results, setResults] = useState<BatchResult[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const hasSource = Boolean(pickedFile) || filePath.trim().length > 0;
+  const buildSource = useCallback((): BatchSource => {
+    if (pickedFile) return { fileContent: pickedFile.content };
+    return { filePath: filePath.trim() };
+  }, [pickedFile, filePath]);
+
+  const handleChooseFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const content = await file.text();
+    setPickedFile({ name: file.name, content });
+    setResults(null);
+  }, []);
+
+  const handleBatchGeocode = useCallback(async () => {
+    if (!hasSource) {
+      setError('Enter a file path or choose a file first.');
+      return;
+    }
+    setLoading(true);
+    setError(null);
+    setResults(null);
+    try {
+      const response = await batchGeocode(buildSource());
+      setResults(response.results);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Batch geocoding failed.');
+    } finally {
+      setLoading(false);
+    }
+  }, [hasSource, buildSource]);
+
+  const handleDownload = useCallback(async () => {
+    if (!hasSource) {
+      setError('Enter a file path or choose a file first.');
+      return;
+    }
+    setDownloading(true);
+    setError(null);
+    try {
+      const blob = await batchGeocodeDownload(buildSource());
+      const objectUrl = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = objectUrl;
+      link.download = 'batch-geocode-results.zip';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(objectUrl);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Download failed.');
+    } finally {
+      setDownloading(false);
+    }
+  }, [hasSource, buildSource]);
+
+  const successCount = results ? results.filter((r) => r.success).length : 0;
+  const successMarkers = (results ?? [])
+    .filter((r): r is Extract<BatchResult, { success: true }> => r.success)
+    .map((r) => ({ address: r.address, latitude: r.coordinates.latitude, longitude: r.coordinates.longitude }));
+
   return (
     <div>
-      <h1>Batch</h1>
-      <p>Not yet implemented -- matches /geocode/batch, /geocode/batch/download, /geocode/batch/email.</p>
+      <h1 style={{ fontSize: 42 }}>Batch geocoding</h1>
+      <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
+        Matches /geocode/batch — one address per line, up to 5,000. Upload a file, or (if this app
+        and geocoding-server share a filesystem) point at a server-side path.
+      </p>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 'var(--space-6)', alignItems: 'start' }}>
+        <div className="card elev-sm">
+          <div className="field">
+            <label>Resource file (one address per line)</label>
+            <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+              <input
+                className="input"
+                placeholder="C:\software\database\addresses.txt"
+                value={pickedFile ? pickedFile.name : filePath}
+                onChange={(e) => setFilePath(e.target.value)}
+                disabled={Boolean(pickedFile)}
+              />
+              <button
+                className="btn btn-secondary"
+                onClick={() => (pickedFile ? setPickedFile(null) : fileInputRef.current?.click())}
+              >
+                {pickedFile ? 'Clear' : 'Choose File'}
+              </button>
+              <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={handleChooseFile} />
+            </div>
+          </div>
+          <button className="btn btn-primary btn-block" onClick={handleBatchGeocode} disabled={loading || downloading}>
+            {loading ? 'Geocoding…' : 'Batch geocode'}
+          </button>
+          <button className="btn btn-secondary btn-block" onClick={handleDownload} disabled={loading || downloading}>
+            {downloading ? 'Preparing…' : 'Download results (ZIP)'}
+          </button>
+          {error && (
+            <p className="card-body" style={{ color: '#a4402a', marginTop: 'var(--space-2)' }}>
+              {error}
+            </p>
+          )}
+        </div>
+
+        <div>
+          {results && (
+            <>
+              <div className="card-title" style={{ marginBottom: 'var(--space-3)' }}>
+                {successCount} of {results.length} succeeded
+              </div>
+              <div style={{ overflowX: 'auto' }}>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Address</th>
+                      <th>Result</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {results.map((result, index) => (
+                      <tr key={index}>
+                        <td>{result.address}</td>
+                        <td>
+                          {result.success ? (
+                            <span style={{ fontVariantNumeric: 'tabular-nums' }}>
+                              {result.coordinates.latitude.toFixed(6)}, {result.coordinates.longitude.toFixed(6)} ·{' '}
+                              <span className="tag tag-accent">{result.rangeSide} side</span>
+                            </span>
+                          ) : (
+                            <span style={{ color: '#a4402a' }}>{result.error}</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {successMarkers.length > 0 && successMarkers.length < MAX_MARKERS_FOR_MAP && (
+                <div style={{ marginTop: 'var(--space-4)' }}>
+                  <BatchMapView markers={successMarkers} />
+                </div>
+              )}
+              {successMarkers.length >= MAX_MARKERS_FOR_MAP && (
+                <p className="text-muted" style={{ marginTop: 'var(--space-4)' }}>
+                  Map skipped: {successMarkers.length} successful results is too many to render smoothly.
+                  Use Download results to get the coordinates instead.
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
