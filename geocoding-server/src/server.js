@@ -11,7 +11,7 @@ const {
 const { resultsToCsv } = require('./resultsCsv');
 const { buildZip } = require('./zip');
 const { reverseGeocode } = require('./reverseGeocode');
-const { openUsersDb } = require('./users');
+const { openUsersDb, getUser, ensureCurrentPeriod } = require('./users');
 const { checkQuota, useQuota } = require('./quota');
 const { sendResultsEmail } = require('./emailDelivery');
 const {
@@ -131,6 +131,31 @@ app.post('/geocode/batch/email', async (req, res) => {
     console.error(err);
     res.status(500).json({ error: 'internal error' });
   }
+});
+
+// Read-only quota lookup for a Plan & Quota screen: reports usage without
+// gating anything (unlike checkQuota/useQuota in quota.js, which are tied
+// to an actual batch-email send). There's no signup/login/session concept
+// in this app, so the caller must supply the email to look up.
+app.get('/quota', (req, res) => {
+  const email = req.query && req.query.email;
+  if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+    return res.status(400).json({ error: 'email must be a valid email address' });
+  }
+
+  const user = getUser(usersDb, email);
+  if (!user) {
+    return res.status(404).json({ error: `no active subscription found for ${email}` });
+  }
+
+  const current = ensureCurrentPeriod(usersDb, user);
+  res.json({
+    email: current.email,
+    tier: current.tier,
+    usedThisPeriod: current.used_this_period,
+    remaining: current.tier - current.used_this_period,
+    periodStart: current.period_start,
+  });
 });
 
 app.post('/reverse-geocode', (req, res) => {

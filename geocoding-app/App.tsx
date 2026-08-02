@@ -3,15 +3,17 @@ import React, { useState } from 'react';
 import { SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import BatchGeocodeScreen from './screens/BatchGeocodeScreen';
+import PlanQuotaScreen from './screens/PlanQuotaScreen';
 import ReverseGeocodeScreen from './screens/ReverseGeocodeScreen';
 import SingleGeocodeScreen from './screens/SingleGeocodeScreen';
 
-type Screen = 'single' | 'batch' | 'reverse';
+type Screen = 'single' | 'batch' | 'reverse' | 'quota';
 
 const TABS: { key: Screen; label: string }[] = [
   { key: 'single', label: 'Single Address' },
   { key: 'batch', label: 'Batch Geocode' },
   { key: 'reverse', label: 'Reverse Geocode' },
+  { key: 'quota', label: 'Plan & Quota' },
 ];
 
 export default function App() {
@@ -36,6 +38,7 @@ export default function App() {
       {screen === 'single' && <SingleGeocodeScreen />}
       {screen === 'batch' && <BatchGeocodeScreen />}
       {screen === 'reverse' && <ReverseGeocodeScreen />}
+      {screen === 'quota' && <PlanQuotaScreen />}
 
       <StatusBar style="auto" />
     </SafeAreaView>
