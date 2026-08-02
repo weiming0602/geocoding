@@ -1,16 +1,10 @@
 import React, { useCallback, useState } from 'react';
-import {
-  ActivityIndicator,
-  Alert,
-  Button,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from 'react-native';
+import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { getQuota } from '../../shared/api/client';
 import type { QuotaStatus } from '../../shared/api/types';
+import { colors, radius, space } from '../../shared/theme';
+import ThemedButton from './ThemedButton';
 
 // There's no signup/login/session anywhere in this app -- quota is looked
 // up by email per request (see users.js), not by a logged-in account, so
@@ -49,10 +43,14 @@ export default function PlanQuotaForm() {
 
   return (
     <View style={styles.container}>
+      <Text style={styles.title}>Plan &amp; quota</Text>
+      <Text style={styles.subtitle}>Usage resets on the 1st of each calendar month.</Text>
+
       <Text style={styles.label}>Account email</Text>
       <TextInput
         style={styles.input}
         placeholder="e.g. alice@example.com"
+        placeholderTextColor={colors.neutral500}
         value={email}
         onChangeText={setEmail}
         autoCapitalize="none"
@@ -63,23 +61,21 @@ export default function PlanQuotaForm() {
         onSubmitEditing={handleCheckQuota}
       />
 
-      <Button title="Check Quota" onPress={handleCheckQuota} disabled={loading} />
-
-      {loading && <ActivityIndicator style={styles.spacing} size="small" />}
+      <ThemedButton title="Check Quota" onPress={handleCheckQuota} loading={loading} block />
 
       {!loading && quota && (
-        <View style={styles.spacing}>
-          <Text style={styles.resultLabel}>
-            {quota.usedThisPeriod} / {quota.tier} used this period
+        <View style={[styles.card, styles.spacing]}>
+          <Text style={styles.cardKicker}>Current period</Text>
+          <Text style={styles.cardTitle}>
+            {quota.usedThisPeriod.toLocaleString()} / {quota.tier.toLocaleString()} requests
           </Text>
           <View style={styles.usageBarTrack}>
             <View style={[styles.usageBarFill, { width: `${usedFraction * 100}%` }]} />
           </View>
-          <Text style={styles.spacing}>{quota.remaining} addresses remaining</Text>
-          <Text>Period started {quota.periodStart} — resets monthly on the 1st.</Text>
+          <Text style={styles.cardMeta}>Resets {quota.periodStart}</Text>
           <Text style={[styles.spacing, styles.noteText]}>
-            Quota is tracked per account email; there's no self-service upgrade yet — contact
-            your administrator to request a higher tier.
+            There's no self-service upgrade yet — contact your administrator to request a higher
+            tier.
           </Text>
         </View>
       )}
@@ -92,42 +88,86 @@ export default function PlanQuotaForm() {
 const styles = StyleSheet.create({
   container: {
     width: '100%',
-    padding: 16,
+    padding: space[4],
   },
-  label: {
-    fontSize: 14,
+  title: {
+    fontFamily: 'CormorantGaramond_600SemiBold',
+    fontSize: 30,
+    color: colors.text,
     marginBottom: 4,
   },
+  subtitle: {
+    fontFamily: 'Lora_400Regular',
+    fontSize: 13,
+    color: colors.text,
+    opacity: 0.7,
+    marginBottom: space[6],
+  },
+  label: {
+    fontFamily: 'Lora_400Regular',
+    fontSize: 12,
+    color: colors.text,
+    opacity: 0.7,
+    marginBottom: 5,
+  },
   input: {
+    fontFamily: 'Lora_400Regular',
     borderWidth: 1,
-    borderColor: '#ccc',
-    borderRadius: 8,
-    paddingHorizontal: 12,
+    borderColor: colors.divider,
+    borderRadius: radius.md,
+    paddingHorizontal: 10,
     paddingVertical: 8,
-    marginBottom: 12,
+    marginBottom: space[4],
+    color: colors.text,
   },
   spacing: {
-    marginTop: 16,
+    marginTop: space[4],
   },
-  resultLabel: {
-    fontWeight: '600',
-    marginBottom: 8,
+  card: {
+    borderWidth: 1,
+    borderColor: colors.divider,
+    borderRadius: radius.md,
+    padding: space[3],
+  },
+  cardKicker: {
+    fontFamily: 'Lora_400Regular',
+    fontSize: 10,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    color: colors.accent,
+    marginBottom: 4,
+  },
+  cardTitle: {
+    fontFamily: 'CormorantGaramond_600SemiBold',
+    fontSize: 17,
+    color: colors.text,
+    marginBottom: space[2],
+  },
+  cardMeta: {
+    fontFamily: 'Lora_400Regular',
+    fontSize: 11,
+    color: colors.text,
+    opacity: 0.5,
   },
   usageBarTrack: {
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: '#eee',
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.divider,
     overflow: 'hidden',
+    marginBottom: space[2],
   },
   usageBarFill: {
     height: '100%',
-    backgroundColor: '#2196F3',
+    backgroundColor: colors.accent500,
   },
   noteText: {
-    color: '#666',
-    fontStyle: 'italic',
+    fontFamily: 'Lora_400Regular',
+    fontSize: 12,
+    color: colors.text,
+    opacity: 0.65,
   },
   errorText: {
-    color: '#c0392b',
+    fontFamily: 'Lora_400Regular',
+    color: colors.errorText,
   },
 });
