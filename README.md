@@ -68,5 +68,7 @@ Safe to re-run after ingesting more data: it only backfills rows where
 - [`geocoding-server`](geocoding-server) — Express + better-sqlite3 API that
   parses a free-text address, matches it against `streets`, and interpolates
   coordinates (odd numbers → left range/offset, even → right range/offset)
-- [`geocoding-app`](geocoding-app) — Expo/React Native app with a text input
+- [`ui/mobile`](ui/mobile) — Expo/React Native app with a text input
   and "Geocode" button that calls `geocoding-server`
+- [`ui/desktop`](ui/desktop) — React web app calling the same
+  `geocoding-server` API

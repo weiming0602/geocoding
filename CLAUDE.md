@@ -1,11 +1,12 @@
 # geocoding
 
 Custom address geocoding engine for Maine (+ NH) built on Census TIGER/Line
-`edges` shapefiles — no third-party geocoding API. Three sub-projects in one
+`edges` shapefiles — no third-party geocoding API. Sub-projects in one
 repo: `geocoding/` (Python: shapefile → SQLite ingest + interpolation),
-`geocoding-server/` (Express API), `geocoding-app/` (Expo/React Native).
-`geocoding-server/README.md` documents the matching/interpolation algorithm
-in detail — read that before touching `geocode.js` or `interpolate.py`.
+`geocoding-server/` (Express API), `ui/mobile/` (Expo/React Native app),
+`ui/desktop/` (React web app). `geocoding-server/README.md` documents the
+matching/interpolation algorithm in detail — read that before touching
+`geocode.js` or `interpolate.py`.
 
 # Bash commands
 - Python: `.venv\Scripts\python -m geocoding.update_state <db> --state ME`
@@ -17,7 +18,8 @@ in detail — read that before touching `geocode.js` or `interpolate.py`.
 - Server: `cd geocoding-server && node src/server.js`
 - Server tests: `cd geocoding-server && node --test` — **not** `npm test`,
   that script is a placeholder stub. 71 tests.
-- App: `cd geocoding-app && npm start`
+- Mobile app: `cd ui/mobile && npm start`
+- Desktop app: `cd ui/desktop && npm run dev`
 
 # Code style
 - Odd/even house-number convention (odd → left range/offset left, even →
@@ -65,5 +67,7 @@ in detail — read that before touching `geocode.js` or `interpolate.py`.
   function, so a real provider only needs to change this file.
 - No signup/auth/billing — `users.js`'s `upsertUser()` is a manual admin
   operation; requests aren't authenticated.
-- `geocoding-app` has no server-URL abstraction yet — check the relevant
+- `ui/mobile` has no server-URL abstraction yet — check the relevant
   component before assuming the API base URL is configurable.
+- `ui/desktop` didn't exist before this restructuring — see its own
+  CLAUDE.md/README for what's actually built vs. scaffolded.
