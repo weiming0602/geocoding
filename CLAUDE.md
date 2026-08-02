@@ -69,5 +69,11 @@ matching/interpolation algorithm in detail — read that before touching
   operation; requests aren't authenticated.
 - `ui/mobile` has no server-URL abstraction yet — check the relevant
   component before assuming the API base URL is configurable.
-- `ui/desktop` didn't exist before this restructuring — see its own
-  CLAUDE.md/README for what's actually built vs. scaffolded.
+- `ui/desktop` is a scaffold only (Vite + React + react-router, routes
+  for every screen, `ui/shared`'s API client wired up and proven working
+  against a live `geocoding-server`) — no real screen UI implemented yet.
+- `ui/shared` holds API client/types/coordinate-parsing code used by both
+  frontends. Deliberately excludes anything with maplibre-gl types (a
+  separate install there is a nominally distinct type from each app's own
+  copy to TypeScript) — map integration stays duplicated per-app unless
+  npm workspaces get set up to hoist one shared install.
