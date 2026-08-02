@@ -1,0 +1,71 @@
+// Response shapes for geocoding-server's actual endpoints (src/server.js).
+// Kept here so ui/mobile and ui/desktop can't drift apart on field names --
+// see e.g. the Meridian design handoff's original mixup of forward-geocode's
+// `rangeSide`/`coordinates` with reverse-geocode's `side`/`matchedCoordinates`.
+
+export type Coordinates = {
+  latitude: number;
+  longitude: number;
+};
+
+export type StreetMatch = {
+  id: number;
+  tlid?: string;
+  fullname: string;
+  zipl?: string;
+  zipr?: string;
+  state?: string;
+  state_abbr?: string;
+};
+
+// POST /geocode
+export type GeocodeResult = {
+  input: { number: number; streetName: string; zip: string; state?: string };
+  match: StreetMatch;
+  rangeSide: 'left' | 'right';
+  offsetSide: 'left' | 'right';
+  offsetFeet: number;
+  coordinates: Coordinates;
+};
+
+// POST /reverse-geocode -- NOT the same shape as GeocodeResult: the side
+// field is `side` here (not `rangeSide`), and the resolved point is
+// `matchedCoordinates` (not `coordinates`).
+export type ReverseGeocodeResult = {
+  input: Coordinates;
+  match: StreetMatch;
+  side: 'left' | 'right';
+  number: number | null;
+  address: string;
+  distanceMeters: number;
+  matchedCoordinates: Coordinates;
+};
+
+// POST /geocode/batch, /geocode/batch/download -- each line's own
+// success/failure, not one failure for the whole batch.
+export type BatchResult =
+  | ({ address: string; success: true } & GeocodeResult)
+  | { address: string; success: false; error: string };
+
+export type BatchGeocodeResponse = {
+  results: BatchResult[];
+};
+
+// What to send batch endpoints: a path the server can read off its own
+// disk, or (added so a client with no server-reachable filesystem path --
+// e.g. a phone, or a browser -- can upload a picked file's contents
+// directly) raw file content.
+export type BatchSource = { filePath: string } | { fileContent: string };
+
+// GET /quota?email=...
+export type QuotaStatus = {
+  email: string;
+  tier: number;
+  usedThisPeriod: number;
+  remaining: number;
+  periodStart: string;
+};
+
+export type ApiErrorResponse = {
+  error: string;
+};

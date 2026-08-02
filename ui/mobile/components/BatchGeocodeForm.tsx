@@ -15,47 +15,14 @@ import * as DocumentPicker from 'expo-document-picker';
 // the legacy module is a separate, working export path that sidesteps it.
 import * as FileSystem from 'expo-file-system/legacy';
 
+import { batchGeocode, batchGeocodeDownload } from '../../shared/api/client';
+import type { BatchResult, BatchSource } from '../../shared/api/types';
 import BatchGeocodeMap from './BatchGeocodeMap';
-
-// Points at the geocoding-server Express API (C:\software\geocoding\geocoding-server).
-// The file path is read on the server (it has local filesystem access),
-// not in the app, so this only works when server and app share a filesystem
-// (e.g. both on your dev machine) or the path is reachable from wherever
-// geocoding-server actually runs.
-const BATCH_GEOCODE_API_URL = 'http://localhost:3001/geocode/batch';
-const BATCH_DOWNLOAD_API_URL = 'http://localhost:3001/geocode/batch/download';
 
 // Rendering a marker per result works well up to a few hundred, but a
 // few thousand DOM-backed MapLibre markers noticeably bogs down the
 // browser. Skip the map above this and point at the list/download instead.
 const MAX_MARKERS_FOR_MAP = 300;
-
-type Coordinates = {
-  latitude: number;
-  longitude: number;
-};
-
-type BatchResult =
-  | {
-      address: string;
-      success: true;
-      match: { fullname: string; id: number };
-      rangeSide: 'left' | 'right';
-      coordinates: Coordinates;
-    }
-  | {
-      address: string;
-      success: false;
-      error: string;
-    };
-
-type BatchResponse = {
-  results: BatchResult[];
-};
-
-type BatchErrorResponse = {
-  error: string;
-};
 
 type PickedFile = {
   name: string;
@@ -76,7 +43,7 @@ export default function BatchGeocodeForm() {
   // to reach a phone's local storage) takes priority over a manually typed
   // path (the original workflow, which only works when the server can read
   // that path off its own disk -- e.g. server and app on the same machine).
-  const buildBatchRequestBody = useCallback(() => {
+  const buildBatchSource = useCallback((): BatchSource => {
     if (pickedFile) return { fileContent: pickedFile.content };
     return { filePath: filePath.trim() };
   }, [pickedFile, filePath]);
@@ -125,20 +92,8 @@ export default function BatchGeocodeForm() {
     setResults(null);
 
     try {
-      const response = await fetch(BATCH_GEOCODE_API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildBatchRequestBody()),
-      });
-
-      const body = (await response.json()) as BatchResponse | BatchErrorResponse;
-
-      if (!response.ok || 'error' in body) {
-        const message = 'error' in body ? body.error : 'Batch geocoding failed.';
-        throw new Error(message);
-      }
-
-      setResults(body.results);
+      const response = await batchGeocode(buildBatchSource());
+      setResults(response.results);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Batch geocoding failed.';
       setError(message);
@@ -146,7 +101,7 @@ export default function BatchGeocodeForm() {
     } finally {
       setLoading(false);
     }
-  }, [hasSource, buildBatchRequestBody]);
+  }, [hasSource, buildBatchSource]);
 
   const handleDownload = useCallback(async () => {
     if (!hasSource) {
@@ -163,18 +118,7 @@ export default function BatchGeocodeForm() {
     setError(null);
 
     try {
-      const response = await fetch(BATCH_DOWNLOAD_API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(buildBatchRequestBody()),
-      });
-
-      if (!response.ok) {
-        const body = (await response.json().catch(() => null)) as BatchErrorResponse | null;
-        throw new Error(body?.error ?? `Download failed (${response.status}).`);
-      }
-
-      const blob = await response.blob();
+      const blob = await batchGeocodeDownload(buildBatchSource());
       const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = objectUrl;
@@ -190,7 +134,7 @@ export default function BatchGeocodeForm() {
     } finally {
       setDownloading(false);
     }
-  }, [hasSource, buildBatchRequestBody]);
+  }, [hasSource, buildBatchSource]);
 
   const successCount = results ? results.filter((r) => r.success).length : 0;
   const successMarkers = (results ?? [])

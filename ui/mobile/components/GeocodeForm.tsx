@@ -9,39 +9,16 @@ import {
   View,
 } from 'react-native';
 
+import { geocode } from '../../shared/api/client';
+import type { Coordinates, StreetMatch } from '../../shared/api/types';
 import GeocodeMap from './GeocodeMap';
-
-// Points at the geocoding-server Express API (C:\software\geocoding-server).
-// On a physical device/simulator, "localhost" means the device itself, so
-// swap this for your dev machine's LAN IP (e.g. http://192.168.1.23:3001).
-const GEOCODE_API_URL = 'http://localhost:3001/geocode';
-
-type Coordinates = {
-  latitude: number;
-  longitude: number;
-};
-
-type Match = {
-  fullname: string;
-  id: number;
-};
-
-type GeocodeResponse = {
-  match: Match;
-  rangeSide: 'left' | 'right';
-  coordinates: Coordinates;
-};
-
-type GeocodeErrorResponse = {
-  error: string;
-};
 
 export default function GeocodeForm() {
   const [address, setAddress] = useState('');
   const [loading, setLoading] = useState(false);
   const [coordinates, setCoordinates] = useState<Coordinates | null>(null);
   const [matchedStreet, setMatchedStreet] = useState<string | null>(null);
-  const [match, setMatch] = useState<Match | null>(null);
+  const [match, setMatch] = useState<StreetMatch | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleGeocode = useCallback(async () => {
@@ -61,22 +38,10 @@ export default function GeocodeForm() {
     setMatch(null);
 
     try {
-      const response = await fetch(GEOCODE_API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address: trimmedAddress }),
-      });
-
-      const body = (await response.json()) as GeocodeResponse | GeocodeErrorResponse;
-
-      if (!response.ok || 'error' in body) {
-        const message = 'error' in body ? body.error : 'Geocoding failed.';
-        throw new Error(message);
-      }
-
-      setCoordinates(body.coordinates);
-      setMatchedStreet(`${body.match.fullname} (${body.rangeSide} side)`);
-      setMatch(body.match);
+      const result = await geocode(trimmedAddress);
+      setCoordinates(result.coordinates);
+      setMatchedStreet(`${result.match.fullname} (${result.rangeSide} side)`);
+      setMatch(result.match);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Geocoding failed.';
       setError(message);

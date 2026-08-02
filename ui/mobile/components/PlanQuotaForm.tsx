@@ -9,22 +9,8 @@ import {
   View,
 } from 'react-native';
 
-// Points at the geocoding-server Express API (C:\software\geocoding-server).
-// On a physical device/simulator, "localhost" means the device itself, so
-// swap this for your dev machine's LAN IP (e.g. http://192.168.1.23:3001).
-const QUOTA_API_URL = 'http://localhost:3001/quota';
-
-type QuotaResponse = {
-  email: string;
-  tier: number;
-  usedThisPeriod: number;
-  remaining: number;
-  periodStart: string;
-};
-
-type QuotaErrorResponse = {
-  error: string;
-};
+import { getQuota } from '../../shared/api/client';
+import type { QuotaStatus } from '../../shared/api/types';
 
 // There's no signup/login/session anywhere in this app -- quota is looked
 // up by email per request (see users.js), not by a logged-in account, so
@@ -32,7 +18,7 @@ type QuotaErrorResponse = {
 export default function PlanQuotaForm() {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
-  const [quota, setQuota] = useState<QuotaResponse | null>(null);
+  const [quota, setQuota] = useState<QuotaStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleCheckQuota = useCallback(async () => {
@@ -48,15 +34,8 @@ export default function PlanQuotaForm() {
     setQuota(null);
 
     try {
-      const response = await fetch(`${QUOTA_API_URL}?email=${encodeURIComponent(trimmedEmail)}`);
-      const body = (await response.json()) as QuotaResponse | QuotaErrorResponse;
-
-      if (!response.ok || 'error' in body) {
-        const message = 'error' in body ? body.error : 'Checking quota failed.';
-        throw new Error(message);
-      }
-
-      setQuota(body);
+      const result = await getQuota(trimmedEmail);
+      setQuota(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Checking quota failed.';
       setError(message);

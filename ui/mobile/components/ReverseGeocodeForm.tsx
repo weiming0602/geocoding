@@ -10,56 +10,16 @@ import {
   View,
 } from 'react-native';
 
+import { reverseGeocode } from '../../shared/api/client';
+import type { ReverseGeocodeResult } from '../../shared/api/types';
+import { parseCoordinateInput } from '../../shared/parseCoordinateInput';
 import GeocodeMap from './GeocodeMap';
-
-// Points at the geocoding-server Express API (C:\software\geocoding-server).
-// On a physical device/simulator, "localhost" means the device itself, so
-// swap this for your dev machine's LAN IP (e.g. http://192.168.1.23:3001).
-const REVERSE_GEOCODE_API_URL = 'http://localhost:3001/reverse-geocode';
-
-type Coordinates = {
-  latitude: number;
-  longitude: number;
-};
-
-type Match = {
-  fullname: string;
-  id: number;
-};
-
-type ReverseGeocodeResponse = {
-  match: Match;
-  side: 'left' | 'right';
-  number: number | null;
-  address: string;
-  distanceMeters: number;
-  matchedCoordinates: Coordinates;
-};
-
-type ReverseGeocodeErrorResponse = {
-  error: string;
-};
-
-/** Parses "lat, lon" (or "lat lon") into { latitude, longitude }, or null if unparseable. */
-function parseCoordinateInput(input: string): Coordinates | null {
-  const parts = input
-    .trim()
-    .split(/[,\s]+/)
-    .filter(Boolean);
-  if (parts.length !== 2) return null;
-
-  const latitude = Number(parts[0]);
-  const longitude = Number(parts[1]);
-  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
-
-  return { latitude, longitude };
-}
 
 export default function ReverseGeocodeForm() {
   const [coordinateInput, setCoordinateInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [locating, setLocating] = useState(false);
-  const [result, setResult] = useState<ReverseGeocodeResponse | null>(null);
+  const [result, setResult] = useState<ReverseGeocodeResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleUseCurrentLocation = useCallback(async () => {
@@ -97,20 +57,8 @@ export default function ReverseGeocodeForm() {
     setResult(null);
 
     try {
-      const response = await fetch(REVERSE_GEOCODE_API_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(coordinates),
-      });
-
-      const body = (await response.json()) as ReverseGeocodeResponse | ReverseGeocodeErrorResponse;
-
-      if (!response.ok || 'error' in body) {
-        const message = 'error' in body ? body.error : 'Reverse geocoding failed.';
-        throw new Error(message);
-      }
-
-      setResult(body);
+      const result = await reverseGeocode(coordinates);
+      setResult(result);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Reverse geocoding failed.';
       setError(message);
