@@ -3,7 +3,11 @@ const cors = require('cors');
 const Database = require('better-sqlite3');
 
 const { geocode } = require('./geocode');
-const { geocodeBatch, geocodeAddressList, readAddressLines } = require('./batchGeocode');
+const {
+  geocodeAddressList,
+  readAddressLines,
+  readAddressContent,
+} = require('./batchGeocode');
 const { resultsToCsv } = require('./resultsCsv');
 const { buildZip } = require('./zip');
 const { reverseGeocode } = require('./reverseGeocode');
@@ -23,12 +27,22 @@ const PORT = Number(process.env.PORT) || 3001;
 const OFFSET_FEET = Number(process.env.OFFSET_FEET) || 20;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// A client with no server-reachable filesystem path (e.g. a phone) sends the
+// picked file's contents directly instead; fileContent takes priority when
+// both are present since the client only sets one or the other.
+function resolveAddresses(body) {
+  const { filePath, fileContent } = body || {};
+  return fileContent !== undefined ? readAddressContent(fileContent) : readAddressLines(filePath);
+}
+
 const db = new Database(DB_PATH, { readonly: true, fileMustExist: true });
 const usersDb = openUsersDb(USERS_DB_PATH);
 
 const app = express();
 app.use(cors());
-app.use(express.json());
+// Default 100kb is too small for fileContent uploads: MAX_ADDRESSES (5000)
+// lines can run several hundred KB.
+app.use(express.json({ limit: '5mb' }));
 
 app.post('/geocode', (req, res) => {
   const address = req.body && req.body.address;
@@ -45,9 +59,9 @@ app.post('/geocode', (req, res) => {
 });
 
 app.post('/geocode/batch', (req, res) => {
-  const filePath = req.body && req.body.filePath;
   try {
-    const results = geocodeBatch(db, filePath, { offsetFeet: OFFSET_FEET });
+    const addresses = resolveAddresses(req.body);
+    const results = geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
     res.json({ results });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
@@ -58,11 +72,10 @@ app.post('/geocode/batch', (req, res) => {
 });
 
 app.post('/geocode/batch/download', (req, res) => {
-  const filePath = req.body && req.body.filePath;
-
   let results;
   try {
-    results = geocodeBatch(db, filePath, { offsetFeet: OFFSET_FEET });
+    const addresses = resolveAddresses(req.body);
+    results = geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });

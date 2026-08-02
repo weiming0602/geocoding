@@ -9,6 +9,11 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import * as DocumentPicker from 'expo-document-picker';
+// expo-file-system's new Paths/File API (SDK 57) has a broken internal
+// import (./pathUtilities fails to resolve under Metro's web bundler) --
+// the legacy module is a separate, working export path that sidesteps it.
+import * as FileSystem from 'expo-file-system/legacy';
 
 import BatchGeocodeMap from './BatchGeocodeMap';
 
@@ -52,18 +57,66 @@ type BatchErrorResponse = {
   error: string;
 };
 
+type PickedFile = {
+  name: string;
+  content: string;
+};
+
 export default function BatchGeocodeForm() {
   const [filePath, setFilePath] = useState('');
+  const [pickedFile, setPickedFile] = useState<PickedFile | null>(null);
+  const [picking, setPicking] = useState(false);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [results, setResults] = useState<BatchResult[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const handleBatchGeocode = useCallback(async () => {
-    const trimmedPath = filePath.trim();
-    if (!trimmedPath) {
+  // Builds the request body from whichever source is active: a file picked
+  // on-device (its contents are read up front, since the server has no way
+  // to reach a phone's local storage) takes priority over a manually typed
+  // path (the original workflow, which only works when the server can read
+  // that path off its own disk -- e.g. server and app on the same machine).
+  const buildBatchRequestBody = useCallback(() => {
+    if (pickedFile) return { fileContent: pickedFile.content };
+    return { filePath: filePath.trim() };
+  }, [pickedFile, filePath]);
+
+  const hasSource = Boolean(pickedFile) || filePath.trim().length > 0;
+
+  const handleChooseFile = useCallback(async () => {
+    setPicking(true);
+    setError(null);
+    try {
+      const result = await DocumentPicker.getDocumentAsync({ type: '*/*' });
+      if (result.canceled || result.assets.length === 0) return;
+
+      const asset = result.assets[0];
+      const content =
+        Platform.OS === 'web' && asset.file
+          ? await asset.file.text()
+          : await FileSystem.readAsStringAsync(asset.uri, {
+              encoding: FileSystem.EncodingType.UTF8,
+            });
+
+      setPickedFile({ name: asset.name, content });
       setResults(null);
-      setError('Enter a file path first.');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to read file.';
+      setError(message);
+      Alert.alert('File picker error', message);
+    } finally {
+      setPicking(false);
+    }
+  }, []);
+
+  const handleClearPickedFile = useCallback(() => {
+    setPickedFile(null);
+  }, []);
+
+  const handleBatchGeocode = useCallback(async () => {
+    if (!hasSource) {
+      setResults(null);
+      setError('Enter a file path or choose a file first.');
       return;
     }
 
@@ -75,7 +128,7 @@ export default function BatchGeocodeForm() {
       const response = await fetch(BATCH_GEOCODE_API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: trimmedPath }),
+        body: JSON.stringify(buildBatchRequestBody()),
       });
 
       const body = (await response.json()) as BatchResponse | BatchErrorResponse;
@@ -93,12 +146,11 @@ export default function BatchGeocodeForm() {
     } finally {
       setLoading(false);
     }
-  }, [filePath]);
+  }, [hasSource, buildBatchRequestBody]);
 
   const handleDownload = useCallback(async () => {
-    const trimmedPath = filePath.trim();
-    if (!trimmedPath) {
-      setError('Enter a file path first.');
+    if (!hasSource) {
+      setError('Enter a file path or choose a file first.');
       return;
     }
 
@@ -114,7 +166,7 @@ export default function BatchGeocodeForm() {
       const response = await fetch(BATCH_DOWNLOAD_API_URL, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: trimmedPath }),
+        body: JSON.stringify(buildBatchRequestBody()),
       });
 
       if (!response.ok) {
@@ -138,7 +190,7 @@ export default function BatchGeocodeForm() {
     } finally {
       setDownloading(false);
     }
-  }, [filePath]);
+  }, [hasSource, buildBatchRequestBody]);
 
   const successCount = results ? results.filter((r) => r.success).length : 0;
   const successMarkers = (results ?? [])
@@ -151,18 +203,25 @@ export default function BatchGeocodeForm() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.label}>Resource file path (one address per line)</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="e.g. C:\software\database\addresses.txt"
-        value={filePath}
-        onChangeText={setFilePath}
-        autoCapitalize="none"
-        autoCorrect={false}
-        editable={!loading && !downloading}
-        returnKeyType="search"
-        onSubmitEditing={handleBatchGeocode}
-      />
+      <Text style={styles.label}>Resource file (one address per line)</Text>
+      <View style={styles.pathRow}>
+        <TextInput
+          style={[styles.input, styles.pathInput]}
+          placeholder="e.g. C:\software\database\addresses.txt"
+          value={pickedFile ? pickedFile.name : filePath}
+          onChangeText={setFilePath}
+          autoCapitalize="none"
+          autoCorrect={false}
+          editable={!loading && !downloading && !pickedFile}
+          returnKeyType="search"
+          onSubmitEditing={handleBatchGeocode}
+        />
+        <Button
+          title={pickedFile ? 'Clear' : 'Choose File'}
+          onPress={pickedFile ? handleClearPickedFile : handleChooseFile}
+          disabled={loading || downloading || picking}
+        />
+      </View>
 
       <View style={styles.buttonRow}>
         <View style={styles.buttonSpacer}>
@@ -227,7 +286,15 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     paddingHorizontal: 12,
     paddingVertical: 8,
+  },
+  pathRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
     marginBottom: 12,
+  },
+  pathInput: {
+    flex: 1,
   },
   buttonRow: {
     flexDirection: 'row',

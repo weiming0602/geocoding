@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { geocodeBatch, MAX_ADDRESSES } = require('../src/batchGeocode');
+const { geocodeBatch, readAddressContent, MAX_ADDRESSES } = require('../src/batchGeocode');
 const { ValidationError, NotFoundError } = require('../src/errors');
 const { makeDb } = require('./helpers');
 
@@ -78,4 +78,26 @@ test('rejects files with more than MAX_ADDRESSES lines', () => {
   assert.throws(() => geocodeBatch(db, filePath), ValidationError);
   fs.unlinkSync(filePath);
   db.close();
+});
+
+test('readAddressContent parses lines the same way as readAddressLines, skipping blanks', () => {
+  const addresses = readAddressContent(
+    ['997 Pequawket Trl, Standish, ME 04091', '', '  ', '984 Pequawket Trl, Standish, ME 04091'].join(
+      '\n'
+    )
+  );
+  assert.deepEqual(addresses, [
+    '997 Pequawket Trl, Standish, ME 04091',
+    '984 Pequawket Trl, Standish, ME 04091',
+  ]);
+});
+
+test('readAddressContent rejects blank content', () => {
+  assert.throws(() => readAddressContent('\n\n  \n'), ValidationError);
+  assert.throws(() => readAddressContent(''), ValidationError);
+});
+
+test('readAddressContent rejects non-string content', () => {
+  assert.throws(() => readAddressContent(undefined), ValidationError);
+  assert.throws(() => readAddressContent(42), ValidationError);
 });
