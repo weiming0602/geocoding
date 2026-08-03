@@ -40,9 +40,11 @@ const usersDb = openUsersDb(USERS_DB_PATH);
 
 const app = express();
 app.use(cors());
-// Default 100kb is too small for fileContent uploads: MAX_ADDRESSES (5000)
-// lines can run several hundred KB.
-app.use(express.json({ limit: '5mb' }));
+// batchGeocode.js has no cap on address count, but Express itself still
+// needs some finite body-size ceiling for fileContent uploads (default
+// 100kb is far too small). This is just that technical floor, not a
+// business rule -- raise it further if a real batch ever needs to.
+app.use(express.json({ limit: '200mb' }));
 
 app.post('/geocode', (req, res) => {
   const address = req.body && req.body.address;

@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { geocodeBatch, readAddressContent, MAX_ADDRESSES } = require('../src/batchGeocode');
+const { geocodeBatch, readAddressContent } = require('../src/batchGeocode');
 const { ValidationError, NotFoundError } = require('../src/errors');
 const { makeDb } = require('./helpers');
 
@@ -70,12 +70,13 @@ test('non-string filePath throws ValidationError', () => {
   db.close();
 });
 
-test('rejects files with more than MAX_ADDRESSES lines', () => {
+test('accepts files well beyond the old 5000-address cap', () => {
   const db = makeDb();
   const filePath = writeTempFile(
-    Array.from({ length: MAX_ADDRESSES + 1 }, () => '1 Some St, Town, ME 00000').join('\n')
+    Array.from({ length: 8000 }, () => '1 Some St, Town, ME 00000').join('\n')
   );
-  assert.throws(() => geocodeBatch(db, filePath), ValidationError);
+  const results = geocodeBatch(db, filePath);
+  assert.equal(results.length, 8000);
   fs.unlinkSync(filePath);
   db.close();
 });

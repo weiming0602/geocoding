@@ -3,8 +3,6 @@ const fs = require('fs');
 const { geocode } = require('./geocode');
 const { ValidationError, NotFoundError } = require('./errors');
 
-const MAX_ADDRESSES = 5000;
-
 /** Splits raw file content (one address per line) into a list of addresses. */
 function parseAddresses(content) {
   return content
@@ -57,13 +55,12 @@ function readAddressContent(content) {
 
 /**
  * Geocodes each address independently. A failure on one line doesn't
- * stop the batch; each result reports its own success/failure.
+ * stop the batch; each result reports its own success/failure. No cap
+ * on address count: callers accept that a large enough batch will tie
+ * up the server (synchronous SQLite queries, single Node thread) for
+ * however long it takes to run, since nothing here queues or rate-limits.
  */
 function geocodeAddressList(db, addresses, options = {}) {
-  if (addresses.length > MAX_ADDRESSES) {
-    throw new ValidationError(`file has ${addresses.length} addresses; max is ${MAX_ADDRESSES}`);
-  }
-
   return addresses.map((address) => {
     try {
       const result = geocode(db, address, options);
@@ -84,5 +81,4 @@ module.exports = {
   geocodeAddressList,
   readAddressLines,
   readAddressContent,
-  MAX_ADDRESSES,
 };

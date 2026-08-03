@@ -141,7 +141,7 @@ export default function BatchGeocodeForm() {
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Batch geocoding</Text>
-      <Text style={styles.subtitle}>One address per line, up to 5,000.</Text>
+      <Text style={styles.subtitle}>One address per line.</Text>
 
       <Text style={styles.label}>Resource file (one address per line)</Text>
       <View style={styles.pathRow}>
