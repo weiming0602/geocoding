@@ -2,13 +2,14 @@ import {
   CormorantGaramond_600SemiBold,
   useFonts as useCormorantGaramond,
 } from '@expo-google-fonts/cormorant-garamond';
-import { Lora_400Regular, useFonts as useLora } from '@expo-google-fonts/lora';
+import { Lora_400Regular, Lora_600SemiBold, useFonts as useLora } from '@expo-google-fonts/lora';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useState } from 'react';
 import { SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import BatchGeocodeScreen from './screens/BatchGeocodeScreen';
+import HelpScreen from './screens/HelpScreen';
 import PlanQuotaScreen from './screens/PlanQuotaScreen';
 import ReverseGeocodeScreen from './screens/ReverseGeocodeScreen';
 import SingleGeocodeScreen from './screens/SingleGeocodeScreen';
@@ -16,19 +17,20 @@ import { colors } from '../shared/theme';
 
 SplashScreen.preventAutoHideAsync();
 
-type Screen = 'single' | 'batch' | 'reverse' | 'quota';
+type Screen = 'single' | 'batch' | 'reverse' | 'quota' | 'help';
 
 const TABS: { key: Screen; label: string }[] = [
   { key: 'single', label: 'Single Address' },
   { key: 'batch', label: 'Batch Geocode' },
   { key: 'reverse', label: 'Reverse Geocode' },
   { key: 'quota', label: 'Plan & Quota' },
+  { key: 'help', label: 'Help' },
 ];
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('single');
   const [headingLoaded] = useCormorantGaramond({ CormorantGaramond_600SemiBold });
-  const [bodyLoaded] = useLora({ Lora_400Regular });
+  const [bodyLoaded] = useLora({ Lora_400Regular, Lora_600SemiBold });
 
   const onLayout = useCallback(async () => {
     if (headingLoaded && bodyLoaded) {
@@ -60,6 +62,7 @@ export default function App() {
       {screen === 'batch' && <BatchGeocodeScreen />}
       {screen === 'reverse' && <ReverseGeocodeScreen />}
       {screen === 'quota' && <PlanQuotaScreen />}
+      {screen === 'help' && <HelpScreen />}
 
       <StatusBar style="dark" />
     </SafeAreaView>

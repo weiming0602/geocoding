@@ -120,6 +120,13 @@ export default function Overview() {
                 Open plan
               </Link>
             </div>
+            <div className="card elev-sm">
+              <div className="card-title">Help guide</div>
+              <p className="card-body">How address interpolation, aliases, and reverse geocoding work.</p>
+              <Link className="btn btn-secondary btn-block" to="/help">
+                Read the guide
+              </Link>
+            </div>
           </div>
         </div>
       </div>
