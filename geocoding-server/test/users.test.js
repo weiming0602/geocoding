@@ -8,6 +8,7 @@ const {
   upsertUser,
   ensureCurrentPeriod,
   recordUsage,
+  addToTier,
 } = require('../src/users');
 
 test('currentPeriodStart formats the first of the month', () => {
@@ -75,5 +76,24 @@ test('ensureCurrentPeriod is a no-op within the same period', () => {
   const user = getUser(db, 'dave@example.com');
   const refreshed = ensureCurrentPeriod(db, user);
   assert.equal(refreshed.used_this_period, 2000);
+  db.close();
+});
+
+test('addToTier creates a new user with the given tier', () => {
+  const db = openUsersDb(':memory:');
+  const user = addToTier(db, 'erin@example.com', 1000);
+  assert.equal(user.tier, 1000);
+  assert.equal(user.used_this_period, 0);
+  db.close();
+});
+
+test('addToTier tops up an existing tier without resetting usage', () => {
+  const db = openUsersDb(':memory:');
+  upsertUser(db, 'frank@example.com', 5000);
+  recordUsage(db, 'frank@example.com', 4800);
+
+  const updated = addToTier(db, 'frank@example.com', 1000);
+  assert.equal(updated.tier, 6000);
+  assert.equal(updated.used_this_period, 4800);
   db.close();
 });

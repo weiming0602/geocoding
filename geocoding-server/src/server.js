@@ -11,9 +11,11 @@ const {
 const { resultsToCsv } = require('./resultsCsv');
 const { buildZip } = require('./zip');
 const { reverseGeocode } = require('./reverseGeocode');
-const { openUsersDb, getUser, ensureCurrentPeriod } = require('./users');
+const { openUsersDb, getUser, ensureCurrentPeriod, addToTier } = require('./users');
 const { checkQuota, useQuota } = require('./quota');
 const { sendResultsEmail } = require('./emailDelivery');
+const { findTier } = require('./pricing');
+const { captureOrder } = require('./billing');
 const {
   ValidationError,
   NotFoundError,
@@ -158,6 +160,53 @@ app.get('/quota', (req, res) => {
     remaining: current.tier - current.used_this_period,
     periodStart: current.period_start,
   });
+});
+
+// Completes a bulk-geocoding purchase: the client already ran PayPal's
+// real client-side approval flow (a real order exists, in sandbox), and
+// hands us that order's id. captureOrder() is a deliberate stub (see
+// billing.js) -- it doesn't verify anything with PayPal, so the tier
+// bump below happens unconditionally. Price/addressCount are looked up
+// server-side from pricing.js, never taken from the request body, so a
+// client can't just claim a cheaper price for a bigger tier.
+app.post('/billing/purchase', async (req, res) => {
+  const { email, addressCount, orderId } = req.body || {};
+
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof orderId !== 'string' || !orderId.trim()) {
+      throw new ValidationError('orderId must be a non-empty string');
+    }
+
+    const tier = findTier(addressCount);
+    if (!tier) {
+      throw new ValidationError(`no pricing tier for ${addressCount} addresses`);
+    }
+
+    await captureOrder(orderId, {
+      email,
+      addressCount: tier.addressCount,
+      priceCents: tier.priceCents,
+    });
+
+    const user = addToTier(usersDb, email, tier.addressCount);
+    res.json({
+      email: user.email,
+      tier: user.tier,
+      usedThisPeriod: user.used_this_period,
+      remaining: user.tier - user.used_this_period,
+      periodStart: user.period_start,
+      purchased: tier.addressCount,
+      priceCents: tier.priceCents,
+      stubbed: true,
+    });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
 });
 
 app.post('/reverse-geocode', (req, res) => {

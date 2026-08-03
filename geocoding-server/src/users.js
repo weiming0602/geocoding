@@ -59,6 +59,21 @@ function recordUsage(db, email, count) {
   );
 }
 
+/**
+ * Adds `amount` to a user's tier -- creating them with that tier if new,
+ * topping up an existing one otherwise. Used by the billing purchase flow
+ * to grant additional monthly quota; unlike upsertUser() this never
+ * overwrites an existing tier, only adds to it.
+ */
+function addToTier(db, email, amount) {
+  db.prepare(
+    `INSERT INTO users (email, tier, period_start, used_this_period)
+     VALUES (?, ?, ?, 0)
+     ON CONFLICT(email) DO UPDATE SET tier = tier + excluded.tier`
+  ).run(email, amount, currentPeriodStart());
+  return getUser(db, email);
+}
+
 module.exports = {
   openUsersDb,
   currentPeriodStart,
@@ -66,4 +81,5 @@ module.exports = {
   upsertUser,
   ensureCurrentPeriod,
   recordUsage,
+  addToTier,
 };
