@@ -11,19 +11,21 @@ import { SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-na
 import BatchGeocodeScreen from './screens/BatchGeocodeScreen';
 import HelpScreen from './screens/HelpScreen';
 import PlanQuotaScreen from './screens/PlanQuotaScreen';
+import PricingScreen from './screens/PricingScreen';
 import ReverseGeocodeScreen from './screens/ReverseGeocodeScreen';
 import SingleGeocodeScreen from './screens/SingleGeocodeScreen';
 import { colors } from '../shared/theme';
 
 SplashScreen.preventAutoHideAsync();
 
-type Screen = 'single' | 'batch' | 'reverse' | 'quota' | 'help';
+type Screen = 'single' | 'batch' | 'reverse' | 'quota' | 'pricing' | 'help';
 
 const TABS: { key: Screen; label: string }[] = [
   { key: 'single', label: 'Single Address' },
   { key: 'batch', label: 'Batch Geocode' },
   { key: 'reverse', label: 'Reverse Geocode' },
   { key: 'quota', label: 'Plan & Quota' },
+  { key: 'pricing', label: 'Pricing' },
   { key: 'help', label: 'Help' },
 ];
 
@@ -62,6 +64,7 @@ export default function App() {
       {screen === 'batch' && <BatchGeocodeScreen />}
       {screen === 'reverse' && <ReverseGeocodeScreen />}
       {screen === 'quota' && <PlanQuotaScreen />}
+      {screen === 'pricing' && <PricingScreen />}
       {screen === 'help' && <HelpScreen />}
 
       <StatusBar style="dark" />
