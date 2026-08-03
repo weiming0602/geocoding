@@ -22,6 +22,20 @@ edges).
 4. The first candidate segment whose range actually contains the
    number is used for interpolation.
 
+## Worked examples
+
+**Odd → left.** Chestnut Rd's segment here covers the left-side range
+1–99; house number 91 is odd, so it interpolates against that range
+and lands on the left side of the centerline.
+
+![Chestnut Rd #91, matched on the left side, range 1-99](../resources/location%20of%20Chestnum%20street%20num%2091%20left%20side.png)
+
+**Even → right.** Sawyer Brook Rd's segment here covers the
+right-side range 2–98; house number 26 is even, so it interpolates
+against that range and lands on the right side of the centerline.
+
+![Sawyer Brook Rd #26, matched on the right side, range 2-98](../resources/location%20of%20Sawyer%20brook%20rd%20street%20num%2026%20right%20side.png)
+
 ## Run
 
 ```bash
