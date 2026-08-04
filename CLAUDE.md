@@ -2,22 +2,26 @@
 
 Custom address geocoding engine for Maine (+ NH) built on Census TIGER/Line
 `edges` shapefiles — no third-party geocoding API. Sub-projects in one
-repo: `geocoding/` (Python: shapefile → SQLite ingest + interpolation),
-`geocoding-server/` (Express API), `ui/mobile/` (Expo/React Native app),
-`ui/desktop/` (React web app). `geocoding-server/README.md` documents the
-matching/interpolation algorithm in detail — read that before touching
-`geocode.js` or `interpolate.py`.
+repo: `geocoding/` (Python: shapefile → Postgres/PostGIS ingest +
+interpolation), `geocoding-server/` (Express API), `ui/mobile/`
+(Expo/React Native app), `ui/desktop/` (React web app).
+`geocoding-server/README.md` documents the matching/interpolation
+algorithm in detail — read that before touching `geocode.js` or
+`interpolate.py`. Two Postgres databases: `geocoding` (streets/
+street_names, read-only from the server) and `geocoding_users`
+(subscriptions/quota, read-write).
 
 # Bash commands
-- Python: `.venv\Scripts\python -m geocoding.update_state <db> --state ME`
-  (venv is Windows-style `Scripts\`, not `bin/`)
-- Python tests: `.venv\Scripts\python -m pytest` (25 tests in `tests/`)
-- Rebuild the SpatiaLite `geom` column after ingesting new data:
-  `.venv\Scripts\python -m geocoding.add_geometry_column <db>` (safe to
-  re-run; only backfills rows where `geom IS NULL`)
+- Python: `.venv\Scripts\python -m geocoding.update_state "dbname=geocoding" --state ME`
+  (venv is Windows-style `Scripts\`, not `bin/`; DSN is a psycopg
+  connection string, e.g. `dbname=geocoding user=my_ai`)
+- Python tests: `.venv\Scripts\python -m pytest` (32 tests in `tests/`) —
+  each test creates and drops its own throwaway Postgres database (see
+  `tests/conftest.py`'s `dsn` fixture)
 - Server: `cd geocoding-server && node src/server.js`
 - Server tests: `cd geocoding-server && node --test` — **not** `npm test`,
-  that script is a placeholder stub. 71 tests.
+  that script is a placeholder stub. 93 tests, same throwaway-database-
+  per-test pattern (see `test/helpers.js`).
 - Mobile app: `cd ui/mobile && npm start`
 - Desktop app: `cd ui/desktop && npm run dev`
 
@@ -26,40 +30,50 @@ matching/interpolation algorithm in detail — read that before touching
   right range/offset right) is implemented independently in both
   `geocoding/interpolate.py` and `geocoding-server/src/geocode.js`. If you
   change the rule, change it in both places.
-- New `streets` columns need an entry in `schema.py`'s `_MIGRATED_COLUMNS` +
-  `ensure_columns()` — `CREATE TABLE IF NOT EXISTS` is a no-op against an
-  existing table, so this is the only way already-populated databases pick
-  up the column.
 - `geocode.js` queries `UPPER(fullname)`; there's a matching expression
   index in `schema.py`. Don't drop or rename either without checking the
   other — without the index, batch geocoding is ~10x slower.
+- `geocoding-server/src/geocode.js`, `reverseGeocode.js`, `users.js`,
+  `quota.js`, `batchGeocode.js` are all `async`/`pg`-based now (not
+  `better-sqlite3`) — every DB-touching function returns a Promise and
+  every call site must `await` it.
 
 # Workflow / repo etiquette
 - Commits are small and single-purpose; imperative present tense, no
   trailing period. Bug-fix commits name the actual bug in the message
   (e.g. "Fix geocode always matching on zipl, even for even numbers"), not
   "fix bug".
-- `geocoding-server`'s DB connection is opened **read-only**; never add a
-  write path against `geocoding.sqlite` there (only `users.sqlite` is
-  writable, via `src/users.js`).
+- `geocoding-server`'s pool against `geocoding` is enforced read-only at
+  the Postgres session level (`createReadOnlyPool` in `src/db.js`, via the
+  `default_transaction_read_only` startup parameter) — never add a write
+  path against it there (only `geocoding_users` is writable, via
+  `src/users.js`). `test/readOnlyPool.test.js` guards this.
 - Run the relevant test suite after touching `geocode.js`, `interpolate.py`,
   or `schema.py` — these three are the ones most likely to break silently.
 
 # Environment / data layout
-- `geocoding.sqlite` and `users.sqlite` (`C:\software\database\sqlite3\`)
-  and the raw TIGER/Line shapefiles (`C:\software\database\original
-  datafiles\`) live outside the repo and are gitignored. `geocoding.sqlite`
-  is built statewide for both Maine and NH (~499K rows total, ~456MB).
-- `streets` also has a SpatiaLite `geom` column (SRID 4326, LINESTRING,
-  R-Tree spatial index) alongside the plain-text WKT `geometry` column that
-  `geocode.js`/`interpolate.py` actually use — added so the database opens
-  directly in QGIS as a vector layer. Requires `mod_spatialite`; the
-  conversion script points at the copy bundled with QGIS by default. A
-  pre-conversion backup lives alongside it as
-  `geocoding.sqlite.bak-pre-spatialite` (outside the repo, like the DB
-  itself) — safe to delete once you've confirmed everything's fine.
-- Server env vars (all optional): `GEOCODING_DB_PATH`, `USERS_DB_PATH`,
-  `PORT` (default 3001), `OFFSET_FEET` (default 20).
+- Local Postgres 18 + PostGIS, peer-authenticated as the `my_ai` role (no
+  password for local Unix-socket connections). `geocoding-server/src/db.js`
+  and `geocoding-server/test/helpers.js` build connection strings as
+  `postgresql://my_ai@%2Fvar%2Frun%2Fpostgresql/<db>` — the socket path
+  must be percent-encoded into the URI's host component; `pg` only treats
+  a Unix socket path as such from that form or a plain `host` config
+  field, never from a bare connection-string host.
+- `streets` has a native PostGIS `geom` column (SRID 4326, GiST index)
+  alongside the plain-text WKT `geometry` column that
+  `geocode.js`/`interpolate.py` actually use — populated directly at
+  ingest time from the same WKT (`ST_GeomFromText`), so the database opens
+  directly in QGIS as a vector layer with no separate conversion step
+  (there's no SpatiaLite-style extension-loading workaround needed here).
+- The original SQLite files (`geocoding.sqlite`, `users.sqlite`) and the
+  raw TIGER/Line shapefiles live outside the repo and are gitignored;
+  `geocoding/migrate_to_postgres.py` was the one-time script that copied
+  their data into Postgres (~499K streets rows, ~475K street_names rows,
+  Maine + NH).
+- Server env vars (all optional): `GEOCODING_DSN` (default
+  `postgresql://my_ai@%2Fvar%2Frun%2Fpostgresql/geocoding`), `USERS_DSN`
+  (default `.../geocoding_users`), `PORT` (default 3001), `OFFSET_FEET`
+  (default 20).
 
 # Known gaps (don't assume these are done)
 - `geocoding-server/src/emailDelivery.js` is a **deliberate stub** — logs

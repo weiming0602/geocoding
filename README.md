@@ -2,32 +2,44 @@
 
 A custom address geocoding engine.
 
-## Step 1: ingest TIGER/Line street edges into SQLite
+**Coverage: Maine and New Hampshire only, United States.** Built on Census
+TIGER/Line data for those two states plus Maine's E911 address points (see
+`geocoding/ingest_address_points.py`); no other US state or country is
+covered.
+
+## Step 1: ingest TIGER/Line street edges into Postgres
 
 [US Census TIGER/Line edges](https://www.census.gov/geo/tiger) shapefiles
 (`tl_<year>_<statecounty>_edges.shp`) carry per-side address ranges and ZIP
 codes, which is what makes house-number interpolation possible later.
 
 ```bash
-python -m geocoding.ingest path/to/tl_2023_06075_edges.shp data/streets.db
+python -m geocoding.ingest path/to/tl_2023_06075_edges.shp "dbname=geocoding"
 ```
 
-This creates (or appends to) a `streets` table in the given SQLite
+This creates (or appends to) a `streets` table in the given Postgres
 database, storing each edge's geometry as WKT plus its address ranges,
-ZIP codes, and bounding box for fast lookups.
+ZIP codes, and bounding box for fast lookups -- and populates a native
+PostGIS `geom` column from that same WKT, so the database is a real
+spatial layer (see Step 3) with no separate conversion step.
 
 ## Setup
 
 ```bash
-py -3 -m venv .venv
-./.venv/Scripts/python.exe -m pip install -e ".[dev]"
-./.venv/Scripts/python.exe -m pytest
+python3 -m venv .venv
+./.venv/bin/python -m pip install -e ".[dev]"
+./.venv/bin/python -m pytest
 ```
+
+Requires a local Postgres with the `postgis` extension available, and a
+role that can connect without a password over the Unix socket (peer
+authentication) -- the test suite creates and drops its own throwaway
+database per test (see `tests/conftest.py`).
 
 ## Step 2: interpolate a house number along a street segment
 
 ```bash
-python -m geocoding.interpolate data/streets.db <street_id> <number> \
+python -m geocoding.interpolate "dbname=geocoding" <street_id> <number> \
     --range-side left --offset-feet 5 --offset-side right
 ```
 
@@ -37,35 +49,26 @@ python -m geocoding.interpolate data/streets.db <street_id> <number> \
 line by a real-world distance, e.g. to move the point off the
 centerline and onto the correct side of the street.
 
-## Step 3: turn `streets` into a real spatial layer (SpatiaLite)
+## Step 3: `streets` is already a real spatial layer (PostGIS)
 
-`streets.geometry` is plain WKT text — fine for `geocoding-server`'s own
-math, but invisible to GIS tools. `add_geometry_column.py` adds a proper
-SpatiaLite `geom` column (SRID 4326) plus an R-Tree spatial index, so the
-database opens directly in QGIS (or any SpatiaLite client) as a `streets`
-vector layer:
-
-```bash
-python -m geocoding.add_geometry_column C:\software\database\sqlite3\geocoding.sqlite
-```
-
-Requires `mod_spatialite` — the script points at the copy bundled with
-QGIS (`C:\Program Files\QGIS <version>\bin`) by default; edit
-`MOD_SPATIALITE_DIR` at the top of the script if yours lives elsewhere.
-Safe to re-run after ingesting more data: it only backfills rows where
-`geom IS NULL`, so already-converted rows aren't touched.
+`streets.geometry` is plain WKT text -- what `geocoding-server`'s own
+interpolation math actually parses -- but `streets.geom` (a native
+PostGIS `geometry(Geometry, 4326)` column, GiST-indexed) is populated
+alongside it at ingest time via `ST_GeomFromText`, so the database opens
+directly in QGIS (or any PostGIS client) as a `streets` vector layer with
+no separate conversion pass needed.
 
 ## Roadmap
 
-- [x] Ingest TIGER/Line edges shapefiles into SQLite
+- [x] Ingest TIGER/Line edges shapefiles into Postgres
 - [x] Address-range interpolation to lat/lng, with perpendicular offset
 - [x] Query interface that resolves a full address to coordinates (see `geocoding-server`)
-- [x] Real spatial layer via SpatiaLite, for opening in QGIS
+- [x] Real spatial layer via PostGIS, for opening in QGIS
 - [ ] Street name normalization / matching
 
 ## Related projects (this repo)
 
-- [`geocoding-server`](geocoding-server) — Express + better-sqlite3 API that
+- [`geocoding-server`](geocoding-server) — Express + `pg` API that
   parses a free-text address, matches it against `streets`, and interpolates
   coordinates (odd numbers → left range/offset, even → right range/offset)
 - [`ui/mobile`](ui/mobile) — Expo/React Native app with a text input

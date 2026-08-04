@@ -1,9 +1,9 @@
 # geocoding-server
 
 Express API that resolves a free-text address to coordinates using the
-`streets` table in [geocoding.sqlite](C:\software\database\sqlite3\geocoding.sqlite)
-(built by the [geocoding](../geocoding) Python project from TIGER/Line
-edges).
+`streets` table in the `geocoding` Postgres database (built by the
+[geocoding](../geocoding) Python project from TIGER/Line edges).
+**Coverage: Maine and New Hampshire only** — no other US state or country.
 
 ## Matching logic
 
@@ -43,9 +43,14 @@ npm install
 node src/server.js
 ```
 
+Requires a local Postgres with the `postgis` extension, and a role that
+can connect over the Unix socket without a password (peer
+authentication) -- see the root [README](../README.md#setup).
+
 Env vars (all optional):
 
-- `GEOCODING_DB_PATH` — defaults to `C:\software\database\sqlite3\geocoding.sqlite`
+- `GEOCODING_DSN` — defaults to `postgresql://my_ai@%2Fvar%2Frun%2Fpostgresql/geocoding`
+- `USERS_DSN` — defaults to `postgresql://my_ai@%2Fvar%2Frun%2Fpostgresql/geocoding_users`
 - `PORT` — defaults to `3001`
 - `OFFSET_FEET` — defaults to `20`
 
