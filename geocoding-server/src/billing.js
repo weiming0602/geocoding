@@ -62,6 +62,23 @@ async function captureOrder(orderId, { email, addressCount, priceCents }) {
     throw new PaymentError(`PayPal order was not completed (status: ${body.status})`);
   }
 
+  // The order itself is created client-side (Checkout.tsx/
+  // CheckoutSection.web.tsx), with no server-side link to a tier -- a
+  // tampered client could create a PayPal order for any amount and then
+  // claim any addressCount here. Comparing the *actual* captured amount
+  // against the server-computed priceCents for that addressCount is
+  // what actually stops that: a $0.01 order can only ever grant the
+  // $0.01 tier, no matter what the request body claims.
+  const capture = body.purchase_units?.[0]?.payments?.captures?.[0];
+  const capturedCents = capture && Math.round(Number(capture.amount.value) * 100);
+  if (!capture || capture.amount.currency_code !== 'USD' || capturedCents !== priceCents) {
+    throw new PaymentError(
+      `captured amount doesn't match the ${addressCount}-address tier's price ` +
+        `(expected $${(priceCents / 100).toFixed(2)} USD, got ` +
+        `${capture ? `$${capture.amount.value} ${capture.amount.currency_code}` : 'no capture'})`
+    );
+  }
+
   return { captured: true, stubbed: false, orderId };
 }
 
