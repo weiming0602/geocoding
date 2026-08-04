@@ -6,11 +6,10 @@ import { findTier, formatUsd } from '../../shared/pricing';
 import { colors, radius, space } from '../../shared/theme';
 import ThemedButton from './ThemedButton';
 
-// Same rationale as ui/desktop/src/pages/Checkout.tsx: PayPal's documented
-// sandbox demo client-id, usable without a real PayPal developer account.
-// Swap for a real one once credentials are chosen; server-side capture is
-// still a deliberate stub either way (geocoding-server/src/billing.js).
-const PAYPAL_CLIENT_ID = 'test';
+// Same rationale as ui/desktop/src/pages/Checkout.tsx: the app's real
+// PayPal sandbox Client ID (public by design). The Client Secret only
+// ever lives server-side, in geocoding-server's .env.
+const PAYPAL_CLIENT_ID = 'AUDJ7TGH_-VU3s7R4O3XBDn80KhOZWab-25TanFeikBPx4hYA8aT_F9tqgaiwHmYwSRoJMxY9ODEiT3P';
 
 type Props = {
   addressCount: number;
@@ -43,7 +42,7 @@ export default function CheckoutSection({ addressCount, onBack }: Props) {
             actions.order.create({
               purchase_units: [{ amount: { value: (tier.priceCents / 100).toFixed(2) } }],
             }),
-          onApprove: async (_data: unknown, actions: any) => {
+          onApprove: async (data: { orderID: string }) => {
             const trimmedEmail = emailRef.current.trim();
             if (!trimmedEmail) {
               setStatus('error');
@@ -51,14 +50,17 @@ export default function CheckoutSection({ addressCount, onBack }: Props) {
               return;
             }
             try {
-              const order = await actions.order.capture();
+              // Deliberately not calling actions.order.capture() here --
+              // the server captures it (with the Client Secret), which is
+              // what actually confirms the money moved instead of just
+              // trusting the client's word for it.
               const response = await fetch(`${DEFAULT_API_BASE_URL}/billing/purchase`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   email: trimmedEmail,
                   addressCount: tier.addressCount,
-                  orderId: order.id,
+                  orderId: data.orderID,
                 }),
               });
               const body = await response.json();
@@ -69,7 +71,9 @@ export default function CheckoutSection({ addressCount, onBack }: Props) {
               }
               setStatus('success');
               setMessage(
-                `Done (test mode, no real charge) — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
+                body.stubbed
+                  ? `Done (test mode, no real charge) — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
+                  : `Payment captured (sandbox) — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
               );
             } catch (err) {
               setStatus('error');
@@ -100,8 +104,9 @@ export default function CheckoutSection({ addressCount, onBack }: Props) {
 
       <View style={styles.noteCard}>
         <Text style={styles.noteText}>
-          Test mode: PayPal's sandbox approval flow runs for real, but the server-side charge is a
-          deliberate stub — no money moves. Your account's quota is topped up for real, though.
+          Sandbox mode: this runs PayPal's real sandbox order flow, captured server-side — no real
+          money moves, but the transaction itself is real (it'll show up in PayPal's sandbox
+          dashboard). Your account's quota is topped up for real either way.
         </Text>
       </View>
 

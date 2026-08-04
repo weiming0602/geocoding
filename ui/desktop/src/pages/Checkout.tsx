@@ -4,12 +4,13 @@ import { Link, useSearchParams } from 'react-router';
 import { DEFAULT_API_BASE_URL } from '../../../shared/api/client';
 import { findTier, formatUsd } from '../../../shared/pricing';
 
-// PayPal's documented sandbox demo client-id, usable without a real PayPal
-// developer account -- renders a real button and completes a real
-// (sandbox) approval flow client-side. Swap via VITE_PAYPAL_CLIENT_ID once
-// real credentials are chosen; server-side capture is still a deliberate
-// stub either way (see geocoding-server/src/billing.js) until then.
-const PAYPAL_CLIENT_ID = import.meta.env.VITE_PAYPAL_CLIENT_ID || 'test';
+// The app's real PayPal sandbox Client ID (public by design -- meant to
+// be embedded client-side, unlike the Client Secret, which only ever
+// lives server-side in geocoding-server's .env). Override via
+// VITE_PAYPAL_CLIENT_ID for a different app/environment.
+const PAYPAL_CLIENT_ID =
+  import.meta.env.VITE_PAYPAL_CLIENT_ID ||
+  'AUDJ7TGH_-VU3s7R4O3XBDn80KhOZWab-25TanFeikBPx4hYA8aT_F9tqgaiwHmYwSRoJMxY9ODEiT3P';
 
 type Status = 'idle' | 'error' | 'success';
 
@@ -36,7 +37,7 @@ export default function Checkout() {
             actions.order.create({
               purchase_units: [{ amount: { value: (tier.priceCents / 100).toFixed(2) } }],
             }),
-          onApprove: async (_data: unknown, actions: any) => {
+          onApprove: async (data: { orderID: string }) => {
             const trimmedEmail = emailRef.current.trim();
             if (!trimmedEmail) {
               setStatus('error');
@@ -44,14 +45,17 @@ export default function Checkout() {
               return;
             }
             try {
-              const order = await actions.order.capture();
+              // Deliberately not calling actions.order.capture() here --
+              // the server captures it (with the Client Secret), which is
+              // what actually confirms the money moved instead of just
+              // trusting the client's word for it.
               const response = await fetch(`${DEFAULT_API_BASE_URL}/billing/purchase`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   email: trimmedEmail,
                   addressCount: tier.addressCount,
-                  orderId: order.id,
+                  orderId: data.orderID,
                 }),
               });
               const body = await response.json();
@@ -62,7 +66,9 @@ export default function Checkout() {
               }
               setStatus('success');
               setMessage(
-                `Done (test mode, no real charge) — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
+                body.stubbed
+                  ? `Done (test mode, no real charge) — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
+                  : `Payment captured (sandbox) — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
               );
             } catch (err) {
               setStatus('error');
@@ -102,9 +108,9 @@ export default function Checkout() {
 
       <div className="card" style={{ background: 'var(--color-surface)', marginBottom: 'var(--space-4)' }}>
         <p className="card-body" style={{ margin: 0 }}>
-          <strong>Test mode:</strong> PayPal's sandbox approval flow runs for real, but the
-          server-side charge is a deliberate stub — no money moves. Your account's quota is topped
-          up for real, though.
+          <strong>Sandbox mode:</strong> this runs PayPal's real sandbox order flow, captured
+          server-side — no real money moves, but the transaction itself is real (it'll show up in
+          PayPal's sandbox dashboard). Your account's quota is topped up for real either way.
         </p>
       </div>
 

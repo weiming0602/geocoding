@@ -1,3 +1,5 @@
+require('dotenv').config();
+
 const express = require('express');
 const cors = require('cors');
 const { createReadOnlyPool } = require('./db');
@@ -21,6 +23,7 @@ const {
   NotFoundError,
   OutOfRangeError,
   QuotaExceededError,
+  PaymentError,
 } = require('./errors');
 
 // Unix socket, peer-authenticated (no password) -- the socket path must be
@@ -174,12 +177,16 @@ app.get('/quota', async (req, res) => {
 });
 
 // Completes a bulk-geocoding purchase: the client already ran PayPal's
-// real client-side approval flow (a real order exists, in sandbox), and
-// hands us that order's id. captureOrder() is a deliberate stub (see
-// billing.js) -- it doesn't verify anything with PayPal, so the tier
-// bump below happens unconditionally. Price/addressCount are looked up
-// server-side from pricing.js, never taken from the request body, so a
-// client can't just claim a cheaper price for a bigger tier.
+// approval flow and created the order, but deliberately never calls
+// `actions.order.capture()` itself -- captureOrder() (billing.js) does
+// the actual capture here, server-side, with the account's Client
+// Secret. That's what actually confirms the money moved; trusting a
+// client-reported "success" would let a tampered client claim a
+// purchase happened without paying. Falls back to a no-op stub when
+// PAYPAL_CLIENT_ID/PAYPAL_CLIENT_SECRET aren't configured. Price/
+// addressCount are looked up server-side from pricing.js, never taken
+// from the request body, so a client can't just claim a cheaper price
+// for a bigger tier.
 app.post('/billing/purchase', async (req, res) => {
   const { email, addressCount, orderId } = req.body || {};
 
@@ -196,7 +203,7 @@ app.post('/billing/purchase', async (req, res) => {
       throw new ValidationError(`no pricing tier for ${addressCount} addresses`);
     }
 
-    await captureOrder(orderId, {
+    const capture = await captureOrder(orderId, {
       email,
       addressCount: tier.addressCount,
       priceCents: tier.priceCents,
@@ -212,10 +219,11 @@ app.post('/billing/purchase', async (req, res) => {
       periodStart: user.period_start,
       purchased: tier.addressCount,
       priceCents: tier.priceCents,
-      stubbed: true,
+      stubbed: capture.stubbed,
     });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof PaymentError) return res.status(402).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: 'internal error' });
   }
