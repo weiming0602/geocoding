@@ -74,27 +74,61 @@ app.post('/geocode', async (req, res) => {
   }
 });
 
+// Quota is checked and consumed here the same way as /geocode/batch/email
+// below -- account email is the only thing gating usage (no password, no
+// API key; see CLAUDE.md's "Known gaps"). Deliberately simple for a
+// straightforward geocoding service: whoever holds an account's email can
+// spend its quota, so the frontend shows a warning about keeping it
+// private rather than this building out real authentication.
 app.post('/geocode/batch', async (req, res) => {
+  const email = req.body && req.body.email;
   try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+
     const addresses = resolveAddresses(req.body);
+    const usersDb = await usersDbPromise;
+    await checkQuota(usersDb, email, addresses.length);
+
     const results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
-    res.json({ results });
+    await useQuota(usersDb, email, addresses.length);
+
+    const current = await ensureCurrentPeriod(usersDb, await getUser(usersDb, email));
+    res.json({
+      results,
+      usedThisPeriod: current.used_this_period,
+      remaining: current.tier - current.used_this_period,
+      tier: current.tier,
+    });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof QuotaExceededError) return res.status(429).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: 'internal error' });
   }
 });
 
 app.post('/geocode/batch/download', async (req, res) => {
+  const email = req.body && req.body.email;
   let results;
+  let user;
   try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+
     const addresses = resolveAddresses(req.body);
+    const usersDb = await usersDbPromise;
+    user = await checkQuota(usersDb, email, addresses.length);
+
     results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
+    await useQuota(usersDb, email, addresses.length);
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof QuotaExceededError) return res.status(429).json({ error: err.message });
     console.error(err);
     return res.status(500).json({ error: 'internal error' });
   }
@@ -107,6 +141,7 @@ app.post('/geocode/batch/download', async (req, res) => {
 
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', 'attachment; filename="batch-geocode-results.zip"');
+  res.setHeader('X-Quota', `${user.used_this_period + results.length}/${user.tier}`);
   res.send(zipBuffer);
 });
 

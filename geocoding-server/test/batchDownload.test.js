@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+const { upsertUser } = require('../src/users');
 const { withTestServer, parseZipEntries } = require('./helpers');
 
 function writeTempAddressFile(contents) {
@@ -13,7 +14,8 @@ function writeTempAddressFile(contents) {
 }
 
 test('POST /geocode/batch/download streams a ZIP with results.csv and errors.csv', () =>
-  withTestServer(async ({ port }) => {
+  withTestServer(async ({ port, usersDb }) => {
+    await upsertUser(usersDb, 'alice@example.com', 100);
     const addressFile = writeTempAddressFile(
       ['997 Pequawket Trl, Standish, ME 04091', '1 Nonexistent Way, Nowhere, ME 00000'].join('\n')
     );
@@ -22,12 +24,13 @@ test('POST /geocode/batch/download streams a ZIP with results.csv and errors.csv
       const response = await fetch(`http://127.0.0.1:${port}/geocode/batch/download`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: addressFile }),
+        body: JSON.stringify({ email: 'alice@example.com', filePath: addressFile }),
       });
 
       assert.equal(response.status, 200);
       assert.equal(response.headers.get('content-type'), 'application/zip');
       assert.match(response.headers.get('content-disposition'), /batch-geocode-results\.zip/);
+      assert.equal(response.headers.get('x-quota'), '2/100');
 
       const buffer = Buffer.from(await response.arrayBuffer());
       assert.ok(buffer.length > 0);
@@ -55,11 +58,36 @@ test('POST /geocode/batch/download with a missing file returns JSON 404', () =>
     const response = await fetch(`http://127.0.0.1:${port}/geocode/batch/download`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ filePath: 'C:\\definitely\\not\\a\\real\\path.txt' }),
+      body: JSON.stringify({
+        email: 'alice@example.com',
+        filePath: 'C:\\definitely\\not\\a\\real\\path.txt',
+      }),
     });
 
     assert.equal(response.status, 404);
     assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8');
     const body = await response.json();
     assert.match(body.error, /file not found/);
+  }));
+
+test('POST /geocode/batch/download rejects a batch exceeding remaining quota with 429', () =>
+  withTestServer(async ({ port, usersDb }) => {
+    await upsertUser(usersDb, 'bob@example.com', 1); // quota of 1
+    const addressFile = writeTempAddressFile(
+      ['997 Pequawket Trl, Standish, ME 04091', '984 Pequawket Trl, Standish, ME 04091'].join('\n')
+    );
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/geocode/batch/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: 'bob@example.com', filePath: addressFile }),
+      });
+
+      assert.equal(response.status, 429);
+      const body = await response.json();
+      assert.match(body.error, /remain this period/);
+    } finally {
+      fs.unlinkSync(addressFile);
+    }
   }));

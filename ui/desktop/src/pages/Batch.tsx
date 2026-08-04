@@ -9,19 +9,21 @@ import BatchMapView from '../components/BatchMapView';
 const MAX_MARKERS_FOR_MAP = 300;
 
 export default function Batch() {
+  const [email, setEmail] = useState('');
   const [filePath, setFilePath] = useState('');
   const [pickedFile, setPickedFile] = useState<{ name: string; content: string } | null>(null);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [results, setResults] = useState<BatchResult[] | null>(null);
+  const [quota, setQuota] = useState<{ remaining: number; tier: number } | string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const hasSource = Boolean(pickedFile) || filePath.trim().length > 0;
   const buildSource = useCallback((): BatchSource => {
-    if (pickedFile) return { fileContent: pickedFile.content };
-    return { filePath: filePath.trim() };
-  }, [pickedFile, filePath]);
+    const base = pickedFile ? { fileContent: pickedFile.content } : { filePath: filePath.trim() };
+    return { ...base, email: email.trim() };
+  }, [pickedFile, filePath, email]);
 
   const handleChooseFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -33,6 +35,10 @@ export default function Batch() {
   }, []);
 
   const handleBatchGeocode = useCallback(async () => {
+    if (!email.trim()) {
+      setError('Enter your account email first.');
+      return;
+    }
     if (!hasSource) {
       setError('Enter a file path or choose a file first.');
       return;
@@ -40,17 +46,23 @@ export default function Batch() {
     setLoading(true);
     setError(null);
     setResults(null);
+    setQuota(null);
     try {
       const response = await batchGeocode(buildSource());
       setResults(response.results);
+      setQuota({ remaining: response.remaining, tier: response.tier });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Batch geocoding failed.');
     } finally {
       setLoading(false);
     }
-  }, [hasSource, buildSource]);
+  }, [email, hasSource, buildSource]);
 
   const handleDownload = useCallback(async () => {
+    if (!email.trim()) {
+      setError('Enter your account email first.');
+      return;
+    }
     if (!hasSource) {
       setError('Enter a file path or choose a file first.');
       return;
@@ -58,7 +70,8 @@ export default function Batch() {
     setDownloading(true);
     setError(null);
     try {
-      const blob = await batchGeocodeDownload(buildSource());
+      const { blob, quota: quotaHeader } = await batchGeocodeDownload(buildSource());
+      if (quotaHeader) setQuota(quotaHeader);
       const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = objectUrl;
@@ -72,7 +85,7 @@ export default function Batch() {
     } finally {
       setDownloading(false);
     }
-  }, [hasSource, buildSource]);
+  }, [email, hasSource, buildSource]);
 
   const successCount = results ? results.filter((r) => r.success).length : 0;
   const successMarkers = (results ?? [])
@@ -83,13 +96,27 @@ export default function Batch() {
     <div>
       <h1 style={{ fontSize: 42 }}>Batch geocoding</h1>
       <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
-        Matches /geocode/batch — one address per line, no cap on count (a large enough batch will
-        just take a while). Upload a file, or (if this app and geocoding-server share a filesystem)
-        point at a server-side path.
+        Matches /geocode/batch — one address per line, checked against your account's monthly quota.
+        Upload a file, or (if this app and geocoding-server share a filesystem) point at a
+        server-side path.
       </p>
 
       <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 'var(--space-6)', alignItems: 'start' }}>
         <div className="card elev-sm">
+          <div className="field">
+            <label>Account email</label>
+            <input
+              className="input"
+              placeholder="you@company.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+            <p className="text-muted" style={{ fontSize: 11, marginTop: 4 }}>
+              There's no password behind this — anyone who knows your account email could spend its
+              quota. Keep it private.
+            </p>
+          </div>
+
           <div className="field">
             <label>Resource file (one address per line)</label>
             <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
@@ -139,6 +166,13 @@ export default function Batch() {
           <button className="btn btn-secondary btn-block" onClick={handleDownload} disabled={loading || downloading}>
             {downloading ? 'Preparing…' : 'Download results (ZIP)'}
           </button>
+          {quota && (
+            <p className="card-body" style={{ marginTop: 'var(--space-2)' }}>
+              {typeof quota === 'string'
+                ? `Used ${quota} this period`
+                : `${quota.remaining.toLocaleString()} of ${quota.tier.toLocaleString()} remaining this period`}
+            </p>
+          )}
           {error && (
             <p className="card-body" style={{ color: '#a4402a', marginTop: 'var(--space-2)' }}>
               {error}

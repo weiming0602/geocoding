@@ -280,6 +280,18 @@ async function withTestServer(callback, { seedStreets = true } = {}) {
   const httpServer = server.app.listen(0);
   const usersDb = await server.usersDbPromise;
 
+  // billing.js's captureOrder() should always exercise the deliberate
+  // stub in tests, never a real PayPal API call -- but dotenv (loaded by
+  // server.js, just above) picks up whatever real .env a developer
+  // happens to have locally. billing.js reads these at call time, not at
+  // require time, so clearing them *after* requiring server.js (dotenv
+  // has already run) still forces the stub for every request handled
+  // during this test. Restored afterward.
+  const savedPaypalClientId = process.env.PAYPAL_CLIENT_ID;
+  const savedPaypalClientSecret = process.env.PAYPAL_CLIENT_SECRET;
+  delete process.env.PAYPAL_CLIENT_ID;
+  delete process.env.PAYPAL_CLIENT_SECRET;
+
   try {
     return await callback({ port: httpServer.address().port, db: server.db, usersDb });
   } finally {
@@ -290,6 +302,8 @@ async function withTestServer(callback, { seedStreets = true } = {}) {
     await users.drop();
     delete process.env.GEOCODING_DSN;
     delete process.env.USERS_DSN;
+    if (savedPaypalClientId !== undefined) process.env.PAYPAL_CLIENT_ID = savedPaypalClientId;
+    if (savedPaypalClientSecret !== undefined) process.env.PAYPAL_CLIENT_SECRET = savedPaypalClientSecret;
   }
 }
 

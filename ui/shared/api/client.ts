@@ -66,11 +66,16 @@ export function batchGeocode(
   return postJson<BatchGeocodeResponse>(baseUrl, '/geocode/batch', source);
 }
 
-/** Returns the ZIP as a Blob -- caller decides how to save/download it (platform-specific). */
+/**
+ * Returns the ZIP as a Blob -- caller decides how to save/download it
+ * (platform-specific) -- plus the X-Quota header's "used/tier" text,
+ * since a binary response body can't also carry JSON quota fields the
+ * way batchGeocode()'s does.
+ */
 export async function batchGeocodeDownload(
   source: BatchSource,
   baseUrl = DEFAULT_API_BASE_URL
-): Promise<Blob> {
+): Promise<{ blob: Blob; quota: string | null }> {
   const response = await fetch(`${baseUrl}/geocode/batch/download`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -81,7 +86,7 @@ export async function batchGeocodeDownload(
     const body = (await response.json().catch(() => null)) as ApiErrorResponse | null;
     throw new ApiError(body?.error ?? `download failed (${response.status})`, response.status);
   }
-  return response.blob();
+  return { blob: await response.blob(), quota: response.headers.get('X-Quota') };
 }
 
 export function getQuota(email: string, baseUrl = DEFAULT_API_BASE_URL): Promise<QuotaStatus> {

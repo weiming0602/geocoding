@@ -23,12 +23,14 @@ type PickedFile = {
 };
 
 export default function BatchGeocodeForm() {
+  const [email, setEmail] = useState('');
   const [filePath, setFilePath] = useState('');
   const [pickedFile, setPickedFile] = useState<PickedFile | null>(null);
   const [picking, setPicking] = useState(false);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [results, setResults] = useState<BatchResult[] | null>(null);
+  const [quota, setQuota] = useState<{ remaining: number; tier: number } | string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // Builds the request body from whichever source is active: a file picked
@@ -37,9 +39,9 @@ export default function BatchGeocodeForm() {
   // path (the original workflow, which only works when the server can read
   // that path off its own disk -- e.g. server and app on the same machine).
   const buildBatchSource = useCallback((): BatchSource => {
-    if (pickedFile) return { fileContent: pickedFile.content };
-    return { filePath: filePath.trim() };
-  }, [pickedFile, filePath]);
+    const base = pickedFile ? { fileContent: pickedFile.content } : { filePath: filePath.trim() };
+    return { ...base, email: email.trim() };
+  }, [pickedFile, filePath, email]);
 
   const hasSource = Boolean(pickedFile) || filePath.trim().length > 0;
 
@@ -74,6 +76,10 @@ export default function BatchGeocodeForm() {
   }, []);
 
   const handleBatchGeocode = useCallback(async () => {
+    if (!email.trim()) {
+      setError('Enter your account email first.');
+      return;
+    }
     if (!hasSource) {
       setResults(null);
       setError('Enter a file path or choose a file first.');
@@ -83,10 +89,12 @@ export default function BatchGeocodeForm() {
     setLoading(true);
     setError(null);
     setResults(null);
+    setQuota(null);
 
     try {
       const response = await batchGeocode(buildBatchSource());
       setResults(response.results);
+      setQuota({ remaining: response.remaining, tier: response.tier });
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Batch geocoding failed.';
       setError(message);
@@ -94,9 +102,13 @@ export default function BatchGeocodeForm() {
     } finally {
       setLoading(false);
     }
-  }, [hasSource, buildBatchSource]);
+  }, [email, hasSource, buildBatchSource]);
 
   const handleDownload = useCallback(async () => {
+    if (!email.trim()) {
+      setError('Enter your account email first.');
+      return;
+    }
     if (!hasSource) {
       setError('Enter a file path or choose a file first.');
       return;
@@ -111,7 +123,8 @@ export default function BatchGeocodeForm() {
     setError(null);
 
     try {
-      const blob = await batchGeocodeDownload(buildBatchSource());
+      const { blob, quota: quotaHeader } = await batchGeocodeDownload(buildBatchSource());
+      if (quotaHeader) setQuota(quotaHeader);
       const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = objectUrl;
@@ -127,7 +140,7 @@ export default function BatchGeocodeForm() {
     } finally {
       setDownloading(false);
     }
-  }, [hasSource, buildBatchSource]);
+  }, [email, hasSource, buildBatchSource]);
 
   const successCount = results ? results.filter((r) => r.success).length : 0;
   const successMarkers = (results ?? [])
@@ -142,6 +155,22 @@ export default function BatchGeocodeForm() {
     <View style={styles.container}>
       <Text style={styles.title}>Batch geocoding</Text>
       <Text style={styles.subtitle}>One address per line.</Text>
+
+      <Text style={styles.label}>Account email</Text>
+      <TextInput
+        style={styles.input}
+        placeholder="you@company.com"
+        placeholderTextColor={colors.neutral500}
+        value={email}
+        onChangeText={setEmail}
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="email-address"
+      />
+      <Text style={styles.warningText}>
+        There's no password behind this — anyone who knows your account email could spend its
+        quota. Keep it private.
+      </Text>
 
       <Text style={styles.label}>Resource file (one address per line)</Text>
       <View style={styles.pathRow}>
@@ -193,6 +222,14 @@ export default function BatchGeocodeForm() {
           />
         </View>
       </View>
+
+      {quota && (
+        <Text style={[styles.cardMeta, styles.spacing]}>
+          {typeof quota === 'string'
+            ? `Used ${quota} this period`
+            : `${quota.remaining.toLocaleString()} of ${quota.tier.toLocaleString()} remaining this period`}
+        </Text>
+      )}
 
       {!loading && results && (
         <View style={styles.spacing}>
@@ -264,6 +301,13 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
     color: colors.text,
+  },
+  warningText: {
+    fontFamily: 'Lora_400Regular',
+    fontSize: 11,
+    color: colors.text,
+    opacity: 0.6,
+    marginBottom: space[4],
   },
   pathRow: {
     flexDirection: 'row',
