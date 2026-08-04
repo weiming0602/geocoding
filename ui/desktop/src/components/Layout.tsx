@@ -10,6 +10,7 @@ const NAV_LINKS = [
   { to: '/batch', label: 'Batch' },
   { to: '/plan-quota', label: 'Plan & quota' },
   { to: '/pricing', label: 'Pricing' },
+  { to: '/progress', label: 'Progress' },
   { to: '/help', label: 'Help' },
 ];
 

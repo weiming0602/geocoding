@@ -8,6 +8,7 @@ import Help from './pages/Help';
 import Overview from './pages/Overview';
 import PlanQuota from './pages/PlanQuota';
 import Pricing from './pages/Pricing';
+import Progress from './pages/Progress';
 import ReverseGeocode from './pages/ReverseGeocode';
 import { RecentLookupsProvider } from './state/RecentLookups';
 
@@ -24,6 +25,7 @@ export default function App() {
             <Route path="/plan-quota" element={<PlanQuota />} />
             <Route path="/pricing" element={<Pricing />} />
             <Route path="/checkout" element={<Checkout />} />
+            <Route path="/progress" element={<Progress />} />
             <Route path="/help" element={<Help />} />
           </Routes>
         </Layout>

@@ -12,13 +12,14 @@ import BatchGeocodeScreen from './screens/BatchGeocodeScreen';
 import HelpScreen from './screens/HelpScreen';
 import PlanQuotaScreen from './screens/PlanQuotaScreen';
 import PricingScreen from './screens/PricingScreen';
+import ProgressScreen from './screens/ProgressScreen';
 import ReverseGeocodeScreen from './screens/ReverseGeocodeScreen';
 import SingleGeocodeScreen from './screens/SingleGeocodeScreen';
 import { colors } from '../shared/theme';
 
 SplashScreen.preventAutoHideAsync();
 
-type Screen = 'single' | 'batch' | 'reverse' | 'quota' | 'pricing' | 'help';
+type Screen = 'single' | 'batch' | 'reverse' | 'quota' | 'pricing' | 'progress' | 'help';
 
 const TABS: { key: Screen; label: string }[] = [
   { key: 'single', label: 'Single Address' },
@@ -26,6 +27,7 @@ const TABS: { key: Screen; label: string }[] = [
   { key: 'reverse', label: 'Reverse Geocode' },
   { key: 'quota', label: 'Plan & Quota' },
   { key: 'pricing', label: 'Pricing' },
+  { key: 'progress', label: 'Progress' },
   { key: 'help', label: 'Help' },
 ];
 
@@ -65,6 +67,7 @@ export default function App() {
       {screen === 'reverse' && <ReverseGeocodeScreen />}
       {screen === 'quota' && <PlanQuotaScreen />}
       {screen === 'pricing' && <PricingScreen />}
+      {screen === 'progress' && <ProgressScreen />}
       {screen === 'help' && <HelpScreen />}
 
       <StatusBar style="dark" />
