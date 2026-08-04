@@ -8,13 +8,13 @@ const { NotFoundError, QuotaExceededError } = require('./errors');
  * an unknown email, QuotaExceededError if the request would exceed the
  * plan. Returns the (possibly period-refreshed) user row on success.
  */
-function checkQuota(usersDb, email, requestedCount) {
-  const user = getUser(usersDb, email);
+async function checkQuota(usersDb, email, requestedCount) {
+  const user = await getUser(usersDb, email);
   if (!user) {
     throw new NotFoundError(`no active subscription found for ${email}`);
   }
 
-  const current = ensureCurrentPeriod(usersDb, user);
+  const current = await ensureCurrentPeriod(usersDb, user);
   const remaining = current.tier - current.used_this_period;
 
   if (requestedCount > remaining) {
@@ -27,8 +27,8 @@ function checkQuota(usersDb, email, requestedCount) {
   return current;
 }
 
-function useQuota(usersDb, email, count) {
-  recordUsage(usersDb, email, count);
+async function useQuota(usersDb, email, count) {
+  await recordUsage(usersDb, email, count);
 }
 
 module.exports = { checkQuota, useQuota };

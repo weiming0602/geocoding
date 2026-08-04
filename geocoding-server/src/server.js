@@ -1,6 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const Database = require('better-sqlite3');
+const { createReadOnlyPool } = require('./db');
 
 const { geocode } = require('./geocode');
 const {
@@ -23,8 +23,14 @@ const {
   QuotaExceededError,
 } = require('./errors');
 
-const DB_PATH = process.env.GEOCODING_DB_PATH || 'C:\\software\\database\\sqlite3\\geocoding.sqlite';
-const USERS_DB_PATH = process.env.USERS_DB_PATH || 'C:\\software\\database\\sqlite3\\users.sqlite';
+// Unix socket, peer-authenticated (no password) -- the socket path must be
+// percent-encoded into the URI's host component (%2Fvar%2Frun%2Fpostgresql),
+// since node-postgres only honors a Unix socket path passed this way or as
+// a plain `host` config field, not as a bare connection-string host.
+const GEOCODING_DSN =
+  process.env.GEOCODING_DSN || 'postgresql://my_ai@%2Fvar%2Frun%2Fpostgresql/geocoding';
+const USERS_DSN =
+  process.env.USERS_DSN || 'postgresql://my_ai@%2Fvar%2Frun%2Fpostgresql/geocoding_users';
 const PORT = Number(process.env.PORT) || 3001;
 const OFFSET_FEET = Number(process.env.OFFSET_FEET) || 20;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -37,8 +43,11 @@ function resolveAddresses(body) {
   return fileContent !== undefined ? readAddressContent(fileContent) : readAddressLines(filePath);
 }
 
-const db = new Database(DB_PATH, { readonly: true, fileMustExist: true });
-const usersDb = openUsersDb(USERS_DB_PATH);
+// Enforced read-only at the Postgres session level (see createReadOnlyPool
+// in db.js); never add a write path against this pool (only usersDb is
+// writable, via src/users.js).
+const db = createReadOnlyPool(GEOCODING_DSN);
+const usersDbPromise = openUsersDb(USERS_DSN);
 
 const app = express();
 app.use(cors());
@@ -48,10 +57,10 @@ app.use(cors());
 // business rule -- raise it further if a real batch ever needs to.
 app.use(express.json({ limit: '200mb' }));
 
-app.post('/geocode', (req, res) => {
+app.post('/geocode', async (req, res) => {
   const address = req.body && req.body.address;
   try {
-    const result = geocode(db, address, { offsetFeet: OFFSET_FEET });
+    const result = await geocode(db, address, { offsetFeet: OFFSET_FEET });
     res.json(result);
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
@@ -62,10 +71,10 @@ app.post('/geocode', (req, res) => {
   }
 });
 
-app.post('/geocode/batch', (req, res) => {
+app.post('/geocode/batch', async (req, res) => {
   try {
     const addresses = resolveAddresses(req.body);
-    const results = geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
+    const results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
     res.json({ results });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
@@ -75,11 +84,11 @@ app.post('/geocode/batch', (req, res) => {
   }
 });
 
-app.post('/geocode/batch/download', (req, res) => {
+app.post('/geocode/batch/download', async (req, res) => {
   let results;
   try {
     const addresses = resolveAddresses(req.body);
-    results = geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
+    results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
@@ -108,16 +117,17 @@ app.post('/geocode/batch/email', async (req, res) => {
     }
 
     const addresses = readAddressLines(filePath);
-    const user = checkQuota(usersDb, email, addresses.length);
+    const usersDb = await usersDbPromise;
+    const user = await checkQuota(usersDb, email, addresses.length);
 
-    const results = geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
+    const results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
     const { successCsv, errorCsv } = resultsToCsv(results);
     const zipBuffer = buildZip([
       { name: 'results.csv', content: successCsv },
       { name: 'errors.csv', content: errorCsv },
     ]);
 
-    useQuota(usersDb, email, addresses.length);
+    await useQuota(usersDb, email, addresses.length);
     const delivery = await sendResultsEmail(email, zipBuffer, { addressCount: addresses.length });
 
     res.setHeader('Content-Type', 'application/zip');
@@ -141,18 +151,19 @@ app.post('/geocode/batch/email', async (req, res) => {
 // gating anything (unlike checkQuota/useQuota in quota.js, which are tied
 // to an actual batch-email send). There's no signup/login/session concept
 // in this app, so the caller must supply the email to look up.
-app.get('/quota', (req, res) => {
+app.get('/quota', async (req, res) => {
   const email = req.query && req.query.email;
   if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
     return res.status(400).json({ error: 'email must be a valid email address' });
   }
 
-  const user = getUser(usersDb, email);
+  const usersDb = await usersDbPromise;
+  const user = await getUser(usersDb, email);
   if (!user) {
     return res.status(404).json({ error: `no active subscription found for ${email}` });
   }
 
-  const current = ensureCurrentPeriod(usersDb, user);
+  const current = await ensureCurrentPeriod(usersDb, user);
   res.json({
     email: current.email,
     tier: current.tier,
@@ -191,7 +202,8 @@ app.post('/billing/purchase', async (req, res) => {
       priceCents: tier.priceCents,
     });
 
-    const user = addToTier(usersDb, email, tier.addressCount);
+    const usersDb = await usersDbPromise;
+    const user = await addToTier(usersDb, email, tier.addressCount);
     res.json({
       email: user.email,
       tier: user.tier,
@@ -209,10 +221,10 @@ app.post('/billing/purchase', async (req, res) => {
   }
 });
 
-app.post('/reverse-geocode', (req, res) => {
+app.post('/reverse-geocode', async (req, res) => {
   const { latitude, longitude } = req.body || {};
   try {
-    const result = reverseGeocode(db, latitude, longitude);
+    const result = await reverseGeocode(db, latitude, longitude);
     res.json(result);
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
@@ -225,8 +237,8 @@ app.post('/reverse-geocode', (req, res) => {
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`geocoding-server listening on http://localhost:${PORT}`);
-    console.log(`using database: ${DB_PATH}`);
+    console.log(`using database: ${GEOCODING_DSN}`);
   });
 }
 
-module.exports = { app, db, usersDb };
+module.exports = { app, db, usersDbPromise };

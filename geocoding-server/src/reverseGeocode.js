@@ -106,18 +106,18 @@ function validateCoordinate(latitude, longitude) {
   }
 }
 
-function findCandidates(db, latitude, longitude, radiusMeters) {
+async function findCandidates(db, latitude, longitude, radiusMeters) {
   const [mPerDegLon, mPerDegLat] = metersPerDegree(latitude);
   const dLon = radiusMeters / mPerDegLon;
   const dLat = radiusMeters / mPerDegLat;
 
-  return db
-    .prepare(
-      `SELECT * FROM streets
-       WHERE minx <= ? AND maxx >= ? AND miny <= ? AND maxy >= ?
-         AND fullname != '' AND geometry IS NOT NULL`
-    )
-    .all(longitude + dLon, longitude - dLon, latitude + dLat, latitude - dLat);
+  const { rows } = await db.query(
+    `SELECT * FROM streets
+     WHERE minx <= $1 AND maxx >= $2 AND miny <= $3 AND maxy >= $4
+       AND fullname != '' AND geometry IS NOT NULL`,
+    [longitude + dLon, longitude - dLon, latitude + dLat, latitude - dLat]
+  );
+  return rows;
 }
 
 /**
@@ -126,13 +126,13 @@ function findCandidates(db, latitude, longitude, radiusMeters) {
  * something's found) and interpolating a house number from where along
  * that segment the point projects to, on whichever side it falls on.
  */
-function reverseGeocode(db, latitude, longitude) {
+async function reverseGeocode(db, latitude, longitude) {
   validateCoordinate(latitude, longitude);
 
   let candidates = [];
   let radius = INITIAL_RADIUS_METERS;
   while (radius <= MAX_RADIUS_METERS) {
-    candidates = findCandidates(db, latitude, longitude, radius);
+    candidates = await findCandidates(db, latitude, longitude, radius);
     if (candidates.length > 0) break;
     radius *= 2;
   }

@@ -1,8 +1,8 @@
-const Database = require('better-sqlite3');
+const { Pool } = require('./db');
 
 const CREATE_USERS_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS users (
-  id INTEGER PRIMARY KEY,
+  id BIGSERIAL PRIMARY KEY,
   email TEXT UNIQUE NOT NULL,
   tier INTEGER NOT NULL,
   period_start TEXT NOT NULL,
@@ -10,11 +10,11 @@ CREATE TABLE IF NOT EXISTS users (
 );
 `;
 
-/** Opens (creating if needed) the users/subscriptions database. */
-function openUsersDb(dbPath) {
-  const db = new Database(dbPath);
-  db.exec(CREATE_USERS_TABLE_SQL);
-  return db;
+/** Opens (creating the table if needed) the users/subscriptions database. */
+async function openUsersDb(dsn) {
+  const pool = new Pool({ connectionString: dsn });
+  await pool.query(CREATE_USERS_TABLE_SQL);
+  return pool;
 }
 
 /** First-of-month date string (e.g. "2026-07-01") for the current billing period. */
@@ -22,41 +22,44 @@ function currentPeriodStart(now = new Date()) {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
 }
 
-function getUser(db, email) {
-  return db.prepare('SELECT * FROM users WHERE email = ?').get(email);
+async function getUser(db, email) {
+  const { rows } = await db.query('SELECT * FROM users WHERE email = $1', [email]);
+  return rows[0];
 }
 
 /** Manual admin operation: creates a user or updates an existing one's tier. */
-function upsertUser(db, email, tier) {
-  db.prepare(
+async function upsertUser(db, email, tier) {
+  const { rows } = await db.query(
     `INSERT INTO users (email, tier, period_start, used_this_period)
-     VALUES (?, ?, ?, 0)
-     ON CONFLICT(email) DO UPDATE SET tier = excluded.tier`
-  ).run(email, tier, currentPeriodStart());
-  return getUser(db, email);
+     VALUES ($1, $2, $3, 0)
+     ON CONFLICT (email) DO UPDATE SET tier = excluded.tier
+     RETURNING *`,
+    [email, tier, currentPeriodStart()]
+  );
+  return rows[0];
 }
 
 /**
  * Resets usage to 0 if the user's tracked period has rolled into a new
  * calendar month. Returns the (possibly updated) user row.
  */
-function ensureCurrentPeriod(db, user) {
+async function ensureCurrentPeriod(db, user) {
   const period = currentPeriodStart();
   if (user.period_start === period) {
     return user;
   }
-  db.prepare('UPDATE users SET period_start = ?, used_this_period = 0 WHERE email = ?').run(
-    period,
-    user.email
+  const { rows } = await db.query(
+    'UPDATE users SET period_start = $1, used_this_period = 0 WHERE email = $2 RETURNING *',
+    [period, user.email]
   );
-  return getUser(db, user.email);
+  return rows[0];
 }
 
-function recordUsage(db, email, count) {
-  db.prepare('UPDATE users SET used_this_period = used_this_period + ? WHERE email = ?').run(
+async function recordUsage(db, email, count) {
+  await db.query('UPDATE users SET used_this_period = used_this_period + $1 WHERE email = $2', [
     count,
-    email
-  );
+    email,
+  ]);
 }
 
 /**
@@ -65,13 +68,15 @@ function recordUsage(db, email, count) {
  * to grant additional monthly quota; unlike upsertUser() this never
  * overwrites an existing tier, only adds to it.
  */
-function addToTier(db, email, amount) {
-  db.prepare(
+async function addToTier(db, email, amount) {
+  const { rows } = await db.query(
     `INSERT INTO users (email, tier, period_start, used_this_period)
-     VALUES (?, ?, ?, 0)
-     ON CONFLICT(email) DO UPDATE SET tier = tier + excluded.tier`
-  ).run(email, amount, currentPeriodStart());
-  return getUser(db, email);
+     VALUES ($1, $2, $3, 0)
+     ON CONFLICT (email) DO UPDATE SET tier = users.tier + excluded.tier
+     RETURNING *`,
+    [email, amount, currentPeriodStart()]
+  );
+  return rows[0];
 }
 
 module.exports = {

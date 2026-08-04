@@ -54,24 +54,29 @@ function readAddressContent(content) {
 }
 
 /**
- * Geocodes each address independently. A failure on one line doesn't
- * stop the batch; each result reports its own success/failure. No cap
- * on address count: callers accept that a large enough batch will tie
- * up the server (synchronous SQLite queries, single Node thread) for
- * however long it takes to run, since nothing here queues or rate-limits.
+ * Geocodes each address independently, one at a time. A failure on one
+ * line doesn't stop the batch; each result reports its own
+ * success/failure. No cap on address count: callers accept that a large
+ * enough batch will tie up the server for however long it takes to run,
+ * since nothing here queues or rate-limits. Sequential (not
+ * Promise.all'd) on purpose -- a batch of thousands of addresses firing
+ * that many concurrent queries at once would exhaust the pg pool's
+ * connections instead of just taking longer.
  */
-function geocodeAddressList(db, addresses, options = {}) {
-  return addresses.map((address) => {
+async function geocodeAddressList(db, addresses, options = {}) {
+  const results = [];
+  for (const address of addresses) {
     try {
-      const result = geocode(db, address, options);
-      return { address, success: true, ...result };
+      const result = await geocode(db, address, options);
+      results.push({ address, success: true, ...result });
     } catch (err) {
-      return { address, success: false, error: err.message };
+      results.push({ address, success: false, error: err.message });
     }
-  });
+  }
+  return results;
 }
 
-function geocodeBatch(db, filePath, options = {}) {
+async function geocodeBatch(db, filePath, options = {}) {
   const addresses = readAddressLines(filePath);
   return geocodeAddressList(db, addresses, options);
 }
