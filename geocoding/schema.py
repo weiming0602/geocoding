@@ -1,8 +1,21 @@
-"""SQLite schema for ingested TIGER/Line street edges."""
+"""PostgreSQL/PostGIS schema for ingested TIGER/Line street edges.
+
+Replaces the old SQLite + bolted-on SpatiaLite schema. `geom` is now a
+native PostGIS geometry column (GiST-indexed), populated directly at
+insert time from the same WKT this module's callers already compute --
+no separate conversion pass needed (SpatiaLite's version needed one only
+to work around SQLite's extension-loading quirks; that constraint
+doesn't exist here). `geometry` (WKT text) is kept alongside it since
+geocode.js/interpolate.py parse WKT directly with their own custom
+interpolation math, never through PostGIS's ST_ functions.
+
+Requires the `postgis` extension (CREATE EXTENSION IF NOT EXISTS postgis;
+run once per database -- see the one-time setup in the migration docs).
+"""
 
 CREATE_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS streets (
-    id INTEGER PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     tlid TEXT,
     fullname TEXT,
     lfromadd TEXT,
@@ -17,10 +30,14 @@ CREATE TABLE IF NOT EXISTS streets (
     state TEXT,
     state_abbr TEXT,
     geometry TEXT,
-    minx REAL,
-    miny REAL,
-    maxx REAL,
-    maxy REAL
+    minx DOUBLE PRECISION,
+    miny DOUBLE PRECISION,
+    maxx DOUBLE PRECISION,
+    maxy DOUBLE PRECISION,
+    -- Generic Geometry, not LineString: a shapefile edge can have multiple
+    -- parts (ingest.py's _shape_to_wkt then emits MULTILINESTRING), which
+    -- a LineString-typed column would reject outright.
+    geom geometry(Geometry, 4326)
 );
 """
 
@@ -34,10 +51,11 @@ CREATE INDEX IF NOT EXISTS idx_streets_state_abbr ON streets (state_abbr);
 CREATE INDEX IF NOT EXISTS idx_streets_fullname_zipl_zipr_state
     ON streets (fullname, zipl, zipr, state);
 -- geocode.js's actual queries compare UPPER(fullname), which the plain
--- index above can't serve (SQLite can't use an index on a column through
--- a function wrapping it). Without this, SQLite falls back to searching
--- by zipl alone and filtering every row in that ZIP row-by-row -- fine
--- for a single request, ~10x slower at batch scale (measured on 10k rows).
+-- index above can't serve. Without this, Postgres falls back to
+-- searching by zipl alone and filtering every row in that ZIP row-by-row
+-- -- fine for a single request, ~10x slower at batch scale (measured on
+-- 10k rows against the old SQLite schema; same index-shape reasoning
+-- applies here).
 -- (Superseded for name matching by street_names below, kept for streets
 -- rows that predate street_names or any other direct-fullname query.)
 CREATE INDEX IF NOT EXISTS idx_streets_fullname_upper_zip
@@ -48,11 +66,16 @@ CREATE INDEX IF NOT EXISTS idx_streets_fullname_upper_zipr
 -- house numbers query zipr, which without this falls back to a full
 -- table scan (measured: ~300ms/miss vs ~3ms/miss with this in place).
 CREATE INDEX IF NOT EXISTS idx_streets_zipr_zipl ON streets (zipr, zipl);
+-- GiST index for `geom` -- not queried by geocode.js/reverseGeocode.js
+-- today (they use the plain minx/miny/maxx/maxy bbox columns above), but
+-- this is what makes the table a real spatial layer for QGIS/PostGIS
+-- clients, and what any future ST_-function-based query would need.
+CREATE INDEX IF NOT EXISTS idx_streets_geom ON streets USING GIST (geom);
 """
 
 CREATE_STREET_NAMES_TABLE_SQL = """
 CREATE TABLE IF NOT EXISTS street_names (
-    id INTEGER PRIMARY KEY,
+    id BIGSERIAL PRIMARY KEY,
     tlid TEXT NOT NULL,
     fullname TEXT NOT NULL,
     paflag TEXT,
@@ -65,7 +88,8 @@ CREATE TABLE IF NOT EXISTS street_names (
 
 CREATE_STREET_NAMES_INDEXES_SQL = """
 -- Same (tlid, fullname) row can appear once per county file at most, but
--- re-ingesting (idempotency) relies on this to dedupe via INSERT OR IGNORE.
+-- re-ingesting (idempotency) relies on this to dedupe via
+-- INSERT ... ON CONFLICT DO NOTHING.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_street_names_tlid_fullname_unique
     ON street_names (tlid, fullname);
 CREATE INDEX IF NOT EXISTS idx_street_names_tlid ON street_names (tlid);
@@ -85,43 +109,47 @@ CREATE INDEX IF NOT EXISTS idx_street_names_upper_fullname_zipr
 -- The two indexes above lead with UPPER(fullname), which is useless for
 -- geocode.js's LIKE '%...%' fallback (leading wildcard can't seek an
 -- index). Without a zip-led index, an unmatched/misspelled street name
--- forces a full table scan of street_names on every fallback query
--- (measured: 300-1500ms per miss on the real DB). These mirror streets'
--- idx_streets_zip / idx_streets_zipr_zipl so the fallback can filter down
--- to just that ZIP's rows first, same as it did before street_names existed.
+-- forces a full table scan of street_names on every fallback query.
+-- These mirror streets' idx_streets_zip / idx_streets_zipr_zipl so the
+-- fallback can filter down to just that ZIP's rows first, same as it did
+-- before street_names existed.
 CREATE INDEX IF NOT EXISTS idx_street_names_zipl_zipr ON street_names (zipl, zipr);
 CREATE INDEX IF NOT EXISTS idx_street_names_zipr_zipl ON street_names (zipr, zipl);
 """
 
-# Columns that predate the initial CREATE TABLE for databases created
-# before they were added. CREATE_TABLE_SQL alone won't add them to an
-# existing table (CREATE TABLE IF NOT EXISTS is a no-op), so callers must
-# run ensure_columns() as a migration step for already-populated databases.
-_MIGRATED_COLUMNS = {
-    "state": "TEXT",
-    "state_abbr": "TEXT",
-}
+# Prototype: real per-house locations (Maine E911 address points), keyed
+# by exact house number + street + town, not a range to interpolate
+# along. Where a point exists, geocode.js uses it directly instead of
+# range-interpolation -- range interpolation assumes addresses are evenly
+# spaced along a segment, which is often wrong on long rural roads with
+# a handful of widely-spaced houses (the whole reason this table exists).
+# Unlike streets/street_names, this is state-specific data (source: Maine
+# Office of GIS's E911 address points; no equivalent public NH dataset
+# was found), so it carries its own state_abbr rather than assuming ME.
+CREATE_ADDRESS_POINTS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS address_points (
+    id BIGSERIAL PRIMARY KEY,
+    site_uid TEXT NOT NULL,
+    address_number INTEGER,
+    street_fullname TEXT,
+    town TEXT,
+    county TEXT,
+    state_abbr TEXT,
+    geom geometry(Point, 4326)
+);
+"""
 
-_MIGRATED_STREET_NAMES_COLUMNS = {
-    "zipl": "TEXT",
-    "zipr": "TEXT",
-    "state": "TEXT",
-    "state_abbr": "TEXT",
-}
-
-
-def ensure_columns(conn) -> None:
-    """Adds any columns from _MIGRATED_COLUMNS missing from an existing streets table."""
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(streets)")}
-    for column, column_type in _MIGRATED_COLUMNS.items():
-        if column not in existing:
-            conn.execute(f"ALTER TABLE streets ADD COLUMN {column} {column_type}")
-
-
-def ensure_street_names_columns(conn) -> None:
-    """Adds any columns from _MIGRATED_STREET_NAMES_COLUMNS missing from
-    an existing street_names table."""
-    existing = {row[1] for row in conn.execute("PRAGMA table_info(street_names)")}
-    for column, column_type in _MIGRATED_STREET_NAMES_COLUMNS.items():
-        if column not in existing:
-            conn.execute(f"ALTER TABLE street_names ADD COLUMN {column} {column_type}")
+CREATE_ADDRESS_POINTS_INDEXES_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_address_points_site_uid_unique ON address_points (site_uid);
+-- Matches geocode.js's lookup key: exact house number + UPPER(street name)
+-- + town, scoped to a state. Town-led (not number-led) since a caller
+-- always has a state/town but ADDRESS_NUMBER alone is nowhere near
+-- selective enough to lead an index.
+CREATE INDEX IF NOT EXISTS idx_address_points_town_upper_street_number
+    ON address_points (UPPER(town), UPPER(street_fullname), address_number, state_abbr);
+-- Fallback for addresses with no parsed town (see parseAddress.js):
+-- state-wide match on street name + number alone.
+CREATE INDEX IF NOT EXISTS idx_address_points_upper_street_number
+    ON address_points (UPPER(street_fullname), address_number, state_abbr);
+CREATE INDEX IF NOT EXISTS idx_address_points_geom ON address_points USING GIST (geom);
+"""
