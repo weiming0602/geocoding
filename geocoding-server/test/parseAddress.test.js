@@ -11,6 +11,7 @@ test('parses a comma-separated address with a 2-letter state', () => {
     streetName: 'Pequawket Trl',
     zip: '04091',
     state: 'ME',
+    town: 'Standish',
   });
 });
 
@@ -21,6 +22,7 @@ test('parses a comma-separated address with a full state name', () => {
     streetName: 'Pequawket Trl',
     zip: '04091',
     state: 'Maine',
+    town: 'Standish',
   });
 });
 
@@ -31,6 +33,7 @@ test('parses an address with no commas', () => {
     streetName: 'Pequawket Trl',
     zip: '04091',
     state: 'ME',
+    town: null,
   });
 });
 
@@ -41,6 +44,7 @@ test('parses an address with no commas and no trailing state code', () => {
     streetName: 'Pequawket Trl',
     zip: '04091',
     state: null,
+    town: null,
   });
 });
 
@@ -51,6 +55,7 @@ test('a street suffix that looks like a 2-letter code is not mistaken for a stat
     streetName: 'Main Rd',
     zip: '04001',
     state: null,
+    town: null,
   });
 });
 
@@ -69,7 +74,13 @@ test('a real 2-letter state code with no comma still parses as state', () => {
     streetName: 'Main Rd',
     zip: '04001',
     state: 'NH',
+    town: null,
   });
+});
+
+test('a single comma before the state (no separate town) parses with town null', () => {
+  const result = parseAddress('996 Pequawket Trl, ME 04091');
+  assert.equal(result.town, null);
 });
 
 test('rejects a non-string address', () => {

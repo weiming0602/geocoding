@@ -19,7 +19,7 @@ const US_STATE_CODES = new Set([
 ]);
 
 /**
- * Parses a free-text address into { number, streetName, zip, state }.
+ * Parses a free-text address into { number, streetName, zip, state, town }.
  *
  * Handles the common shapes:
  *   "996 Pequawket Trl, Standish, ME 04091"
@@ -31,7 +31,11 @@ const US_STATE_CODES = new Set([
  * state code, if one is present). `state` is whatever sits between the
  * last comma and the ZIP — a 2-letter abbreviation or a full name — or
  * null if it can't be confidently isolated (e.g. no comma and no
- * trailing 2-letter code).
+ * trailing 2-letter code). `town` is whatever sits between the first and
+ * last comma (e.g. "Standish" above) -- null when there's only one comma
+ * (or none), i.e. no town was given separately from the street/state.
+ * Used to match Maine's E911 address points, which are keyed by town
+ * rather than ZIP (see matchAddressPoint in geocode.js).
  */
 function parseAddress(input) {
   if (typeof input !== 'string') {
@@ -66,12 +70,17 @@ function parseAddress(input) {
   const commaIndex = beforeZip.indexOf(',');
   let streetPart;
   let state = null;
+  let town = null;
 
   if (commaIndex >= 0) {
     streetPart = beforeZip.slice(0, commaIndex);
     const lastCommaIndex = beforeZip.lastIndexOf(',');
     const stateCandidate = beforeZip.slice(lastCommaIndex + 1).trim();
     state = stateCandidate || null;
+    if (lastCommaIndex > commaIndex) {
+      const townCandidate = beforeZip.slice(commaIndex + 1, lastCommaIndex).trim();
+      town = townCandidate || null;
+    }
   } else {
     streetPart = beforeZip;
     const trailingStateMatch = /\s+([A-Za-z]{2})\s*$/.exec(streetPart);
@@ -86,7 +95,7 @@ function parseAddress(input) {
     throw new ValidationError('address must include a street name');
   }
 
-  return { number, streetName: streetPart, zip, state };
+  return { number, streetName: streetPart, zip, state, town };
 }
 
 module.exports = { parseAddress };
