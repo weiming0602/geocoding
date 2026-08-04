@@ -1,7 +1,7 @@
 import React from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 
-import { colors, space } from '../../shared/theme';
+import { colors, radius, space } from '../../shared/theme';
 
 const chestnutImage = require('../assets/help/chestnut-91-left.png');
 const sawyerImage = require('../assets/help/sawyer-26-right.png');
@@ -13,6 +13,15 @@ export default function HelpContent() {
       <Text style={styles.subtitle}>
         A short guide to what happens when you look up, reverse-geocode, or batch-process addresses.
       </Text>
+
+      <View style={styles.coverageNote}>
+        <Text style={styles.coverageText}>
+          <Text style={styles.bold}>Coverage: </Text>
+          Maine and New Hampshire, by design. Meridian isn't trying to cover the whole country —
+          it's built specifically for these two states. Addresses outside Maine and New Hampshire
+          aren't supported yet.
+        </Text>
+      </View>
 
       <Text style={styles.heading}>Forward geocoding: address → coordinates</Text>
       <Text style={styles.paragraph}>
@@ -99,7 +108,21 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.text,
     opacity: 0.7,
+    marginBottom: space[4],
+  },
+  coverageNote: {
+    borderWidth: 1,
+    borderColor: colors.divider,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    padding: space[3],
     marginBottom: space[6],
+  },
+  coverageText: {
+    fontFamily: 'Lora_400Regular',
+    fontSize: 13,
+    color: colors.text,
+    lineHeight: 19,
   },
   heading: {
     fontFamily: 'CormorantGaramond_600SemiBold',

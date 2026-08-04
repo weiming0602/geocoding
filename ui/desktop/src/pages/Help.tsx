@@ -2,9 +2,15 @@ export default function Help() {
   return (
     <div style={{ maxWidth: 720 }}>
       <h1 style={{ marginBottom: 4 }}>How Meridian geocodes an address</h1>
-      <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
+      <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         A short guide to what happens when you look up, reverse-geocode, or batch-process addresses.
       </p>
+
+      <div className="plate" style={{ marginBottom: 'var(--space-6)', padding: 'var(--space-3)' }}>
+        <strong>Coverage:</strong> Maine and New Hampshire, by design. Meridian isn't trying to
+        cover the whole country — it's built specifically for these two states. Addresses outside
+        Maine and New Hampshire aren't supported yet.
+      </div>
 
       <h2>Forward geocoding: address → coordinates</h2>
       <p>

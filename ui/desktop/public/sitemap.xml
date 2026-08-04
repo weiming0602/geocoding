@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Only the root URL is listed: this app uses HashRouter (/#/geocode,
+  /#/pricing, etc.), and search engines don't treat hash-fragment URLs as
+  distinct crawlable pages (the fragment never reaches the server, so
+  there's nothing per-route for a crawler to fetch or index separately).
+  To get each screen individually indexable/rankable, this would need to
+  switch to path-based routing (BrowserRouter) plus a server/host rewrite
+  rule that serves index.html for every path -- a hosting-time decision,
+  not something to do speculatively now.
+
+  TODO: replace REPLACE_WITH_REAL_DOMAIN once a real domain is registered.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://REPLACE_WITH_REAL_DOMAIN/</loc>
+  </url>
+</urlset>

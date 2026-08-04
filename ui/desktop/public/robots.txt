@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+
+# TODO: replace REPLACE_WITH_REAL_DOMAIN once a real domain is registered.
+Sitemap: https://REPLACE_WITH_REAL_DOMAIN/sitemap.xml

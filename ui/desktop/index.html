@@ -3,7 +3,55 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Meridian</title>
+    <title>Meridian — Maine &amp; New Hampshire Address Geocoding API</title>
+    <meta
+      name="description"
+      content="Meridian is a small, focused geocoding service built specifically for Maine and New Hampshire — not a one-size-fits-all national platform. The kind of local knowledge you'd trust from a local real estate agency, applied to precise address data."
+    />
+    <!-- TODO: replace REPLACE_WITH_REAL_DOMAIN throughout once a real
+         domain is registered -- og:url and the sitemap below are both
+         placeholders until then. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Meridian" />
+    <meta property="og:title" content="Meridian — Maine &amp; New Hampshire Address Geocoding API" />
+    <meta
+      property="og:description"
+      content="A small, focused geocoding service built specifically for Maine and New Hampshire — the kind of local knowledge you'd trust from a local real estate agency, applied to precise address data."
+    />
+    <meta property="og:url" content="https://REPLACE_WITH_REAL_DOMAIN/" />
+    <meta property="og:image" content="https://REPLACE_WITH_REAL_DOMAIN/icons/icon-512.png" />
+    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:title" content="Meridian — Maine &amp; New Hampshire Address Geocoding API" />
+    <meta
+      name="twitter:description"
+      content="A small, focused geocoding service built specifically for Maine and New Hampshire — the kind of local knowledge you'd trust from a local real estate agency, applied to precise address data."
+    />
+    <meta name="twitter:image" content="https://REPLACE_WITH_REAL_DOMAIN/icons/icon-512.png" />
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "Service",
+        "name": "Meridian Geocoding",
+        "serviceType": "Address geocoding API",
+        "description": "A small, focused geocoding service built specifically for Maine and New Hampshire — not a one-size-fits-all national platform.",
+        "areaServed": [
+          { "@type": "State", "name": "Maine" },
+          { "@type": "State", "name": "New Hampshire" }
+        ],
+        "provider": { "@type": "Organization", "name": "Meridian" }
+      }
+    </script>
+
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#3a270d" />
+    <link rel="icon" href="/icons/favicon-32.png" sizes="32x32" type="image/png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <!-- iOS ignores the manifest's display mode; these are what actually
+         make "Add to Home Screen" launch standalone (no Safari chrome)
+         and set the status bar style for that standalone window. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Meridian" />
   </head>
   <body>
     <div id="root"></div>
