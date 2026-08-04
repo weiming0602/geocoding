@@ -2,7 +2,7 @@
 
 Downloads (if not already cached on disk) the TIGER/Line edges and
 featnames files for each county in the given state and ingests them
-into the target SQLite database. Ingestion is keyed by TLID (see
+into the target Postgres database. Ingestion is keyed by TLID (see
 geocoding.ingest / geocoding.ingest_featnames), so re-running this
 script only inserts rows that don't already exist — safe to run
 repeatedly, e.g. to pick up a new TIGER vintage, resume an interrupted
@@ -51,8 +51,9 @@ def _download_and_extract(
     return primary_path
 
 
-def update_state(state_abbr: str, db_path: Path, year: int, data_dir: Path) -> None:
-    """Ingests every county's TIGER/Line edges + featnames for one state into db_path."""
+def update_state(state_abbr: str, dsn: str, year: int, data_dir: Path) -> None:
+    """Ingests every county's TIGER/Line edges + featnames for one state into
+    the Postgres database at dsn."""
     if state_abbr not in STATES:
         raise ValueError(f"unknown state {state_abbr!r}; known: {sorted(STATES)}")
 
@@ -61,13 +62,13 @@ def update_state(state_abbr: str, db_path: Path, year: int, data_dir: Path) -> N
         shp_path = _download_and_extract(
             state["fips"], county_fips, year, data_dir, layer="edges", layer_dir="EDGES", primary_ext="shp"
         )
-        inserted = ingest(shp_path, db_path)
+        inserted = ingest(shp_path, dsn)
 
         dbf_path = _download_and_extract(
             state["fips"], county_fips, year, data_dir,
             layer="featnames", layer_dir="FEATNAMES", primary_ext="dbf",
         )
-        names_inserted = ingest_featnames(dbf_path, db_path)
+        names_inserted = ingest_featnames(dbf_path, dsn)
 
         print(
             f"{county_name} County ({state['fips']}{county_fips}): "
@@ -79,7 +80,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Update the streets table from TIGER/Line edges for every county in a state."
     )
-    parser.add_argument("database", type=Path, help="Path to the SQLite database")
+    parser.add_argument("dsn", help="Postgres connection string, e.g. 'dbname=geocoding'")
     parser.add_argument(
         "--state", required=True, choices=sorted(STATES), help="State postal abbreviation"
     )
@@ -95,7 +96,7 @@ def main() -> None:
     args = parser.parse_args()
 
     data_dir = args.data_dir or Path("data") / args.state.lower()
-    update_state(args.state, args.database, args.year, data_dir)
+    update_state(args.state, args.dsn, args.year, data_dir)
 
 
 if __name__ == "__main__":

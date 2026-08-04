@@ -1,5 +1,4 @@
-import sqlite3
-
+import psycopg
 import pytest
 
 from geocoding.interpolate import (
@@ -38,26 +37,25 @@ def test_interpolate_along_line_offset_left_of_northward_line():
 
 
 @pytest.fixture
-def conn():
-    conn = sqlite3.connect(":memory:")
-    conn.executescript(CREATE_TABLE_SQL)
-    conn.execute(
-        """
-        INSERT INTO streets (id, fullname, lfromadd, ltoadd, rfromadd, rtoadd, geometry)
-        VALUES (12, 'Pequawket Trl', '988', '998', '979', '991',
-                'LINESTRING (-70.778377 43.833902, -70.778425 43.834164, -70.778486 43.834454)')
-        """
-    )
-    conn.execute(
-        """
-        INSERT INTO streets (id, fullname, lfromadd, ltoadd, rfromadd, rtoadd, geometry)
-        VALUES (1, 'Sebago Rd', '', '', '', '',
-                'LINESTRING (-70.748418 43.876127, -70.750996 43.878619)')
-        """
-    )
-    conn.commit()
-    yield conn
-    conn.close()
+def conn(dsn):
+    with psycopg.connect(dsn) as conn:
+        conn.execute(CREATE_TABLE_SQL)
+        conn.execute(
+            """
+            INSERT INTO streets (id, fullname, lfromadd, ltoadd, rfromadd, rtoadd, geometry)
+            VALUES (12, 'Pequawket Trl', '988', '998', '979', '991',
+                    'LINESTRING (-70.778377 43.833902, -70.778425 43.834164, -70.778486 43.834454)')
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO streets (id, fullname, lfromadd, ltoadd, rfromadd, rtoadd, geometry)
+            VALUES (1, 'Sebago Rd', '', '', '', '',
+                    'LINESTRING (-70.748418 43.876127, -70.750996 43.878619)')
+            """
+        )
+        conn.commit()
+        yield conn
 
 
 def test_interpolate_address_matches_manual_calculation(conn):

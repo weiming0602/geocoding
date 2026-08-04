@@ -1,7 +1,7 @@
-import sqlite3
 import zipfile
 from unittest.mock import patch
 
+import psycopg
 import pytest
 import shapefile
 
@@ -26,31 +26,16 @@ def _write_states_shapefile(base_path, states):
     writer.close()
 
 
-def _make_streets_db(db_path, rows, with_state_columns=False):
-    """rows: list of (id, tlid, statefp) tuples. Mimics a pre-state-column DB
-    when with_state_columns is False, to exercise the migration path."""
-    conn = sqlite3.connect(db_path)
-    if with_state_columns:
-        conn.executescript(CREATE_TABLE_SQL)
-    else:
-        conn.execute(
-            """
-            CREATE TABLE streets (
-                id INTEGER PRIMARY KEY,
-                tlid TEXT,
-                fullname TEXT,
-                statefp TEXT,
-                countyfp TEXT,
-                geometry TEXT
+def _make_streets_db(dsn, rows):
+    """rows: list of (id, tlid, statefp) tuples."""
+    with psycopg.connect(dsn) as conn:
+        conn.execute(CREATE_TABLE_SQL)
+        for row_id, tlid, statefp in rows:
+            conn.execute(
+                "INSERT INTO streets (id, tlid, statefp) VALUES (%s, %s, %s)",
+                (row_id, tlid, statefp),
             )
-            """
-        )
-    for row_id, tlid, statefp in rows:
-        conn.execute(
-            "INSERT INTO streets (id, tlid, statefp) VALUES (?, ?, ?)", (row_id, tlid, statefp)
-        )
-    conn.commit()
-    conn.close()
+        conn.commit()
 
 
 def test_read_state_lookup(tmp_path):
@@ -107,12 +92,10 @@ def test_download_and_extract_states_shp_downloads_when_nothing_cached(tmp_path)
     assert result == tmp_path / "tl_2024_us_state.shp"
 
 
-def test_update_state_names_joins_by_statefp_and_migrates_old_schema(tmp_path):
-    db_path = tmp_path / "streets.db"
+def test_update_state_names_joins_by_statefp(tmp_path, dsn):
     _make_streets_db(
-        db_path,
+        dsn,
         rows=[(1, "t1", "23"), (2, "t2", "33"), (3, "t3", "99")],  # 99 = no matching state
-        with_state_columns=False,
     )
 
     shp_base = tmp_path / "states"
@@ -124,16 +107,15 @@ def test_update_state_names_joins_by_statefp_and_migrates_old_schema(tmp_path):
         "geocoding.update_state_names._download_and_extract_states_shp",
         return_value=shp_base.with_suffix(".shp"),
     ):
-        updated = update_state_names(db_path, 2024, tmp_path / "cache")
+        updated = update_state_names(dsn, 2024, tmp_path / "cache")
 
     assert updated == 2
 
-    conn = sqlite3.connect(db_path)
-    rows = {
-        tlid: (state, abbr)
-        for tlid, state, abbr in conn.execute("SELECT tlid, state, state_abbr FROM streets")
-    }
-    conn.close()
+    with psycopg.connect(dsn) as conn:
+        rows = {
+            tlid: (state, abbr)
+            for tlid, state, abbr in conn.execute("SELECT tlid, state, state_abbr FROM streets")
+        }
 
     assert rows == {
         "t1": ("Maine", "ME"),
@@ -142,9 +124,8 @@ def test_update_state_names_joins_by_statefp_and_migrates_old_schema(tmp_path):
     }
 
 
-def test_update_state_names_is_idempotent(tmp_path):
-    db_path = tmp_path / "streets.db"
-    _make_streets_db(db_path, rows=[(1, "t1", "23")], with_state_columns=False)
+def test_update_state_names_is_idempotent(tmp_path, dsn):
+    _make_streets_db(dsn, rows=[(1, "t1", "23")])
 
     shp_base = tmp_path / "states"
     _write_states_shapefile(shp_base, [("23", "Maine", "ME")])
@@ -153,8 +134,8 @@ def test_update_state_names_is_idempotent(tmp_path):
         "geocoding.update_state_names._download_and_extract_states_shp",
         return_value=shp_base.with_suffix(".shp"),
     ):
-        first = update_state_names(db_path, 2024, tmp_path / "cache")
-        second = update_state_names(db_path, 2024, tmp_path / "cache")
+        first = update_state_names(dsn, 2024, tmp_path / "cache")
+        second = update_state_names(dsn, 2024, tmp_path / "cache")
 
     assert first == 1
     assert second == 0

@@ -1,5 +1,7 @@
 from unittest.mock import patch
 
+import psycopg
+import pytest
 import shapefile
 
 from geocoding.states import STATES
@@ -111,13 +113,11 @@ def test_download_and_extract_works_for_featnames_layer(tmp_path):
 
 
 def test_update_state_rejects_unknown_state(tmp_path):
-    import pytest
-
     with pytest.raises(ValueError, match="unknown state"):
-        update_state("ZZ", tmp_path / "db.sqlite", 2024, tmp_path / "cache")
+        update_state("ZZ", "unused", 2024, tmp_path / "cache")
 
 
-def test_update_state_ingests_every_county_without_network(tmp_path):
+def test_update_state_ingests_every_county_without_network(tmp_path, dsn):
     shapefile_base = tmp_path / "source"
     _write_sample_shapefile(shapefile_base)
     shp_path = shapefile_base.with_suffix(".shp")
@@ -126,24 +126,20 @@ def test_update_state_ingests_every_county_without_network(tmp_path):
     _write_sample_featnames(featnames_base)
     dbf_path = featnames_base.with_suffix(".dbf")
 
-    db_path = tmp_path / "streets.db"
-
     def fake_download(state_fips, county_fips, year, data_dir, *, layer, **kwargs):
         return shp_path if layer == "edges" else dbf_path
 
     with patch(
         "geocoding.update_state._download_and_extract", side_effect=fake_download
     ) as mock_download:
-        update_state("NH", db_path, 2024, tmp_path / "cache")
+        update_state("NH", dsn, 2024, tmp_path / "cache")
 
     assert mock_download.call_count == len(STATES["NH"]["counties"]) * 2
 
-    import sqlite3
+    with psycopg.connect(dsn) as conn:
+        street_count = conn.execute("SELECT COUNT(*) FROM streets").fetchone()[0]
+        name_count = conn.execute("SELECT COUNT(*) FROM street_names").fetchone()[0]
 
-    conn = sqlite3.connect(db_path)
-    street_count = conn.execute("SELECT COUNT(*) FROM streets").fetchone()[0]
-    name_count = conn.execute("SELECT COUNT(*) FROM street_names").fetchone()[0]
-    conn.close()
     # Every county "download" points at the same TLID 999, so only the
     # first ingest inserts it — later ones are deduped.
     assert street_count == 1

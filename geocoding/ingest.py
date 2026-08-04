@@ -1,4 +1,4 @@
-"""Ingest a TIGER/Line edges shapefile into a SQLite database.
+"""Ingest a TIGER/Line edges shapefile into Postgres.
 
 TIGER/Line edges (tl_<year>_<statecounty>_edges.shp) carry per-side
 address ranges and ZIP codes, which is what makes house-number
@@ -8,12 +8,13 @@ with a road MTFCC (codes starting with "S") are kept.
 """
 
 import argparse
-import sqlite3
 from pathlib import Path
 from typing import Optional
 
+import psycopg
 import shapefile
 
+from .db import insert_ignore_count
 from .schema import CREATE_INDEXES_SQL, CREATE_TABLE_SQL
 
 # Maps TIGER/Line field names to our column names.
@@ -45,8 +46,9 @@ def _shape_to_wkt(shape) -> Optional[str]:
     return f"MULTILINESTRING ({', '.join(parts)})"
 
 
-def ingest(shp_path: Path, db_path: Path) -> int:
-    """Ingest one edges shapefile into db_path, creating tables as needed.
+def ingest(shp_path: Path, dsn: str) -> int:
+    """Ingest one edges shapefile into the database at dsn, creating tables
+    as needed.
 
     Rows are keyed by TLID (TIGER/Line ID, unique nationwide), so
     re-ingesting a file already loaded — or one that overlaps an
@@ -54,12 +56,11 @@ def ingest(shp_path: Path, db_path: Path) -> int:
     instead of duplicating or erroring. Returns the number of rows
     newly inserted (not the number read from the shapefile).
     """
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.executescript(CREATE_TABLE_SQL)
+    with psycopg.connect(dsn) as conn:
+        conn.execute(CREATE_TABLE_SQL)
         # Indexes (including the unique index on tlid) must exist before
-        # inserting so "INSERT OR IGNORE" can actually detect duplicates.
-        conn.executescript(CREATE_INDEXES_SQL)
+        # inserting so "ON CONFLICT (tlid)" can actually detect duplicates.
+        conn.execute(CREATE_INDEXES_SQL)
 
         reader = shapefile.Reader(str(shp_path))
         field_names = [f[0] for f in reader.fields[1:]]  # skip the deletion flag
@@ -68,12 +69,16 @@ def ingest(shp_path: Path, db_path: Path) -> int:
         if missing:
             print(f"warning: fields not in shapefile, will be left NULL: {missing}")
 
-        columns = ["geometry", "minx", "miny", "maxx", "maxy"]
+        # geom is populated straight from the same WKT as geometry -- no
+        # separate SpatiaLite-style backfill pass needed on Postgres.
+        columns = ["geometry", "minx", "miny", "maxx", "maxy", "geom"]
         columns += [FIELD_MAP[name] for name in available]
-        placeholders = ", ".join("?" for _ in columns)
+        value_exprs = ["%s", "%s", "%s", "%s", "%s", "ST_GeomFromText(%s, 4326)"]
+        value_exprs += ["%s" for _ in available]
         insert_sql = (
-            f"INSERT OR IGNORE INTO streets ({', '.join(columns)}) "
-            f"VALUES ({placeholders})"
+            f"INSERT INTO streets ({', '.join(columns)}) "
+            f"VALUES ({', '.join(value_exprs)}) "
+            "ON CONFLICT (tlid) DO NOTHING RETURNING id"
         )
 
         rows = []
@@ -87,28 +92,26 @@ def ingest(shp_path: Path, db_path: Path) -> int:
                 continue
             wkt = _shape_to_wkt(shape)
             bbox = list(shape.bbox) if shape.points else [None, None, None, None]
-            row = [wkt, *bbox, *(record.get(name) for name in available)]
+            row = [wkt, *bbox, wkt, *(record.get(name) for name in available)]
             rows.append(row)
 
-        cursor = conn.executemany(insert_sql, rows)
+        count = insert_ignore_count(conn, insert_sql, rows)
         conn.commit()
-        return cursor.rowcount
-    finally:
-        conn.close()
+        return count
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Ingest a TIGER/Line edges shapefile into a SQLite database."
+        description="Ingest a TIGER/Line edges shapefile into Postgres."
     )
     parser.add_argument(
         "shapefile", type=Path, help="Path to .shp (matching .dbf/.shx must sit alongside it)"
     )
-    parser.add_argument("database", type=Path, help="Path to the output SQLite database")
+    parser.add_argument("dsn", help="Postgres connection string, e.g. 'dbname=geocoding'")
     args = parser.parse_args()
 
-    count = ingest(args.shapefile, args.database)
-    print(f"Inserted {count} new street edges into {args.database}")
+    count = ingest(args.shapefile, args.dsn)
+    print(f"Inserted {count} new street edges into {args.dsn}")
 
 
 if __name__ == "__main__":

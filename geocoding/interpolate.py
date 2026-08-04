@@ -10,8 +10,9 @@ onto the correct side of the street).
 import argparse
 import math
 import re
-import sqlite3
 from typing import Optional
+
+import psycopg
 
 Point = tuple[float, float]
 
@@ -86,7 +87,7 @@ def interpolate_along_line(
 
 
 def interpolate_address(
-    conn: sqlite3.Connection,
+    conn: psycopg.Connection,
     street_id: int,
     number: int,
     range_side: str = "left",
@@ -108,7 +109,7 @@ def interpolate_address(
     )
 
     row = conn.execute(
-        f"SELECT {from_col}, {to_col}, geometry FROM streets WHERE id = ?",
+        f"SELECT {from_col}, {to_col}, geometry FROM streets WHERE id = %s",
         (street_id,),
     ).fetchone()
     if row is None:
@@ -142,7 +143,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Interpolate the coordinates of a house number along a street segment."
     )
-    parser.add_argument("database", help="Path to the SQLite database")
+    parser.add_argument("dsn", help="Postgres connection string, e.g. 'dbname=geocoding'")
     parser.add_argument("street_id", type=int, help="id of the row in the streets table")
     parser.add_argument("number", type=int, help="House number to interpolate")
     parser.add_argument(
@@ -163,8 +164,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    conn = sqlite3.connect(args.database)
-    try:
+    with psycopg.connect(args.dsn) as conn:
         x, y = interpolate_address(
             conn,
             args.street_id,
@@ -174,8 +174,6 @@ def main() -> None:
             offset_side=args.offset_side,
             allow_extrapolation=args.allow_extrapolation,
         )
-    finally:
-        conn.close()
 
     print(f"{x:.6f}, {y:.6f}")
 

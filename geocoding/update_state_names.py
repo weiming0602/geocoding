@@ -7,15 +7,13 @@ by statefp, filling in the full state name and its postal abbreviation.
 """
 
 import argparse
-import sqlite3
 import urllib.request
 import zipfile
 from pathlib import Path
 from typing import NamedTuple
 
+import psycopg
 import shapefile
-
-from .schema import ensure_columns
 
 STATE_SHP_URL_TEMPLATE = (
     "https://www2.census.gov/geo/tiger/TIGER{year}/STATE/tl_{year}_us_state.zip"
@@ -66,54 +64,44 @@ def _read_state_lookup(shp_path: Path) -> dict[str, StateInfo]:
     return lookup
 
 
-def update_state_names(db_path: Path, year: int, data_dir: Path) -> int:
+def update_state_names(dsn: str, year: int, data_dir: Path) -> int:
     """Fills in streets.state and streets.state_abbr by joining statefp
     against the national states shapefile. Returns the number of rows updated."""
     shp_path = _download_and_extract_states_shp(year, data_dir)
     state_lookup = _read_state_lookup(shp_path)
 
-    conn = sqlite3.connect(db_path)
-    try:
-        ensure_columns(conn)
-
-        conn.execute("DROP TABLE IF EXISTS _state_lookup")
+    with psycopg.connect(dsn) as conn:
         conn.execute(
             "CREATE TEMP TABLE _state_lookup (statefp TEXT PRIMARY KEY, name TEXT, abbr TEXT)"
         )
-        conn.executemany(
-            "INSERT INTO _state_lookup (statefp, name, abbr) VALUES (?, ?, ?)",
-            [(statefp, info.name, info.abbr) for statefp, info in state_lookup.items()],
-        )
+        with conn.cursor() as cursor:
+            cursor.executemany(
+                "INSERT INTO _state_lookup (statefp, name, abbr) VALUES (%s, %s, %s)",
+                [(statefp, info.name, info.abbr) for statefp, info in state_lookup.items()],
+            )
 
         cursor = conn.execute(
             """
             UPDATE streets
-            SET state = (
-                    SELECT name FROM _state_lookup WHERE _state_lookup.statefp = streets.statefp
-                ),
-                state_abbr = (
-                    SELECT abbr FROM _state_lookup WHERE _state_lookup.statefp = streets.statefp
-                )
-            WHERE EXISTS (
-                SELECT 1 FROM _state_lookup WHERE _state_lookup.statefp = streets.statefp
-            )
-            AND (
-                state IS NOT (SELECT name FROM _state_lookup WHERE _state_lookup.statefp = streets.statefp)
-                OR state_abbr IS NOT (SELECT abbr FROM _state_lookup WHERE _state_lookup.statefp = streets.statefp)
-            )
+            SET state = _state_lookup.name,
+                state_abbr = _state_lookup.abbr
+            FROM _state_lookup
+            WHERE _state_lookup.statefp = streets.statefp
+              AND (
+                streets.state IS DISTINCT FROM _state_lookup.name
+                OR streets.state_abbr IS DISTINCT FROM _state_lookup.abbr
+              )
             """
         )
         conn.commit()
         return cursor.rowcount
-    finally:
-        conn.close()
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Populate streets.state/state_abbr from the TIGER/Line national states shapefile."
     )
-    parser.add_argument("database", type=Path, help="Path to the SQLite database")
+    parser.add_argument("dsn", help="Postgres connection string, e.g. 'dbname=geocoding'")
     parser.add_argument(
         "--year", type=int, default=2024, help="TIGER/Line vintage year (default: 2024)"
     )
@@ -125,8 +113,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    updated = update_state_names(args.database, args.year, args.data_dir)
-    print(f"Updated state/state_abbr on {updated} rows in {args.database}")
+    updated = update_state_names(args.dsn, args.year, args.data_dir)
+    print(f"Updated state/state_abbr on {updated} rows in {args.dsn}")
 
 
 if __name__ == "__main__":

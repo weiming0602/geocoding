@@ -5,6 +5,7 @@ description = "Custom address geocoding engine built on TIGER/Line street data"
 requires-python = ">=3.10"
 dependencies = [
     "pyshp>=2.3",
+    "psycopg[binary]>=3.1",
 ]
 
 [project.optional-dependencies]

@@ -1,4 +1,4 @@
-"""Ingest a TIGER/Line featnames table (alternate street names) into SQLite.
+"""Ingest a TIGER/Line featnames table (alternate street names) into Postgres.
 
 The `edges` layer only carries one name per segment (the Census-assigned
 primary name), so a user searching for a road by a different valid name
@@ -14,16 +14,13 @@ runtime JOIN back to streets to filter by them -- see
 sync_street_names_zip_state()'s docstring for why.
 """
 
-import sqlite3
 from pathlib import Path
 
+import psycopg
 import shapefile
 
-from .schema import (
-    CREATE_STREET_NAMES_INDEXES_SQL,
-    CREATE_STREET_NAMES_TABLE_SQL,
-    ensure_street_names_columns,
-)
+from .db import insert_ignore_count
+from .schema import CREATE_STREET_NAMES_INDEXES_SQL, CREATE_STREET_NAMES_TABLE_SQL
 
 FIELD_MAP = {
     "TLID": "tlid",
@@ -32,7 +29,7 @@ FIELD_MAP = {
 }
 
 
-def sync_street_names_zip_state(conn: sqlite3.Connection) -> int:
+def sync_street_names_zip_state(conn: psycopg.Connection) -> int:
     """Backfills street_names.zipl/zipr/state/state_abbr from the matching
     streets row, for any street_names rows that don't have it yet.
 
@@ -52,7 +49,7 @@ def sync_street_names_zip_state(conn: sqlite3.Connection) -> int:
     tests, without edges having been ingested first.
     """
     has_streets = conn.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name='streets'"
+        "SELECT 1 FROM information_schema.tables WHERE table_name = 'streets'"
     ).fetchone()
     if not has_streets:
         return 0
@@ -60,33 +57,32 @@ def sync_street_names_zip_state(conn: sqlite3.Connection) -> int:
     cursor = conn.execute(
         """
         UPDATE street_names
-        SET zipl = (SELECT zipl FROM streets WHERE streets.tlid = street_names.tlid),
-            zipr = (SELECT zipr FROM streets WHERE streets.tlid = street_names.tlid),
-            state = (SELECT state FROM streets WHERE streets.tlid = street_names.tlid),
-            state_abbr = (SELECT state_abbr FROM streets WHERE streets.tlid = street_names.tlid)
-        WHERE zipl IS NULL
-          AND tlid IN (SELECT tlid FROM streets)
+        SET zipl = streets.zipl,
+            zipr = streets.zipr,
+            state = streets.state,
+            state_abbr = streets.state_abbr
+        FROM streets
+        WHERE streets.tlid = street_names.tlid
+          AND street_names.zipl IS NULL
         """
     )
     conn.commit()
     return cursor.rowcount
 
 
-def ingest_featnames(dbf_path: Path, db_path: Path) -> int:
+def ingest_featnames(dbf_path: Path, dsn: str) -> int:
     """Ingest one county's featnames table into street_names.
 
     Only keeps rows for road features (MTFCC starting with "S"), matching
     the same filter ingest.py applies to streets. Keyed by (tlid,
-    fullname), so re-ingesting is idempotent (INSERT OR IGNORE). Assumes
-    the matching streets rows are already ingested (update_state.py
+    fullname), so re-ingesting is idempotent (ON CONFLICT DO NOTHING).
+    Assumes the matching streets rows are already ingested (update_state.py
     ingests edges before featnames for each county) so zip/state can be
     denormalized immediately. Returns the number of rows newly inserted.
     """
-    conn = sqlite3.connect(db_path)
-    try:
-        conn.executescript(CREATE_STREET_NAMES_TABLE_SQL)
-        ensure_street_names_columns(conn)
-        conn.executescript(CREATE_STREET_NAMES_INDEXES_SQL)
+    with psycopg.connect(dsn) as conn:
+        conn.execute(CREATE_STREET_NAMES_TABLE_SQL)
+        conn.execute(CREATE_STREET_NAMES_INDEXES_SQL)
 
         with open(dbf_path, "rb") as f:
             reader = shapefile.Reader(dbf=f)
@@ -97,10 +93,11 @@ def ingest_featnames(dbf_path: Path, db_path: Path) -> int:
                 print(f"warning: fields not in featnames table, will be left NULL: {missing}")
 
             columns = [FIELD_MAP[name] for name in available]
-            placeholders = ", ".join("?" for _ in columns)
+            placeholders = ", ".join("%s" for _ in columns)
             insert_sql = (
-                f"INSERT OR IGNORE INTO street_names ({', '.join(columns)}) "
-                f"VALUES ({placeholders})"
+                f"INSERT INTO street_names ({', '.join(columns)}) "
+                f"VALUES ({placeholders}) "
+                "ON CONFLICT (tlid, fullname) DO NOTHING RETURNING id"
             )
 
             rows = []
@@ -112,11 +109,8 @@ def ingest_featnames(dbf_path: Path, db_path: Path) -> int:
                     continue
                 rows.append([data.get(name) for name in available])
 
-        cursor = conn.executemany(insert_sql, rows)
+        inserted = insert_ignore_count(conn, insert_sql, rows)
         conn.commit()
-        inserted = cursor.rowcount
 
         sync_street_names_zip_state(conn)
         return inserted
-    finally:
-        conn.close()
