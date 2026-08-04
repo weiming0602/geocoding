@@ -108,6 +108,30 @@ export default function Batch() {
               </button>
               <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={handleChooseFile} />
             </div>
+            <a
+              href="/batch-address-template.txt"
+              download
+              className="text-muted"
+              style={{ fontSize: 12, display: 'inline-block', marginTop: 'var(--space-2)' }}
+            >
+              Download a template file
+            </a>
+          </div>
+
+          <div
+            className="card-body"
+            style={{
+              background: 'var(--color-surface)',
+              borderRadius: 'var(--radius-md)',
+              padding: 'var(--space-3)',
+              marginBottom: 'var(--space-4)',
+              fontFamily: 'monospace',
+              fontSize: 12,
+              whiteSpace: 'pre-wrap',
+            }}
+          >
+            91 Chestnut St, Portland, ME 04101{'\n'}13 Deerfield Dr, Brunswick, ME 04011{'\n'}997
+            Pequawket Trl, Standish, ME 04091
           </div>
           <button className="btn btn-primary btn-block" onClick={handleBatchGeocode} disabled={loading || downloading}>
             {loading ? 'Geocoding…' : 'Batch geocode'}

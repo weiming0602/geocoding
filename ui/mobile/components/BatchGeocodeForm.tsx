@@ -166,6 +166,12 @@ export default function BatchGeocodeForm() {
         />
       </View>
 
+      <Text style={styles.templateLabel}>Example format (tap and hold to copy):</Text>
+      <Text style={styles.templateBlock} selectable>
+        91 Chestnut St, Portland, ME 04101{'\n'}13 Deerfield Dr, Brunswick, ME 04011{'\n'}997
+        Pequawket Trl, Standish, ME 04091
+      </Text>
+
       <View style={styles.buttonRow}>
         <View style={styles.buttonSpacer}>
           <ThemedButton
@@ -267,6 +273,22 @@ const styles = StyleSheet.create({
   },
   pathInput: {
     flex: 1,
+  },
+  templateLabel: {
+    fontFamily: 'Lora_400Regular',
+    fontSize: 11,
+    color: colors.text,
+    opacity: 0.6,
+    marginBottom: 4,
+  },
+  templateBlock: {
+    fontFamily: Platform.OS === 'web' ? 'monospace' : 'Courier',
+    fontSize: 12,
+    color: colors.text,
+    backgroundColor: colors.surface,
+    borderRadius: radius.md,
+    padding: space[3],
+    marginBottom: space[4],
   },
   buttonRow: {
     flexDirection: 'row',
