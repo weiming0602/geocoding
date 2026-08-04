@@ -1,0 +1,9 @@
+# Alternative to the systemd timer (geocoding-annual-update.timer) if you'd
+# rather use plain cron. Install with: crontab -e, then paste the line
+# below (adjust the venv path and GEOCODING_DSN for the actual box).
+#
+# Runs December 1st at 3am; ">> ... 2>&1" is what makes failures visible --
+# without it, cron silently discards output and you won't notice a break
+# until addresses stop resolving.
+
+0 3 1 12 * cd /home/my_ai/projects/geocoding && .venv/bin/python -m geocoding.annual_update "dbname=geocoding" >> /home/my_ai/projects/geocoding/annual_update.log 2>&1

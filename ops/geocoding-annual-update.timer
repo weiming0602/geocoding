@@ -1,0 +1,17 @@
+# Fires geocoding-annual-update.service once a year. TIGER/Line's new
+# vintage for a given year is typically published by the Census Bureau in
+# the second half of that year, so December 1st gives it time to land;
+# adjust OnCalendar if that timing ever proves off.
+#
+# Persistent=true means a run missed while the box was off gets caught up
+# at next boot instead of silently skipped for a year.
+
+[Unit]
+Description=Run geocoding-annual-update.service once a year
+
+[Timer]
+OnCalendar=*-12-01 03:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

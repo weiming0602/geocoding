@@ -1,0 +1,26 @@
+# systemd service for geocoding/annual_update.py -- refreshes TIGER/Line
+# streets (all states in geocoding.states.STATES) and Maine's E911 address
+# points once a year. Triggered by geocoding-annual-update.timer, not
+# meant to be started directly (though `systemctl start` works fine for
+# a manual test run).
+#
+# Install (on the Lightsail instance, adjust paths/DSN for that box):
+#   sudo cp ops/geocoding-annual-update.service ops/geocoding-annual-update.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now geocoding-annual-update.timer
+#
+# Check status / logs:
+#   systemctl status geocoding-annual-update.timer
+#   journalctl -u geocoding-annual-update.service
+
+[Unit]
+Description=Annual TIGER/Line + Maine E911 address point refresh
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/my_ai/projects/geocoding
+# GEOCODING_DSN should point at the Lightsail Database's network endpoint
+# in production (host/port/user/password), not the local Unix socket used
+# in dev -- see CLAUDE.md's "Environment / data layout".
+Environment=GEOCODING_DSN=dbname=geocoding
+ExecStart=/home/my_ai/projects/geocoding/.venv/bin/python -m geocoding.annual_update "${GEOCODING_DSN}"

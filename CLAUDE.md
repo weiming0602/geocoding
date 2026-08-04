@@ -15,7 +15,11 @@ street_names, read-only from the server) and `geocoding_users`
 - Python: `.venv\Scripts\python -m geocoding.update_state "dbname=geocoding" --state ME`
   (venv is Windows-style `Scripts\`, not `bin/`; DSN is a psycopg
   connection string, e.g. `dbname=geocoding user=my_ai`)
-- Python tests: `.venv\Scripts\python -m pytest` (32 tests in `tests/`) —
+- Annual maintenance (all states' TIGER/Line streets + Maine's E911 address
+  points, insert-only/safe to re-run): `.venv\Scripts\python -m
+  geocoding.annual_update "dbname=geocoding"` -- see `ops/` for the
+  systemd timer/service pair and a crontab alternative to schedule it.
+- Python tests: `.venv\Scripts\python -m pytest` (37 tests in `tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)
 - Server: `cd geocoding-server && node src/server.js`
