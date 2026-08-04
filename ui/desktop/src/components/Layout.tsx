@@ -1,6 +1,8 @@
 import { NavLink } from 'react-router';
 import type { ReactNode } from 'react';
 
+import InstallAppBanner from './InstallAppBanner';
+
 const NAV_LINKS = [
   { to: '/', label: 'Overview', end: true },
   { to: '/geocode', label: 'Geocode' },
@@ -23,6 +25,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         flexDirection: 'column',
       }}
     >
+      <InstallAppBanner />
       <nav className="nav">
         <div className="nav-brand">Meridian</div>
         {NAV_LINKS.map((link) => (
