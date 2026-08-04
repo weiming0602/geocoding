@@ -1,5 +1,15 @@
+const crypto = require('crypto');
 const zlib = require('zlib');
-const Database = require('better-sqlite3');
+
+const { Pool } = require('../src/db');
+
+// Unix socket, peer-authenticated -- same convention as src/server.js's
+// default DSNs. Percent-encoding the socket path into the URI's host
+// component is required: node-postgres only treats a Unix socket path as
+// such when it comes from this form or a plain `host` config field, never
+// from a bare connection-string host.
+const SOCKET_HOST = '%2Fvar%2Frun%2Fpostgresql';
+const ADMIN_DSN = `postgresql://my_ai@${SOCKET_HOST}/postgres`;
 
 /** Parses local file header entries back out of a ZIP built by buildZip(). */
 function parseZipEntries(buffer) {
@@ -33,11 +43,48 @@ function bboxOf(wkt) {
   return [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
 }
 
-function makeDb() {
-  const db = new Database(':memory:');
-  db.exec(`
+/**
+ * Creates a throwaway Postgres database (not just a schema) so each test
+ * gets full isolation, mirroring how the old suite gave each test its own
+ * in-memory/temp-file SQLite database. Returns a Pool already pointed at
+ * it, plus its DSN (for tests that need to point a freshly-required
+ * src/server.js at it via env vars) and a drop() to tear it all down.
+ */
+async function createTestDatabase({ postgis = true } = {}) {
+  const name = `geocoding_test_${crypto.randomBytes(8).toString('hex')}`;
+
+  const admin = new Pool({ connectionString: ADMIN_DSN });
+  await admin.query(`CREATE DATABASE ${name}`);
+  await admin.end();
+
+  const dsn = `postgresql://my_ai@${SOCKET_HOST}/${name}`;
+  const pool = new Pool({ connectionString: dsn });
+  if (postgis) {
+    await pool.query('CREATE EXTENSION IF NOT EXISTS postgis');
+  }
+
+  async function drop() {
+    await pool.end();
+    const admin2 = new Pool({ connectionString: ADMIN_DSN });
+    await admin2.query(`DROP DATABASE IF EXISTS ${name} WITH (FORCE)`);
+    await admin2.end();
+  }
+
+  return { pool, dsn, drop };
+}
+
+/**
+ * Populates a pool's streets/street_names tables with a handful of
+ * fixture streets, covering every matching scenario the geocode/
+ * reverseGeocode tests need: a multi-segment named street, one with no
+ * address range, a same-name collision across states, a ZIP-boundary
+ * street with different zipl/zipr, and an alternate TIGER name for the
+ * same physical segment.
+ */
+async function seedFixtureStreets(pool) {
+  await pool.query(`
     CREATE TABLE streets (
-      id INTEGER PRIMARY KEY,
+      id BIGSERIAL PRIMARY KEY,
       tlid TEXT,
       fullname TEXT,
       lfromadd TEXT,
@@ -49,13 +96,13 @@ function makeDb() {
       state TEXT,
       state_abbr TEXT,
       geometry TEXT,
-      minx REAL,
-      miny REAL,
-      maxx REAL,
-      maxy REAL
+      minx DOUBLE PRECISION,
+      miny DOUBLE PRECISION,
+      maxx DOUBLE PRECISION,
+      maxy DOUBLE PRECISION
     );
     CREATE TABLE street_names (
-      id INTEGER PRIMARY KEY,
+      id BIGSERIAL PRIMARY KEY,
       tlid TEXT NOT NULL,
       fullname TEXT NOT NULL,
       paflag TEXT,
@@ -64,14 +111,25 @@ function makeDb() {
       state TEXT,
       state_abbr TEXT
     );
+    CREATE TABLE address_points (
+      id BIGSERIAL PRIMARY KEY,
+      site_uid TEXT NOT NULL,
+      address_number INTEGER,
+      street_fullname TEXT,
+      town TEXT,
+      county TEXT,
+      state_abbr TEXT,
+      geom geometry(Point, 4326)
+    );
   `);
 
-  const insert = db.prepare(
-    `INSERT INTO streets
-       (id, tlid, fullname, lfromadd, ltoadd, rfromadd, rtoadd, zipl, zipr, state, state_abbr,
-        geometry, minx, miny, maxx, maxy)
-     VALUES (@id, @tlid, @fullname, @lfromadd, @ltoadd, @rfromadd, @rtoadd, @zipl, @zipr, @state,
-             @state_abbr, @geometry, @minx, @miny, @maxx, @maxy)`
+  // One address point, in a town/street distinct from the streets fixture
+  // above, so tests can verify geocode() prefers an exact point match over
+  // interpolation without it interfering with the interpolation-path tests.
+  await pool.query(
+    `INSERT INTO address_points (site_uid, address_number, street_fullname, town, county, state_abbr, geom)
+     VALUES ('test-uid-1', 42, 'Test Point Lane', 'Testville', 'Test County', 'ME',
+             ST_SetSRID(ST_MakePoint(-70.5, 43.5), 4326))`
   );
 
   const rows = [
@@ -110,13 +168,18 @@ function makeDb() {
 
   for (const row of rows) {
     const [minx, miny, maxx, maxy] = bboxOf(row.geometry);
-    insert.run({ ...row, minx, miny, maxx, maxy });
+    await pool.query(
+      `INSERT INTO streets
+         (id, tlid, fullname, lfromadd, ltoadd, rfromadd, rtoadd, zipl, zipr, state, state_abbr,
+          geometry, minx, miny, maxx, maxy)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+      [
+        row.id, row.tlid, row.fullname, row.lfromadd, row.ltoadd, row.rfromadd, row.rtoadd,
+        row.zipl, row.zipr, row.state, row.state_abbr, row.geometry, minx, miny, maxx, maxy,
+      ]
+    );
   }
 
-  const insertName = db.prepare(
-    `INSERT INTO street_names (tlid, fullname, paflag, zipl, zipr, state, state_abbr)
-     VALUES (?, ?, ?, ?, ?, ?, ?)`
-  );
   // Every streets row needs its own fullname registered as the primary
   // name, or exact/LIKE matching (which now goes through street_names,
   // not streets.fullname directly) would find nothing. zipl/zipr/state/
@@ -125,14 +188,118 @@ function makeDb() {
   // filters on street_names' own copies, not streets', so a mismatch here
   // would silently break matching in tests but not reflect a real bug.
   for (const row of rows) {
-    insertName.run(row.tlid, row.fullname, 'P', row.zipl, row.zipr, row.state, row.state_abbr);
+    await pool.query(
+      `INSERT INTO street_names (tlid, fullname, paflag, zipl, zipr, state, state_abbr)
+       VALUES ($1, $2, 'P', $3, $4, $5, $6)`,
+      [row.tlid, row.fullname, row.zipl, row.zipr, row.state, row.state_abbr]
+    );
   }
   // A real alternate name from the actual dataset: TLID 78056932 (id=12,
   // "Pequawket Trl") is also officially "State Rte 113".
   const primary = rows.find((row) => row.tlid === '78056932');
-  insertName.run('78056932', 'State Rte 113', 'A', primary.zipl, primary.zipr, primary.state, primary.state_abbr);
+  await pool.query(
+    `INSERT INTO street_names (tlid, fullname, paflag, zipl, zipr, state, state_abbr)
+     VALUES ($1, 'State Rte 113', 'A', $2, $3, $4, $5)`,
+    [primary.tlid, primary.zipl, primary.zipr, primary.state, primary.state_abbr]
+  );
+}
 
+/**
+ * Builds a throwaway geocoding database seeded with seedFixtureStreets().
+ * Returns the Pool itself (matching src/geocode.js's `db.query()`
+ * expectation) with a `close()` method attached that drops the whole
+ * throwaway database -- so existing call sites just need `await
+ * db.close()` instead of the old synchronous `db.close()`.
+ */
+async function makeDb() {
+  const { pool, drop } = await createTestDatabase();
+  await seedFixtureStreets(pool);
+  pool.close = drop;
+  return pool;
+}
+
+/**
+ * Same fixture data as makeDb(), but for tests that point a freshly
+ * required src/server.js (a separate process-wide module, with its own
+ * Pool) at the database via GEOCODING_DSN -- so this hands back the DSN
+ * itself rather than a connected Pool. drop() ends the setup pool used
+ * here and drops the database with FORCE, which also disconnects
+ * whatever pool server.js opened against it.
+ */
+async function makeFixtureDsn() {
+  const { pool, dsn, drop } = await createTestDatabase();
+  await seedFixtureStreets(pool);
+  return { dsn, drop };
+}
+
+/**
+ * Throwaway users/subscriptions database. Returns a Pool (via
+ * openUsersDb, which creates the users table) with a `close()` method
+ * that drops the whole throwaway database.
+ */
+async function makeUsersDb() {
+  const { openUsersDb } = require('../src/users');
+  const { dsn, drop } = await createTestDatabase({ postgis: false });
+  // openUsersDb opens its own pool against the same dsn; drop() ends the
+  // one createTestDatabase made (used only for CREATE DATABASE setup) and
+  // drops the database with FORCE, which disconnects db's pool too.
+  const db = await openUsersDb(dsn);
+  db.close = async () => {
+    await db.end();
+    await drop();
+  };
   return db;
 }
 
-module.exports = { makeDb, parseZipEntries };
+/**
+ * Spins up throwaway geocoding + users databases, points a freshly
+ * required src/server.js at them via env vars, and runs `callback({
+ * port, db, usersDb })` against a live instance of it. server.js opens
+ * its users pool eagerly at require time (not on first request), so
+ * every test needs a real (even if unused) throwaway users database --
+ * pointing USERS_DSN at one that doesn't exist would reject that promise
+ * with nothing to catch it.
+ *
+ * `seedStreets: false` skips loading the geocode fixture rows, for tests
+ * that only exercise user/quota/billing endpoints and never query
+ * streets at all.
+ */
+async function withTestServer(callback, { seedStreets = true } = {}) {
+  const geo = seedStreets
+    ? await makeFixtureDsn()
+    : await createTestDatabase({ postgis: false }).then(({ dsn, drop }) => ({ dsn, drop }));
+  const users = await createTestDatabase({ postgis: false }).then(({ dsn, drop }) => ({
+    dsn,
+    drop,
+  }));
+
+  process.env.GEOCODING_DSN = geo.dsn;
+  process.env.USERS_DSN = users.dsn;
+  delete require.cache[require.resolve('../src/server')];
+  const server = require('../src/server');
+  const httpServer = server.app.listen(0);
+  const usersDb = await server.usersDbPromise;
+
+  try {
+    return await callback({ port: httpServer.address().port, db: server.db, usersDb });
+  } finally {
+    httpServer.close();
+    await server.db.end();
+    await usersDb.end();
+    await geo.drop();
+    await users.drop();
+    delete process.env.GEOCODING_DSN;
+    delete process.env.USERS_DSN;
+  }
+}
+
+module.exports = {
+  makeDb,
+  makeFixtureDsn,
+  makeUsersDb,
+  withTestServer,
+  createTestDatabase,
+  parseZipEntries,
+  ADMIN_DSN,
+  SOCKET_HOST,
+};

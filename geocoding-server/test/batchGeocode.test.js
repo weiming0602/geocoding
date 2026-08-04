@@ -14,8 +14,8 @@ function writeTempFile(contents) {
   return filePath;
 }
 
-test('geocodes each line, mixing successes and failures', () => {
-  const db = makeDb();
+test('geocodes each line, mixing successes and failures', async () => {
+  const db = await makeDb();
   const filePath = writeTempFile(
     [
       '997 Pequawket Trl, Standish, ME 04091',
@@ -26,7 +26,7 @@ test('geocodes each line, mixing successes and failures', () => {
     ].join('\n')
   );
 
-  const results = geocodeBatch(db, filePath, { offsetFeet: 5 });
+  const results = await geocodeBatch(db, filePath, { offsetFeet: 5 });
 
   assert.equal(results.length, 3); // blank lines are skipped
   assert.equal(results[0].success, true);
@@ -37,48 +37,48 @@ test('geocodes each line, mixing successes and failures', () => {
   assert.match(results[2].error, /no street found/);
 
   fs.unlinkSync(filePath);
-  db.close();
+  await db.close();
 });
 
-test('missing file throws NotFoundError', () => {
-  const db = makeDb();
-  assert.throws(
+test('missing file throws NotFoundError', async () => {
+  const db = await makeDb();
+  await assert.rejects(
     () => geocodeBatch(db, 'C:\\definitely\\not\\a\\real\\path.txt'),
     NotFoundError
   );
-  db.close();
+  await db.close();
 });
 
-test('directory path throws ValidationError', () => {
-  const db = makeDb();
-  assert.throws(() => geocodeBatch(db, os.tmpdir()), ValidationError);
-  db.close();
+test('directory path throws ValidationError', async () => {
+  const db = await makeDb();
+  await assert.rejects(() => geocodeBatch(db, os.tmpdir()), ValidationError);
+  await db.close();
 });
 
-test('empty file throws ValidationError', () => {
-  const db = makeDb();
+test('empty file throws ValidationError', async () => {
+  const db = await makeDb();
   const filePath = writeTempFile('\n\n  \n');
-  assert.throws(() => geocodeBatch(db, filePath), ValidationError);
+  await assert.rejects(() => geocodeBatch(db, filePath), ValidationError);
   fs.unlinkSync(filePath);
-  db.close();
+  await db.close();
 });
 
-test('non-string filePath throws ValidationError', () => {
-  const db = makeDb();
-  assert.throws(() => geocodeBatch(db, undefined), ValidationError);
-  assert.throws(() => geocodeBatch(db, 42), ValidationError);
-  db.close();
+test('non-string filePath throws ValidationError', async () => {
+  const db = await makeDb();
+  await assert.rejects(() => geocodeBatch(db, undefined), ValidationError);
+  await assert.rejects(() => geocodeBatch(db, 42), ValidationError);
+  await db.close();
 });
 
-test('accepts files well beyond the old 5000-address cap', () => {
-  const db = makeDb();
+test('accepts files well beyond the old 5000-address cap', async () => {
+  const db = await makeDb();
   const filePath = writeTempFile(
     Array.from({ length: 8000 }, () => '1 Some St, Town, ME 00000').join('\n')
   );
-  const results = geocodeBatch(db, filePath);
+  const results = await geocodeBatch(db, filePath);
   assert.equal(results.length, 8000);
   fs.unlinkSync(filePath);
-  db.close();
+  await db.close();
 });
 
 test('readAddressContent parses lines the same way as readAddressLines, skipping blanks', () => {

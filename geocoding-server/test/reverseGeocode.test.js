@@ -40,37 +40,37 @@ test('roundToSideParity picks the nearest integer of the required parity', () =>
   assert.equal(roundToSideParity(10.9, 'right'), 10); // rounds to 11 (odd); 10 is the nearer even
 });
 
-test('reverseGeocode round-trips a known forward-geocoded point (odd/left)', () => {
-  const db = makeDb();
+test('reverseGeocode round-trips a known forward-geocoded point (odd/left)', async () => {
+  const db = await makeDb();
   // From the interpolate.js session: 997 Pequawket Trl -> (43.834390719401604, -70.77854947339969)
-  const result = reverseGeocode(db, 43.834390719401604, -70.77854947339969);
+  const result = await reverseGeocode(db, 43.834390719401604, -70.77854947339969);
   assert.equal(result.match.id, 12);
   assert.equal(result.side, 'left');
   assert.equal(result.number, 997);
   assert.ok(result.distanceMeters < 10);
-  db.close();
+  await db.close();
 });
 
-test('reverseGeocode round-trips a known forward-geocoded point (even/right)', () => {
-  const db = makeDb();
+test('reverseGeocode round-trips a known forward-geocoded point (even/right)', async () => {
+  const db = await makeDb();
   // 984 Pequawket Trl -> (43.83413979730152, -70.77834399095207)
-  const result = reverseGeocode(db, 43.83413979730152, -70.77834399095207);
+  const result = await reverseGeocode(db, 43.83413979730152, -70.77834399095207);
   assert.equal(result.match.id, 12);
   assert.equal(result.side, 'right');
   assert.equal(result.number, 984);
-  db.close();
+  await db.close();
 });
 
-test('reverseGeocode rejects invalid coordinates', () => {
-  const db = makeDb();
-  assert.throws(() => reverseGeocode(db, 200, -70), ValidationError);
-  assert.throws(() => reverseGeocode(db, 43, -200), ValidationError);
-  assert.throws(() => reverseGeocode(db, 'a', -70), ValidationError);
-  db.close();
+test('reverseGeocode rejects invalid coordinates', async () => {
+  const db = await makeDb();
+  await assert.rejects(() => reverseGeocode(db, 200, -70), ValidationError);
+  await assert.rejects(() => reverseGeocode(db, 43, -200), ValidationError);
+  await assert.rejects(() => reverseGeocode(db, 'a', -70), ValidationError);
+  await db.close();
 });
 
-test('reverseGeocode throws NotFoundError far from any street in the fixture', () => {
-  const db = makeDb();
-  assert.throws(() => reverseGeocode(db, 0, 0), NotFoundError);
-  db.close();
+test('reverseGeocode throws NotFoundError far from any street in the fixture', async () => {
+  const db = await makeDb();
+  await assert.rejects(() => reverseGeocode(db, 0, 0), NotFoundError);
+  await db.close();
 });
