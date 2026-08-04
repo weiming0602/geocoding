@@ -23,6 +23,7 @@ export default function CheckoutSection({ addressCount, onBack }: Props) {
   const [email, setEmail] = useState('');
   const [status, setStatus] = useState<Status>('idle');
   const [message, setMessage] = useState('');
+  const [serviceKey, setServiceKey] = useState('');
   const containerRef = useRef<View>(null);
   const emailRef = useRef(email);
   emailRef.current = email;
@@ -70,6 +71,7 @@ export default function CheckoutSection({ addressCount, onBack }: Props) {
                 return;
               }
               setStatus('success');
+              setServiceKey(body.serviceKey ?? '');
               setMessage(
                 body.stubbed
                   ? `Done (test mode, no real charge) — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
@@ -125,7 +127,20 @@ export default function CheckoutSection({ addressCount, onBack }: Props) {
       <View ref={containerRef} style={styles.paypalContainer} />
 
       {status === 'success' && (
-        <Text style={[styles.message, { color: colors.accent }]}>{message}</Text>
+        <>
+          <Text style={[styles.message, { color: colors.accent }]}>{message}</Text>
+          {!!serviceKey && (
+            <View style={styles.noteCard}>
+              <Text style={styles.noteText}>
+                Your service key — save this now. You'll need to enter it, along with your account
+                email, every time you run batch geocoding. There's no recovery flow if you lose it.
+              </Text>
+              <Text selectable style={styles.serviceKeyText}>
+                {serviceKey}
+              </Text>
+            </View>
+          )}
+        </>
       )}
       {status === 'error' && <Text style={[styles.message, styles.errorText]}>{message}</Text>}
 
@@ -195,6 +210,15 @@ const styles = StyleSheet.create({
   },
   errorText: {
     color: colors.errorText,
+  },
+  serviceKeyText: {
+    fontFamily: 'Lora_400Regular',
+    fontSize: 13,
+    color: colors.text,
+    backgroundColor: colors.neutral100,
+    borderRadius: radius.md,
+    padding: space[2],
+    marginTop: space[2],
   },
   spacing: {
     marginTop: space[2],

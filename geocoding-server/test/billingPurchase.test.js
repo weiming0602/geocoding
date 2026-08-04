@@ -14,7 +14,7 @@ const { withTestServer } = require('./helpers');
 test('POST /billing/purchase tops up an existing user and returns the new quota', () =>
   withTestServer(
     async ({ port, usersDb }) => {
-      await upsertUser(usersDb, 'alice@example.com', 5000);
+      const existing = await upsertUser(usersDb, 'alice@example.com', 5000);
       await recordUsage(usersDb, 'alice@example.com', 4800);
 
       const response = await fetch(`http://127.0.0.1:${port}/billing/purchase`, {
@@ -31,6 +31,8 @@ test('POST /billing/purchase tops up an existing user and returns the new quota'
       assert.equal(body.purchased, 1000);
       assert.equal(body.priceCents, 1500);
       assert.equal(body.stubbed, true);
+      // Topping up an existing account must not invalidate its service key.
+      assert.equal(body.serviceKey, existing.service_key);
 
       assert.equal((await getUser(usersDb, 'alice@example.com')).tier, 6000);
     },
@@ -50,6 +52,7 @@ test('POST /billing/purchase creates a new user if none exists yet', () =>
       const body = await response.json();
       assert.equal(body.tier, 500);
       assert.equal(body.usedThisPeriod, 0);
+      assert.match(body.serviceKey, /^mk_[0-9a-f]{48}$/);
     },
     { seedStreets: false }
   ));

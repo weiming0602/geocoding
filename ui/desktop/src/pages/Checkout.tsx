@@ -20,6 +20,7 @@ export default function Checkout() {
   const [email, setEmail] = useState('');
   const [status, setStatus] = useState<Status>('idle');
   const [message, setMessage] = useState('');
+  const [serviceKey, setServiceKey] = useState('');
   const containerRef = useRef<HTMLDivElement>(null);
   const emailRef = useRef(email);
   emailRef.current = email;
@@ -65,6 +66,7 @@ export default function Checkout() {
                 return;
               }
               setStatus('success');
+              setServiceKey(body.serviceKey ?? '');
               setMessage(
                 body.stubbed
                   ? `Done (test mode, no real charge) — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
@@ -127,9 +129,35 @@ export default function Checkout() {
       <div ref={containerRef} />
 
       {status === 'success' && (
-        <p className="card-body" style={{ color: 'var(--color-accent)', marginTop: 'var(--space-4)' }}>
-          {message}
-        </p>
+        <>
+          <p className="card-body" style={{ color: 'var(--color-accent)', marginTop: 'var(--space-4)' }}>
+            {message}
+          </p>
+          {serviceKey && (
+            <div
+              className="card"
+              style={{ background: 'var(--color-surface)', marginTop: 'var(--space-3)' }}
+            >
+              <div className="card-body">
+                <p style={{ margin: '0 0 var(--space-2)' }}>
+                  <strong>Your service key</strong> — save this now. You'll need to enter it, along
+                  with your account email, every time you run batch geocoding. There's no recovery
+                  flow if you lose it.
+                </p>
+                <code
+                  style={{
+                    display: 'block',
+                    padding: 'var(--space-2)',
+                    background: 'var(--color-bg)',
+                    wordBreak: 'break-all',
+                  }}
+                >
+                  {serviceKey}
+                </code>
+              </div>
+            </div>
+          )}
+        </>
       )}
       {status === 'error' && (
         <p className="card-body" style={{ color: '#a4402a', marginTop: 'var(--space-4)' }}>

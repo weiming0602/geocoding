@@ -24,6 +24,7 @@ type PickedFile = {
 
 export default function BatchGeocodeForm() {
   const [email, setEmail] = useState('');
+  const [serviceKey, setServiceKey] = useState('');
   const [filePath, setFilePath] = useState('');
   const [pickedFile, setPickedFile] = useState<PickedFile | null>(null);
   const [picking, setPicking] = useState(false);
@@ -40,8 +41,8 @@ export default function BatchGeocodeForm() {
   // that path off its own disk -- e.g. server and app on the same machine).
   const buildBatchSource = useCallback((): BatchSource => {
     const base = pickedFile ? { fileContent: pickedFile.content } : { filePath: filePath.trim() };
-    return { ...base, email: email.trim() };
-  }, [pickedFile, filePath, email]);
+    return { ...base, email: email.trim(), serviceKey: serviceKey.trim() };
+  }, [pickedFile, filePath, email, serviceKey]);
 
   const hasSource = Boolean(pickedFile) || filePath.trim().length > 0;
 
@@ -80,6 +81,10 @@ export default function BatchGeocodeForm() {
       setError('Enter your account email first.');
       return;
     }
+    if (!serviceKey.trim()) {
+      setError('Enter your service key first.');
+      return;
+    }
     if (!hasSource) {
       setResults(null);
       setError('Enter a file path or choose a file first.');
@@ -102,11 +107,15 @@ export default function BatchGeocodeForm() {
     } finally {
       setLoading(false);
     }
-  }, [email, hasSource, buildBatchSource]);
+  }, [email, serviceKey, hasSource, buildBatchSource]);
 
   const handleDownload = useCallback(async () => {
     if (!email.trim()) {
       setError('Enter your account email first.');
+      return;
+    }
+    if (!serviceKey.trim()) {
+      setError('Enter your service key first.');
       return;
     }
     if (!hasSource) {
@@ -140,7 +149,7 @@ export default function BatchGeocodeForm() {
     } finally {
       setDownloading(false);
     }
-  }, [email, hasSource, buildBatchSource]);
+  }, [email, serviceKey, hasSource, buildBatchSource]);
 
   const successCount = results ? results.filter((r) => r.success).length : 0;
   const successMarkers = (results ?? [])
@@ -167,9 +176,19 @@ export default function BatchGeocodeForm() {
         autoCorrect={false}
         keyboardType="email-address"
       />
+      <Text style={styles.label}>Service key</Text>
+      <TextInput
+        style={styles.input}
+        placeholder="mk_..."
+        placeholderTextColor={colors.neutral500}
+        value={serviceKey}
+        onChangeText={setServiceKey}
+        autoCapitalize="none"
+        autoCorrect={false}
+      />
       <Text style={styles.warningText}>
-        There's no password behind this — anyone who knows your account email could spend its
-        quota. Keep it private.
+        Sent to you when you purchased your plan. Both the email and this key are required to run
+        batch geocoding.
       </Text>
 
       <Text style={styles.label}>Resource file (one address per line)</Text>

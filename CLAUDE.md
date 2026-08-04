@@ -79,8 +79,15 @@ street_names, read-only from the server) and `geocoding_users`
 - `geocoding-server/src/emailDelivery.js` is a **deliberate stub** — logs
   and returns instead of sending. Every caller goes through this one
   function, so a real provider only needs to change this file.
-- No signup/auth/billing — `users.js`'s `upsertUser()` is a manual admin
-  operation; requests aren't authenticated.
+- No signup/login flow — `users.js`'s `upsertUser()` is a manual admin
+  operation, and account creation itself (via `/billing/purchase` or
+  `upsertUser`/`addToTier`) isn't authenticated. Batch geocoding itself
+  *is* now gated: every account gets an opaque `service_key` (generated
+  once, returned by `/billing/purchase`), and all three batch endpoints
+  require it alongside the email (see `quota.js`'s `checkQuota`) — email
+  alone is no longer enough to spend an account's quota. The read-only
+  `GET /quota` status check still only takes an email, by design (it
+  can't spend anything).
 - `ui/mobile` has no server-URL abstraction yet — check the relevant
   component before assuming the API base URL is configurable.
 - `ui/desktop` is a scaffold only (Vite + React + react-router, routes

@@ -5,6 +5,7 @@ const {
   currentPeriodStart,
   getUser,
   upsertUser,
+  verifyServiceKey,
   ensureCurrentPeriod,
   recordUsage,
   addToTier,
@@ -16,23 +17,42 @@ test('currentPeriodStart formats the first of the month', () => {
   assert.equal(currentPeriodStart(new Date(2026, 0, 31)), '2026-01-01');
 });
 
-test('upsertUser creates a new user with zero usage', async () => {
+test('upsertUser creates a new user with zero usage and a service key', async () => {
   const db = await makeUsersDb();
   const user = await upsertUser(db, 'alice@example.com', 10000);
   assert.equal(user.email, 'alice@example.com');
   assert.equal(user.tier, 10000);
   assert.equal(user.used_this_period, 0);
+  assert.match(user.service_key, /^mk_[0-9a-f]{48}$/);
   await db.close();
 });
 
-test('upsertUser on an existing email updates the tier without resetting usage', async () => {
+test('upsertUser on an existing email updates the tier without resetting usage or the service key', async () => {
   const db = await makeUsersDb();
-  await upsertUser(db, 'alice@example.com', 5000);
+  const created = await upsertUser(db, 'alice@example.com', 5000);
   await recordUsage(db, 'alice@example.com', 1200);
 
   const updated = await upsertUser(db, 'alice@example.com', 20000);
   assert.equal(updated.tier, 20000);
   assert.equal(updated.used_this_period, 1200);
+  assert.equal(updated.service_key, created.service_key);
+  await db.close();
+});
+
+test('verifyServiceKey returns the user when email and key match', async () => {
+  const db = await makeUsersDb();
+  const created = await upsertUser(db, 'alice@example.com', 5000);
+  const verified = await verifyServiceKey(db, 'alice@example.com', created.service_key);
+  assert.equal(verified.email, 'alice@example.com');
+  await db.close();
+});
+
+test('verifyServiceKey returns null for a wrong key, missing key, or unknown email', async () => {
+  const db = await makeUsersDb();
+  await upsertUser(db, 'alice@example.com', 5000);
+  assert.equal(await verifyServiceKey(db, 'alice@example.com', 'mk_wrong'), null);
+  assert.equal(await verifyServiceKey(db, 'alice@example.com', undefined), null);
+  assert.equal(await verifyServiceKey(db, 'nobody@example.com', 'mk_wrong'), null);
   await db.close();
 });
 
@@ -87,13 +107,14 @@ test('addToTier creates a new user with the given tier', async () => {
   await db.close();
 });
 
-test('addToTier tops up an existing tier without resetting usage', async () => {
+test('addToTier tops up an existing tier without resetting usage or the service key', async () => {
   const db = await makeUsersDb();
-  await upsertUser(db, 'frank@example.com', 5000);
+  const created = await upsertUser(db, 'frank@example.com', 5000);
   await recordUsage(db, 'frank@example.com', 4800);
 
   const updated = await addToTier(db, 'frank@example.com', 1000);
   assert.equal(updated.tier, 6000);
   assert.equal(updated.used_this_period, 4800);
+  assert.equal(updated.service_key, created.service_key);
   await db.close();
 });

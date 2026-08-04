@@ -1,3 +1,5 @@
+const crypto = require('crypto');
+
 const { Pool } = require('./db');
 
 const CREATE_USERS_TABLE_SQL = `
@@ -6,15 +8,37 @@ CREATE TABLE IF NOT EXISTS users (
   email TEXT UNIQUE NOT NULL,
   tier INTEGER NOT NULL,
   period_start TEXT NOT NULL,
-  used_this_period INTEGER NOT NULL DEFAULT 0
+  used_this_period INTEGER NOT NULL DEFAULT 0,
+  service_key TEXT UNIQUE
 );
+`;
+
+// Postgres treats ADD COLUMN IF NOT EXISTS as a no-op when the column's
+// already there, so this is safe to run every time openUsersDb() does --
+// existing databases (created before service_key existed) pick it up
+// without a separate migration step.
+const ADD_SERVICE_KEY_COLUMN_SQL = `
+ALTER TABLE users ADD COLUMN IF NOT EXISTS service_key TEXT UNIQUE;
 `;
 
 /** Opens (creating the table if needed) the users/subscriptions database. */
 async function openUsersDb(dsn) {
   const pool = new Pool({ connectionString: dsn });
   await pool.query(CREATE_USERS_TABLE_SQL);
+  await pool.query(ADD_SERVICE_KEY_COLUMN_SQL);
   return pool;
+}
+
+/**
+ * A new account's service key -- presented alongside its email on every
+ * batch-geocoding request (see quota.js's checkQuota) so that knowing an
+ * account's email alone isn't enough to spend its quota. Generated once,
+ * on first purchase/creation; upsertUser() and addToTier() never
+ * regenerate an existing account's key on top-up, since that would break
+ * anything already using it.
+ */
+function generateServiceKey() {
+  return `mk_${crypto.randomBytes(24).toString('hex')}`;
 }
 
 /** First-of-month date string (e.g. "2026-07-01") for the current billing period. */
@@ -27,16 +51,28 @@ async function getUser(db, email) {
   return rows[0];
 }
 
-/** Manual admin operation: creates a user or updates an existing one's tier. */
+/**
+ * Manual admin operation: creates a user or updates an existing one's
+ * tier. A fresh service_key is only ever used on the INSERT branch (the
+ * ON CONFLICT update doesn't touch it), so an existing account keeps
+ * whatever key it already has.
+ */
 async function upsertUser(db, email, tier) {
   const { rows } = await db.query(
-    `INSERT INTO users (email, tier, period_start, used_this_period)
-     VALUES ($1, $2, $3, 0)
+    `INSERT INTO users (email, tier, period_start, used_this_period, service_key)
+     VALUES ($1, $2, $3, 0, $4)
      ON CONFLICT (email) DO UPDATE SET tier = excluded.tier
      RETURNING *`,
-    [email, tier, currentPeriodStart()]
+    [email, tier, currentPeriodStart(), generateServiceKey()]
   );
   return rows[0];
+}
+
+/** Returns the user row if email+serviceKey match an existing account, else null. */
+async function verifyServiceKey(db, email, serviceKey) {
+  const user = await getUser(db, email);
+  if (!user || !serviceKey || user.service_key !== serviceKey) return null;
+  return user;
 }
 
 /**
@@ -70,11 +106,11 @@ async function recordUsage(db, email, count) {
  */
 async function addToTier(db, email, amount) {
   const { rows } = await db.query(
-    `INSERT INTO users (email, tier, period_start, used_this_period)
-     VALUES ($1, $2, $3, 0)
+    `INSERT INTO users (email, tier, period_start, used_this_period, service_key)
+     VALUES ($1, $2, $3, 0, $4)
      ON CONFLICT (email) DO UPDATE SET tier = users.tier + excluded.tier
      RETURNING *`,
-    [email, amount, currentPeriodStart()]
+    [email, amount, currentPeriodStart(), generateServiceKey()]
   );
   return rows[0];
 }
@@ -84,6 +120,7 @@ module.exports = {
   currentPeriodStart,
   getUser,
   upsertUser,
+  verifyServiceKey,
   ensureCurrentPeriod,
   recordUsage,
   addToTier,

@@ -57,15 +57,17 @@ export type BatchGeocodeResponse = {
 // What to send batch endpoints: a path the server can read off its own
 // disk, or (added so a client with no server-reachable filesystem path --
 // e.g. a phone, or a browser -- can upload a picked file's contents
-// directly) raw file content. `email` is required on all three batch
-// endpoints (plain run, ZIP download, and email-delivery) -- quota is
-// tracked and enforced against it the same way on all three, not just
-// email-delivery. There's no password/API key behind that email, by
-// design (see CLAUDE.md's "Known gaps") -- keeping it simple for a
-// straightforward geocoding service, at the cost of anyone who knows an
-// account's email being able to spend its quota. Worth a clear warning
-// in the UI, not worth building real auth for at this stage.
-export type BatchSource = ({ filePath: string } | { fileContent: string }) & { email: string };
+// directly) raw file content. `email` and `serviceKey` are both required
+// on all three batch endpoints (plain run, ZIP download, and
+// email-delivery) -- quota is tracked and enforced against the pair the
+// same way on all three. The key is issued once at purchase time (in
+// POST /billing/purchase's response) and must be presented alongside
+// the email on every batch request, so knowing an account's email alone
+// isn't enough to spend its quota.
+export type BatchSource = ({ filePath: string } | { fileContent: string }) & {
+  email: string;
+  serviceKey: string;
+};
 
 // GET /quota?email=...
 export type QuotaStatus = {

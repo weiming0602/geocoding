@@ -10,6 +10,7 @@ const MAX_MARKERS_FOR_MAP = 300;
 
 export default function Batch() {
   const [email, setEmail] = useState('');
+  const [serviceKey, setServiceKey] = useState('');
   const [filePath, setFilePath] = useState('');
   const [pickedFile, setPickedFile] = useState<{ name: string; content: string } | null>(null);
   const [loading, setLoading] = useState(false);
@@ -22,8 +23,8 @@ export default function Batch() {
   const hasSource = Boolean(pickedFile) || filePath.trim().length > 0;
   const buildSource = useCallback((): BatchSource => {
     const base = pickedFile ? { fileContent: pickedFile.content } : { filePath: filePath.trim() };
-    return { ...base, email: email.trim() };
-  }, [pickedFile, filePath, email]);
+    return { ...base, email: email.trim(), serviceKey: serviceKey.trim() };
+  }, [pickedFile, filePath, email, serviceKey]);
 
   const handleChooseFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -37,6 +38,10 @@ export default function Batch() {
   const handleBatchGeocode = useCallback(async () => {
     if (!email.trim()) {
       setError('Enter your account email first.');
+      return;
+    }
+    if (!serviceKey.trim()) {
+      setError('Enter your service key first.');
       return;
     }
     if (!hasSource) {
@@ -56,11 +61,15 @@ export default function Batch() {
     } finally {
       setLoading(false);
     }
-  }, [email, hasSource, buildSource]);
+  }, [email, serviceKey, hasSource, buildSource]);
 
   const handleDownload = useCallback(async () => {
     if (!email.trim()) {
       setError('Enter your account email first.');
+      return;
+    }
+    if (!serviceKey.trim()) {
+      setError('Enter your service key first.');
       return;
     }
     if (!hasSource) {
@@ -85,7 +94,7 @@ export default function Batch() {
     } finally {
       setDownloading(false);
     }
-  }, [email, hasSource, buildSource]);
+  }, [email, serviceKey, hasSource, buildSource]);
 
   const successCount = results ? results.filter((r) => r.success).length : 0;
   const successMarkers = (results ?? [])
@@ -111,9 +120,19 @@ export default function Batch() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
             />
+          </div>
+
+          <div className="field">
+            <label>Service key</label>
+            <input
+              className="input"
+              placeholder="mk_..."
+              value={serviceKey}
+              onChange={(e) => setServiceKey(e.target.value)}
+            />
             <p className="text-muted" style={{ fontSize: 11, marginTop: 4 }}>
-              There's no password behind this — anyone who knows your account email could spend its
-              quota. Keep it private.
+              Sent to you when you purchased your plan. Both the email and this key are required to
+              run batch geocoding.
             </p>
           </div>
 

@@ -24,6 +24,7 @@ const {
   OutOfRangeError,
   QuotaExceededError,
   PaymentError,
+  UnauthorizedError,
 } = require('./errors');
 
 // Unix socket, peer-authenticated (no password) -- the socket path must be
@@ -75,21 +76,25 @@ app.post('/geocode', async (req, res) => {
 });
 
 // Quota is checked and consumed here the same way as /geocode/batch/email
-// below -- account email is the only thing gating usage (no password, no
-// API key; see CLAUDE.md's "Known gaps"). Deliberately simple for a
-// straightforward geocoding service: whoever holds an account's email can
-// spend its quota, so the frontend shows a warning about keeping it
-// private rather than this building out real authentication.
+// below -- both email and serviceKey must match an account (see
+// users.js's generateServiceKey/verifyServiceKey) before quota is even
+// looked at. Email alone used to be the only thing gating usage; a
+// service key is what actually stops someone who merely knows an
+// account's email from spending its quota.
 app.post('/geocode/batch', async (req, res) => {
   const email = req.body && req.body.email;
+  const serviceKey = req.body && req.body.serviceKey;
   try {
     if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
       throw new ValidationError('email must be a valid email address');
     }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
 
     const addresses = resolveAddresses(req.body);
     const usersDb = await usersDbPromise;
-    await checkQuota(usersDb, email, addresses.length);
+    await checkQuota(usersDb, email, serviceKey, addresses.length);
 
     const results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
     await useQuota(usersDb, email, addresses.length);
@@ -104,6 +109,7 @@ app.post('/geocode/batch', async (req, res) => {
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
     if (err instanceof QuotaExceededError) return res.status(429).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: 'internal error' });
@@ -112,22 +118,27 @@ app.post('/geocode/batch', async (req, res) => {
 
 app.post('/geocode/batch/download', async (req, res) => {
   const email = req.body && req.body.email;
+  const serviceKey = req.body && req.body.serviceKey;
   let results;
   let user;
   try {
     if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
       throw new ValidationError('email must be a valid email address');
     }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
 
     const addresses = resolveAddresses(req.body);
     const usersDb = await usersDbPromise;
-    user = await checkQuota(usersDb, email, addresses.length);
+    user = await checkQuota(usersDb, email, serviceKey, addresses.length);
 
     results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
     await useQuota(usersDb, email, addresses.length);
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
     if (err instanceof QuotaExceededError) return res.status(429).json({ error: err.message });
     console.error(err);
     return res.status(500).json({ error: 'internal error' });
@@ -148,15 +159,19 @@ app.post('/geocode/batch/download', async (req, res) => {
 app.post('/geocode/batch/email', async (req, res) => {
   const filePath = req.body && req.body.filePath;
   const email = req.body && req.body.email;
+  const serviceKey = req.body && req.body.serviceKey;
 
   try {
     if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
       throw new ValidationError('email must be a valid email address');
     }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
 
     const addresses = readAddressLines(filePath);
     const usersDb = await usersDbPromise;
-    const user = await checkQuota(usersDb, email, addresses.length);
+    const user = await checkQuota(usersDb, email, serviceKey, addresses.length);
 
     const results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
     const { successCsv, errorCsv } = resultsToCsv(results);
@@ -179,6 +194,7 @@ app.post('/geocode/batch/email', async (req, res) => {
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
     if (err instanceof QuotaExceededError) return res.status(429).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: 'internal error' });
@@ -255,6 +271,7 @@ app.post('/billing/purchase', async (req, res) => {
       purchased: tier.addressCount,
       priceCents: tier.priceCents,
       stubbed: capture.stubbed,
+      serviceKey: user.service_key,
     });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });

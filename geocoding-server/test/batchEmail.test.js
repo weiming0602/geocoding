@@ -15,7 +15,7 @@ function writeTempAddressFile(contents) {
 
 test('POST /geocode/batch/email streams the ZIP and records usage for a subscribed user', () =>
   withTestServer(async ({ port, usersDb }) => {
-    await upsertUser(usersDb, 'alice@example.com', 10000);
+    const user = await upsertUser(usersDb, 'alice@example.com', 10000);
 
     const addressFile = writeTempAddressFile(
       ['997 Pequawket Trl, Standish, ME 04091', '1 Nonexistent Way, Nowhere, ME 00000'].join('\n')
@@ -25,7 +25,11 @@ test('POST /geocode/batch/email streams the ZIP and records usage for a subscrib
       const response = await fetch(`http://127.0.0.1:${port}/geocode/batch/email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: addressFile, email: 'alice@example.com' }),
+        body: JSON.stringify({
+          filePath: addressFile,
+          email: 'alice@example.com',
+          serviceKey: user.service_key,
+        }),
       });
 
       assert.equal(response.status, 200);
@@ -50,7 +54,11 @@ test('POST /geocode/batch/email rejects an unknown email with 404', () =>
       const response = await fetch(`http://127.0.0.1:${port}/geocode/batch/email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: addressFile, email: 'nobody@example.com' }),
+        body: JSON.stringify({
+          filePath: addressFile,
+          email: 'nobody@example.com',
+          serviceKey: 'mk_whatever',
+        }),
       });
 
       assert.equal(response.status, 404);
@@ -61,9 +69,33 @@ test('POST /geocode/batch/email rejects an unknown email with 404', () =>
     }
   }));
 
+test('POST /geocode/batch/email rejects a wrong service key with 401', () =>
+  withTestServer(async ({ port, usersDb }) => {
+    await upsertUser(usersDb, 'alice@example.com', 10000);
+    const addressFile = writeTempAddressFile('997 Pequawket Trl, Standish, ME 04091');
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/geocode/batch/email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filePath: addressFile,
+          email: 'alice@example.com',
+          serviceKey: 'mk_wrong',
+        }),
+      });
+
+      assert.equal(response.status, 401);
+      const body = await response.json();
+      assert.match(body.error, /service key/);
+    } finally {
+      fs.unlinkSync(addressFile);
+    }
+  }));
+
 test('POST /geocode/batch/email rejects a request exceeding remaining quota with 429', () =>
   withTestServer(async ({ port, usersDb }) => {
-    await upsertUser(usersDb, 'bob@example.com', 1); // quota of 1
+    const user = await upsertUser(usersDb, 'bob@example.com', 1); // quota of 1
 
     const addressFile = writeTempAddressFile(
       ['997 Pequawket Trl, Standish, ME 04091', '984 Pequawket Trl, Standish, ME 04091'].join('\n')
@@ -73,7 +105,11 @@ test('POST /geocode/batch/email rejects a request exceeding remaining quota with
       const response = await fetch(`http://127.0.0.1:${port}/geocode/batch/email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: addressFile, email: 'bob@example.com' }),
+        body: JSON.stringify({
+          filePath: addressFile,
+          email: 'bob@example.com',
+          serviceKey: user.service_key,
+        }),
       });
 
       assert.equal(response.status, 429);
@@ -94,12 +130,35 @@ test('POST /geocode/batch/email rejects a malformed email with 400', () =>
       const response = await fetch(`http://127.0.0.1:${port}/geocode/batch/email`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ filePath: addressFile, email: 'not-an-email' }),
+        body: JSON.stringify({
+          filePath: addressFile,
+          email: 'not-an-email',
+          serviceKey: 'mk_whatever',
+        }),
       });
 
       assert.equal(response.status, 400);
       const body = await response.json();
       assert.match(body.error, /valid email/);
+    } finally {
+      fs.unlinkSync(addressFile);
+    }
+  }));
+
+test('POST /geocode/batch/email rejects a missing service key with 400', () =>
+  withTestServer(async ({ port }) => {
+    const addressFile = writeTempAddressFile('997 Pequawket Trl, Standish, ME 04091');
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/geocode/batch/email`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath: addressFile, email: 'alice@example.com' }),
+      });
+
+      assert.equal(response.status, 400);
+      const body = await response.json();
+      assert.match(body.error, /serviceKey/);
     } finally {
       fs.unlinkSync(addressFile);
     }
