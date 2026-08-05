@@ -77,7 +77,19 @@ street_names, read-only from the server) and `geocoding_users`
 - Server env vars (all optional): `GEOCODING_DSN` (default
   `postgresql://my_ai@%2Fvar%2Frun%2Fpostgresql/geocoding`), `USERS_DSN`
   (default `.../geocoding_users`), `PORT` (default 3001), `OFFSET_FEET`
-  (default 20).
+  (default 20), `PAYPAL_CLIENT_ID`/`PAYPAL_CLIENT_SECRET` (unset =
+  `billing.js`'s stub), `PAYPAL_API_BASE` (default
+  `https://api-m.sandbox.paypal.com` -- set to `https://api-m.paypal.com`
+  to go live).
+- Frontend PayPal env vars, both optional and both default to sandbox:
+  `VITE_PAYPAL_CLIENT_ID` (`ui/desktop`, e.g. via a gitignored
+  `ui/desktop/.env.local`) / `EXPO_PUBLIC_PAYPAL_CLIENT_ID` (`ui/mobile`)
+  set the Client ID the checkout page embeds; `VITE_PAYPAL_ENV` /
+  `EXPO_PUBLIC_PAYPAL_ENV` set to `live` swaps the checkout page's
+  sandbox-disclaimer copy for real-charge copy. These only change what
+  the page *says* and which PayPal app it talks to -- keep them in sync
+  with the server's own `PAYPAL_CLIENT_ID`/`PAYPAL_API_BASE`, which is
+  what actually decides sandbox vs. live.
 
 # Known gaps (don't assume these are done)
 - `geocoding-server/src/emailDelivery.js` is a **deliberate stub** — logs

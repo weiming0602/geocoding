@@ -6,10 +6,21 @@ import { findTier, formatUsd } from '../../shared/pricing';
 import { colors, radius, space } from '../../shared/theme';
 import ThemedButton from './ThemedButton';
 
-// Same rationale as ui/desktop/src/pages/Checkout.tsx: the app's real
-// PayPal sandbox Client ID (public by design). The Client Secret only
-// ever lives server-side, in geocoding-server's .env.
-const PAYPAL_CLIENT_ID = 'AUDJ7TGH_-VU3s7R4O3XBDn80KhOZWab-25TanFeikBPx4hYA8aT_F9tqgaiwHmYwSRoJMxY9ODEiT3P';
+// Same rationale as ui/desktop/src/pages/Checkout.tsx: the app's PayPal
+// Client ID (public by design). Defaults to the sandbox Client ID so a
+// fresh build never accidentally takes real money; set
+// EXPO_PUBLIC_PAYPAL_CLIENT_ID (Expo inlines EXPO_PUBLIC_* at build time)
+// to a live app's Client ID to go live. The Client Secret only ever
+// lives server-side, in geocoding-server's .env.
+const PAYPAL_CLIENT_ID =
+  process.env.EXPO_PUBLIC_PAYPAL_CLIENT_ID ||
+  'AUDJ7TGH_-VU3s7R4O3XBDn80KhOZWab-25TanFeikBPx4hYA8aT_F9tqgaiwHmYwSRoJMxY9ODEiT3P';
+
+// Purely cosmetic (which note/wording to show) -- the server is what
+// actually decides sandbox vs. live. Keep this in sync with that so the
+// checkout screen never tells a real paying customer "no real money
+// moves".
+const PAYPAL_ENV = process.env.EXPO_PUBLIC_PAYPAL_ENV === 'live' ? 'live' : 'sandbox';
 
 type Props = {
   addressCount: number;
@@ -75,7 +86,7 @@ export default function CheckoutSection({ addressCount, onBack }: Props) {
               setMessage(
                 body.stubbed
                   ? `Done (test mode, no real charge) — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
-                  : `Payment captured (sandbox) — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
+                  : `Payment captured${PAYPAL_ENV === 'sandbox' ? ' (sandbox)' : ''} — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
               );
             } catch (err) {
               setStatus('error');
@@ -106,9 +117,9 @@ export default function CheckoutSection({ addressCount, onBack }: Props) {
 
       <View style={styles.noteCard}>
         <Text style={styles.noteText}>
-          Sandbox mode: this runs PayPal's real sandbox order flow, captured server-side — no real
-          money moves, but the transaction itself is real (it'll show up in PayPal's sandbox
-          dashboard). Your account's quota is topped up for real either way.
+          {PAYPAL_ENV === 'live'
+            ? "This is a real charge. Completing checkout charges your PayPal account or card for the amount above — captured server-side once you approve it."
+            : "Sandbox mode: this runs PayPal's real sandbox order flow, captured server-side — no real money moves, but the transaction itself is real (it'll show up in PayPal's sandbox dashboard). Your account's quota is topped up for real either way."}
         </Text>
       </View>
 

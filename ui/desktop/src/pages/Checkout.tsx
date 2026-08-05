@@ -4,13 +4,21 @@ import { Link, useSearchParams } from 'react-router';
 import { DEFAULT_API_BASE_URL } from '../../../shared/api/client';
 import { findTier, formatUsd } from '../../../shared/pricing';
 
-// The app's real PayPal sandbox Client ID (public by design -- meant to
-// be embedded client-side, unlike the Client Secret, which only ever
-// lives server-side in geocoding-server's .env). Override via
-// VITE_PAYPAL_CLIENT_ID for a different app/environment.
+// The app's PayPal Client ID (public by design -- meant to be embedded
+// client-side, unlike the Client Secret, which only ever lives
+// server-side in geocoding-server's .env). Defaults to the sandbox
+// Client ID so a fresh checkout of this repo never accidentally takes
+// real money; set VITE_PAYPAL_CLIENT_ID (e.g. in ui/desktop/.env.local,
+// gitignored) to a live app's Client ID to go live.
 const PAYPAL_CLIENT_ID =
   import.meta.env.VITE_PAYPAL_CLIENT_ID ||
   'AUDJ7TGH_-VU3s7R4O3XBDn80KhOZWab-25TanFeikBPx4hYA8aT_F9tqgaiwHmYwSRoJMxY9ODEiT3P';
+
+// Purely cosmetic (which banner/wording to show) -- the server is what
+// actually decides sandbox vs. live, based on which PAYPAL_API_BASE it
+// was started with. Keep this in sync with that so the checkout page
+// never tells a real paying customer "no real money moves".
+const PAYPAL_ENV = import.meta.env.VITE_PAYPAL_ENV === 'live' ? 'live' : 'sandbox';
 
 type Status = 'idle' | 'error' | 'success';
 
@@ -70,7 +78,7 @@ export default function Checkout() {
               setMessage(
                 body.stubbed
                   ? `Done (test mode, no real charge) — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
-                  : `Payment captured (sandbox) — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
+                  : `Payment captured${PAYPAL_ENV === 'sandbox' ? ' (sandbox)' : ''} — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
               );
             } catch (err) {
               setStatus('error');
@@ -110,9 +118,18 @@ export default function Checkout() {
 
       <div className="card" style={{ background: 'var(--color-surface)', marginBottom: 'var(--space-4)' }}>
         <p className="card-body" style={{ margin: 0 }}>
-          <strong>Sandbox mode:</strong> this runs PayPal's real sandbox order flow, captured
-          server-side — no real money moves, but the transaction itself is real (it'll show up in
-          PayPal's sandbox dashboard). Your account's quota is topped up for real either way.
+          {PAYPAL_ENV === 'live' ? (
+            <>
+              <strong>This is a real charge.</strong> Completing checkout charges your PayPal
+              account or card for the amount above — captured server-side once you approve it.
+            </>
+          ) : (
+            <>
+              <strong>Sandbox mode:</strong> this runs PayPal's real sandbox order flow, captured
+              server-side — no real money moves, but the transaction itself is real (it'll show up
+              in PayPal's sandbox dashboard). Your account's quota is topped up for real either way.
+            </>
+          )}
         </p>
       </div>
 
