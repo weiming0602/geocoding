@@ -2,6 +2,7 @@ import React from 'react';
 import { Image, StyleSheet, Text, View } from 'react-native';
 
 import { colors, radius, space } from '../../shared/theme';
+import FeedbackForm from './FeedbackForm';
 
 const chestnutImage = require('../assets/help/chestnut-91-left.png');
 const sawyerImage = require('../assets/help/sawyer-26-right.png');
@@ -88,6 +89,9 @@ export default function HelpContent() {
         each calendar month; an email-delivery request that would exceed the remaining quota is
         rejected up front, before any addresses are processed.
       </Text>
+
+      <Text style={styles.heading}>Still have a question?</Text>
+      <FeedbackForm />
     </View>
   );
 }

@@ -1,3 +1,5 @@
+import FeedbackForm from '../components/FeedbackForm';
+
 export default function Help() {
   return (
     <div style={{ maxWidth: 720 }}>
@@ -84,6 +86,9 @@ export default function Help() {
         each calendar month; an email-delivery request that would exceed the remaining quota is
         rejected up front, before any addresses are processed.
       </p>
+
+      <h2 style={{ marginTop: 'var(--space-6)' }}>Still have a question?</h2>
+      <FeedbackForm />
     </div>
   );
 }

@@ -14,8 +14,9 @@ const { resultsToCsv } = require('./resultsCsv');
 const { buildZip } = require('./zip');
 const { reverseGeocode } = require('./reverseGeocode');
 const { openUsersDb, getUser, ensureCurrentPeriod, addToTier } = require('./users');
+const { ensureFeedbackTable, submitFeedback } = require('./feedback');
 const { checkQuota, useQuota } = require('./quota');
-const { sendResultsEmail, sendServiceKeyEmail } = require('./emailDelivery');
+const { sendResultsEmail, sendServiceKeyEmail, sendFeedbackNotification } = require('./emailDelivery');
 const { findTier } = require('./pricing');
 const { captureOrder } = require('./billing');
 const {
@@ -51,7 +52,10 @@ function resolveAddresses(body) {
 // in db.js); never add a write path against this pool (only usersDb is
 // writable, via src/users.js).
 const db = createReadOnlyPool(GEOCODING_DSN);
-const usersDbPromise = openUsersDb(USERS_DSN);
+const usersDbPromise = openUsersDb(USERS_DSN).then(async (pool) => {
+  await ensureFeedbackTable(pool);
+  return pool;
+});
 
 const app = express();
 app.use(cors());
@@ -288,6 +292,55 @@ app.post('/billing/purchase', async (req, res) => {
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof PaymentError) return res.status(402).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Private comment/question intake -- there's no public listing or reply
+// endpoint (see feedback.js), so this is one-way: a comment goes into
+// Postgres and the site owner gets an email notification (falls back to
+// a log-only stub without FEEDBACK_NOTIFY_EMAIL configured) and replies
+// directly, outside the app, to whatever email the commenter left.
+// `name` is unvalidated free text, not a verified identity -- a
+// nickname or "anonymous" is fine.
+const FEEDBACK_MESSAGE_MAX_LENGTH = 5000;
+const FEEDBACK_NAME_MAX_LENGTH = 200;
+
+app.post('/feedback', async (req, res) => {
+  const { name, email, message } = req.body || {};
+  try {
+    if (typeof message !== 'string' || !message.trim()) {
+      throw new ValidationError('message must be a non-empty string');
+    }
+    if (message.length > FEEDBACK_MESSAGE_MAX_LENGTH) {
+      throw new ValidationError(`message must be at most ${FEEDBACK_MESSAGE_MAX_LENGTH} characters`);
+    }
+    if (name !== undefined && name !== null && name !== '') {
+      if (typeof name !== 'string' || name.length > FEEDBACK_NAME_MAX_LENGTH) {
+        throw new ValidationError(`name must be a string of at most ${FEEDBACK_NAME_MAX_LENGTH} characters`);
+      }
+    }
+    if (email !== undefined && email !== null && email !== '') {
+      if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+        throw new ValidationError('email must be a valid email address if provided');
+      }
+    }
+
+    const usersDb = await usersDbPromise;
+    await submitFeedback(usersDb, {
+      name: name || null,
+      email: email || null,
+      message: message.trim(),
+    });
+
+    // Saved above regardless -- a notification hiccup shouldn't turn an
+    // already-recorded comment into a failed request for the visitor.
+    await sendFeedbackNotification({ name: name || null, email: email || null, message: message.trim() });
+
+    res.json({ received: true });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: 'internal error' });
   }

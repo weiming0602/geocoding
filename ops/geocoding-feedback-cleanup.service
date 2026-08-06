@@ -1,0 +1,27 @@
+# systemd service for geocoding-server/scripts/cleanup-feedback.js --
+# deletes feedback comments (and any email addresses left with them)
+# older than 90 days. Triggered by geocoding-feedback-cleanup.timer, not
+# meant to be started directly (though `systemctl start` works fine for
+# a manual test run).
+#
+# Install (on the Lightsail instance, adjust paths/DSN for that box):
+#   sudo cp ops/geocoding-feedback-cleanup.service ops/geocoding-feedback-cleanup.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now geocoding-feedback-cleanup.timer
+#
+# Check status / logs:
+#   systemctl status geocoding-feedback-cleanup.timer
+#   journalctl -u geocoding-feedback-cleanup.service
+
+[Unit]
+Description=Delete feedback comments older than 90 days
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/my_ai/projects/geocoding/geocoding-server
+# USERS_DSN should point at the Lightsail Database's network endpoint in
+# production, not the local Unix socket used in dev -- see CLAUDE.md's
+# "Environment / data layout".
+Environment=USERS_DSN=postgresql://my_ai@%2Fvar%2Frun%2Fpostgresql/geocoding_users
+# Adjust this path to wherever `which node` resolves on the actual box.
+ExecStart=/home/my_ai/.local/node/bin/node scripts/cleanup-feedback.js 90

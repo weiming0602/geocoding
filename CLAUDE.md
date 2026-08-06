@@ -9,7 +9,7 @@ interpolation), `geocoding-server/` (Express API), `ui/mobile/`
 algorithm in detail — read that before touching `geocode.js` or
 `interpolate.py`. Two Postgres databases: `geocoding` (streets/
 street_names, read-only from the server) and `geocoding_users`
-(subscriptions/quota, read-write).
+(subscriptions/quota/feedback, read-write).
 
 # Bash commands
 - Python: `.venv\Scripts\python -m geocoding.update_state "dbname=geocoding" --state ME`
@@ -24,8 +24,11 @@ street_names, read-only from the server) and `geocoding_users`
   `tests/conftest.py`'s `dsn` fixture)
 - Server: `cd geocoding-server && node src/server.js`
 - Server tests: `cd geocoding-server && node --test` — **not** `npm test`,
-  that script is a placeholder stub. 93 tests, same throwaway-database-
+  that script is a placeholder stub. 124 tests, same throwaway-database-
   per-test pattern (see `test/helpers.js`).
+- Feedback cleanup (deletes comments older than N days, default 90):
+  `cd geocoding-server && node scripts/cleanup-feedback.js [days]` -- see
+  `ops/` for the systemd timer/service pair and a crontab alternative.
 - Mobile app: `cd ui/mobile && npm start`
 - Desktop app: `cd ui/desktop && npm run dev`
 
@@ -95,6 +98,12 @@ street_names, read-only from the server) and `geocoding_users`
   key after `/billing/purchase`, via AWS SES. Use an IAM user scoped to
   only `ses:SendEmail`; `SES_FROM_EMAIL` must be a verified identity, and
   while the SES account is in its sandbox, so must the recipient.
+- `FEEDBACK_NOTIFY_EMAIL` (optional -- unset = stub) is where `POST
+  /feedback` emails you when a comment/question comes in; uses the same
+  SES credentials above. The comment is saved in `geocoding_users`'
+  `feedback` table either way (see `feedback.js`) -- there's no public
+  listing or reply endpoint, reviewing/replying is manual (psql + email),
+  same as `users.js`'s `upsertUser`.
 
 # Known gaps (don't assume these are done)
 - `geocoding-server/src/emailDelivery.js`'s `sendResultsEmail` (the
