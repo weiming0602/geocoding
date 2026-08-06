@@ -22,9 +22,14 @@ street_names, read-only from the server) and `geocoding_users`
 - Python tests: `.venv\Scripts\python -m pytest` (37 tests in `tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)
-- Server: `cd geocoding-server && node src/server.js`
+- Server: `cd geocoding-server && node src/server.js` -- for anything
+  beyond local dev (i.e. actually deployed), run it via `ops/
+  geocoding-server.service` instead: restarts on crash/reboot, and
+  captures stdout (morgan's per-request log lines, plus every existing
+  `console.log`/`console.error`) durably via journald instead of an
+  ephemeral terminal or `/tmp` file.
 - Server tests: `cd geocoding-server && node --test` — **not** `npm test`,
-  that script is a placeholder stub. 124 tests, same throwaway-database-
+  that script is a placeholder stub. 134 tests, same throwaway-database-
   per-test pattern (see `test/helpers.js`).
 - Feedback cleanup (deletes comments older than N days, default 90):
   `cd geocoding-server && node scripts/cleanup-feedback.js [days]` -- see

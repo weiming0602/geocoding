@@ -1,0 +1,38 @@
+# systemd service for the actual geocoding-server API process (not a
+# one-off job, unlike geocoding-annual-update/geocoding-feedback-cleanup
+# -- this one is meant to run continuously). Two things this buys over
+# starting it by hand in a terminal: (1) it restarts automatically if
+# the process crashes or the box reboots, instead of silently staying
+# down; (2) stdout/stderr -- including morgan's per-request log lines
+# (server.js) and every console.log/console.error already in the code
+# (billing, email delivery, etc.) -- are captured durably by journald,
+# not lost when a terminal session ends or /tmp gets cleared.
+#
+# Install (on the Lightsail instance, adjust WorkingDirectory/paths/DSNs
+# and the real .env for that box -- see CLAUDE.md's "Environment / data
+# layout"):
+#   sudo cp ops/geocoding-server.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now geocoding-server
+#
+# Check status / logs:
+#   systemctl status geocoding-server
+#   journalctl -u geocoding-server -f          # tail live
+#   journalctl -u geocoding-server --since today
+
+[Unit]
+Description=geocoding-server API
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+WorkingDirectory=/home/my_ai/projects/geocoding/geocoding-server
+# dotenv (loaded at the top of server.js) reads the real .env from this
+# same directory -- no secrets belong in this unit file.
+# Adjust this path to wherever `which node` resolves on the actual box.
+ExecStart=/home/my_ai/.local/node/bin/node src/server.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

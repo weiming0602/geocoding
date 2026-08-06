@@ -2,6 +2,7 @@ require('dotenv').config();
 
 const express = require('express');
 const cors = require('cors');
+const morgan = require('morgan');
 const { createReadOnlyPool } = require('./db');
 
 const { geocode } = require('./geocode');
@@ -72,6 +73,14 @@ const usersDbPromise = openUsersDb(USERS_DSN).then(async (pool) => {
 
 const app = express();
 app.use(cors());
+// Only when actually running as the server (not when test/helpers.js's
+// withTestServer requires this module) -- otherwise every test request
+// across the whole suite would print a log line, drowning out real
+// output. Goes to stdout; under systemd (see ops/geocoding-server.service)
+// that's captured by journald automatically, no separate log file needed.
+if (require.main === module) {
+  app.use(morgan('combined'));
+}
 // batchGeocode.js has no cap on address count, but Express itself still
 // needs some finite body-size ceiling for fileContent uploads (default
 // 100kb is far too small). This is just that technical floor, not a
