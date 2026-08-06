@@ -107,11 +107,18 @@ street_names, read-only from the server) and `geocoding_users`
 - `ALLOW_TEST_EMPTY_SERVICE_KEY` (optional, default off) lets all three
   batch endpoints accept an empty `serviceKey` for any known email,
   purely to skip looking one up while testing (see `quota.js`'s
-  `checkQuota`) -- a *wrong* key is still rejected either way. **Never
-  set this anywhere real customers' quota is at stake**: there's no
-  separate staging server in this setup, so if a box is also taking
-  live payments, this must stay unset there. Logs a startup warning
-  when enabled.
+  `checkQuota`) -- a *wrong* key is still rejected either way. It also
+  lets `/geocode/batch` and `/geocode/batch/download` accept no email at
+  all, running as a pure smoke test with no account/quota touched (see
+  the `emailProvided` checks in `server.js`); `/geocode/batch/email`
+  still always requires a real email, since that's the address results
+  actually get sent to. **Never set this anywhere real customers' quota
+  is at stake**: there's no separate staging server in this setup, so if
+  a box is also taking live payments, this must stay unset there. Logs a
+  startup warning when enabled. Both apps' Batch screens have no
+  client-side check that email/serviceKey are non-empty either --
+  submitting blank just lets the server's response (success or a clear
+  error) decide.
 
 # Known gaps (don't assume these are done)
 - `geocoding-server/src/emailDelivery.js`'s `sendResultsEmail` (the

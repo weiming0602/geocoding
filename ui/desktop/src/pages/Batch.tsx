@@ -36,12 +36,8 @@ export default function Batch() {
   }, []);
 
   const handleBatchGeocode = useCallback(async () => {
-    if (!email.trim()) {
-      setError('Enter your account email first.');
-      return;
-    }
-    // No client-side check that serviceKey is non-empty -- the server
-    // decides whether an empty one is acceptable (see
+    // No client-side check that email/serviceKey are non-empty -- the
+    // server decides whether an empty one is acceptable (see
     // ALLOW_TEST_EMPTY_SERVICE_KEY in CLAUDE.md) and returns a clear
     // error either way.
     if (!hasSource) {
@@ -55,28 +51,29 @@ export default function Batch() {
     try {
       const response = await batchGeocode(buildSource());
       setResults(response.results);
-      setQuota({ remaining: response.remaining, tier: response.tier });
+      // Omitted entirely (not just zero) when the request ran in test
+      // mode with no email -- no account/quota was involved.
+      if (typeof response.tier === 'number' && typeof response.remaining === 'number') {
+        setQuota({ remaining: response.remaining, tier: response.tier });
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Batch geocoding failed.');
     } finally {
       setLoading(false);
     }
-  }, [email, serviceKey, hasSource, buildSource]);
+  }, [hasSource, buildSource]);
 
   const handleDownload = useCallback(async () => {
-    if (!email.trim()) {
-      setError('Enter your account email first.');
-      return;
-    }
     if (!hasSource) {
       setError('Enter a file path or choose a file first.');
       return;
     }
     setDownloading(true);
     setError(null);
+    setQuota(null);
     try {
       const { blob, quota: quotaHeader } = await batchGeocodeDownload(buildSource());
-      if (quotaHeader) setQuota(quotaHeader);
+      setQuota(quotaHeader);
       const objectUrl = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = objectUrl;
@@ -90,7 +87,7 @@ export default function Batch() {
     } finally {
       setDownloading(false);
     }
-  }, [email, serviceKey, hasSource, buildSource]);
+  }, [hasSource, buildSource]);
 
   const successCount = results ? results.filter((r) => r.success).length : 0;
   const successMarkers = (results ?? [])

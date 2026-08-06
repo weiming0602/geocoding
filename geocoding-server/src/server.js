@@ -39,11 +39,16 @@ const USERS_DSN =
 const PORT = Number(process.env.PORT) || 3001;
 const OFFSET_FEET = Number(process.env.OFFSET_FEET) || 20;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-// See quota.js's allowsEmptyServiceKeyForTesting -- lets an empty
-// serviceKey through validation so checkQuota can decide whether to
-// accept it. Read at request time (like billing.js's isConfigured()),
-// not cached at startup, so it can change without a restart. Never set
-// this anywhere real customers' quota is at stake.
+// Lets /geocode/batch and /geocode/batch/download run with no email and
+// no serviceKey at all -- a pure smoke test with no account/quota
+// involved (see the emailProvided checks in each route below), and lets
+// an email that IS given skip the serviceKey check specifically (see
+// quota.js's allowsEmptyServiceKeyForTesting). /geocode/batch/email
+// still requires a real email regardless -- that's the address the
+// results actually get sent to, not just an account lookup key. Read at
+// request time (like billing.js's isConfigured()), not cached at
+// startup, so it can change without a restart. Never set this anywhere
+// real customers' quota is at stake.
 function allowsTestEmptyServiceKey() {
   return process.env.ALLOW_TEST_EMPTY_SERVICE_KEY === 'true';
 }
@@ -96,18 +101,25 @@ app.post('/geocode', async (req, res) => {
 app.post('/geocode/batch', async (req, res) => {
   const email = req.body && req.body.email;
   const serviceKey = req.body && req.body.serviceKey;
+  const testMode = allowsTestEmptyServiceKey();
+  const emailProvided = typeof email === 'string' && email.trim().length > 0;
   try {
-    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+    if ((!testMode || emailProvided) && (typeof email !== 'string' || !EMAIL_PATTERN.test(email))) {
       throw new ValidationError('email must be a valid email address');
     }
-    if (
-      !allowsTestEmptyServiceKey() &&
-      (typeof serviceKey !== 'string' || !serviceKey.trim())
-    ) {
+    if (!testMode && (typeof serviceKey !== 'string' || !serviceKey.trim())) {
       throw new ValidationError('serviceKey must be a non-empty string');
     }
 
     const addresses = resolveAddresses(req.body);
+
+    if (!emailProvided) {
+      // testMode with no email at all -- a pure smoke test, no
+      // account/quota involved.
+      const results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
+      return res.json({ results });
+    }
+
     const usersDb = await usersDbPromise;
     await checkQuota(usersDb, email, serviceKey, addresses.length);
 
@@ -134,25 +146,30 @@ app.post('/geocode/batch', async (req, res) => {
 app.post('/geocode/batch/download', async (req, res) => {
   const email = req.body && req.body.email;
   const serviceKey = req.body && req.body.serviceKey;
+  const testMode = allowsTestEmptyServiceKey();
+  const emailProvided = typeof email === 'string' && email.trim().length > 0;
   let results;
-  let user;
+  let user = null;
   try {
-    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+    if ((!testMode || emailProvided) && (typeof email !== 'string' || !EMAIL_PATTERN.test(email))) {
       throw new ValidationError('email must be a valid email address');
     }
-    if (
-      !allowsTestEmptyServiceKey() &&
-      (typeof serviceKey !== 'string' || !serviceKey.trim())
-    ) {
+    if (!testMode && (typeof serviceKey !== 'string' || !serviceKey.trim())) {
       throw new ValidationError('serviceKey must be a non-empty string');
     }
 
     const addresses = resolveAddresses(req.body);
-    const usersDb = await usersDbPromise;
-    user = await checkQuota(usersDb, email, serviceKey, addresses.length);
 
-    results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
-    await useQuota(usersDb, email, addresses.length);
+    if (emailProvided) {
+      const usersDb = await usersDbPromise;
+      user = await checkQuota(usersDb, email, serviceKey, addresses.length);
+      results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
+      await useQuota(usersDb, email, addresses.length);
+    } else {
+      // testMode with no email at all -- a pure smoke test, no
+      // account/quota involved.
+      results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
+    }
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
@@ -170,7 +187,9 @@ app.post('/geocode/batch/download', async (req, res) => {
 
   res.setHeader('Content-Type', 'application/zip');
   res.setHeader('Content-Disposition', 'attachment; filename="batch-geocode-results.zip"');
-  res.setHeader('X-Quota', `${user.used_this_period + results.length}/${user.tier}`);
+  if (user) {
+    res.setHeader('X-Quota', `${user.used_this_period + results.length}/${user.tier}`);
+  }
   res.send(zipBuffer);
 });
 

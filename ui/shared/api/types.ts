@@ -47,11 +47,14 @@ export type BatchResult =
   | ({ address: string; success: true } & GeocodeResult)
   | { address: string; success: false; error: string };
 
+// usedThisPeriod/remaining/tier are omitted entirely (not just zero)
+// when ALLOW_TEST_EMPTY_SERVICE_KEY is set server-side and the request
+// carried no email -- a pure smoke test with no account/quota involved.
 export type BatchGeocodeResponse = {
   results: BatchResult[];
-  usedThisPeriod: number;
-  remaining: number;
-  tier: number;
+  usedThisPeriod?: number;
+  remaining?: number;
+  tier?: number;
 };
 
 // What to send batch endpoints: a path the server can read off its own
