@@ -147,3 +147,10 @@ street_names, read-only from the server) and `geocoding_users`
   separate install there is a nominally distinct type from each app's own
   copy to TypeScript) — map integration stays duplicated per-app unless
   npm workspaces get set up to hoist one shared install.
+- `batchGeocode.js`'s `geocodeAddressList` runs one address at a time
+  (not `Promise.all`'d) on purpose, to avoid exhausting the Postgres
+  pool on a large batch — see the comment there. **Planned:** bounded
+  concurrency (e.g. ~8 addresses in flight at once, under `pg`'s default
+  pool size of 10) instead of strictly sequential, for a real speedup on
+  large batches without that risk. Not done yet — don't assume batch
+  requests are parallelized.
