@@ -302,6 +302,12 @@ async function withTestServer(callback, { seedStreets = true } = {}) {
   delete process.env.AWS_SECRET_ACCESS_KEY;
   delete process.env.SES_FROM_EMAIL;
 
+  // Same rationale again -- a real .env with ALLOW_TEST_EMPTY_SERVICE_KEY
+  // set (see quota.js) should never make the "empty key is rejected by
+  // default" tests pass for the wrong reason.
+  const savedAllowTestEmptyServiceKey = process.env.ALLOW_TEST_EMPTY_SERVICE_KEY;
+  delete process.env.ALLOW_TEST_EMPTY_SERVICE_KEY;
+
   try {
     return await callback({ port: httpServer.address().port, db: server.db, usersDb });
   } finally {
@@ -318,6 +324,8 @@ async function withTestServer(callback, { seedStreets = true } = {}) {
     if (savedAwsSecretAccessKey !== undefined)
       process.env.AWS_SECRET_ACCESS_KEY = savedAwsSecretAccessKey;
     if (savedSesFromEmail !== undefined) process.env.SES_FROM_EMAIL = savedSesFromEmail;
+    if (savedAllowTestEmptyServiceKey !== undefined)
+      process.env.ALLOW_TEST_EMPTY_SERVICE_KEY = savedAllowTestEmptyServiceKey;
   }
 }
 

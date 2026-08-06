@@ -40,10 +40,10 @@ export default function Batch() {
       setError('Enter your account email first.');
       return;
     }
-    if (!serviceKey.trim()) {
-      setError('Enter your service key first.');
-      return;
-    }
+    // No client-side check that serviceKey is non-empty -- the server
+    // decides whether an empty one is acceptable (see
+    // ALLOW_TEST_EMPTY_SERVICE_KEY in CLAUDE.md) and returns a clear
+    // error either way.
     if (!hasSource) {
       setError('Enter a file path or choose a file first.');
       return;
@@ -66,10 +66,6 @@ export default function Batch() {
   const handleDownload = useCallback(async () => {
     if (!email.trim()) {
       setError('Enter your account email first.');
-      return;
-    }
-    if (!serviceKey.trim()) {
-      setError('Enter your service key first.');
       return;
     }
     if (!hasSource) {
