@@ -12,11 +12,6 @@ import { colors, radius, space } from '../../shared/theme';
 import BatchGeocodeMap from './BatchGeocodeMap';
 import ThemedButton from './ThemedButton';
 
-// Rendering a marker per result works well up to a few hundred, but a
-// few thousand DOM-backed MapLibre markers noticeably bogs down the
-// browser. Skip the map above this and point at the list/download instead.
-const MAX_MARKERS_FOR_MAP = 300;
-
 type PickedFile = {
   name: string;
   content: string;
@@ -261,15 +256,7 @@ export default function BatchGeocodeForm() {
               )}
             </View>
           ))}
-          {successMarkers.length > 0 && successMarkers.length < MAX_MARKERS_FOR_MAP && (
-            <BatchGeocodeMap markers={successMarkers} />
-          )}
-          {successMarkers.length >= MAX_MARKERS_FOR_MAP && (
-            <Text style={[styles.spacing, styles.mapSkippedText]}>
-              Map skipped: {successMarkers.length} successful results is too many to render as
-              markers smoothly. Use Download Results to get the coordinates instead.
-            </Text>
-          )}
+          {successMarkers.length > 0 && <BatchGeocodeMap markers={successMarkers} />}
         </View>
       )}
 
@@ -378,12 +365,6 @@ const styles = StyleSheet.create({
     fontFamily: 'Lora_400Regular',
     fontWeight: '600',
     color: colors.text,
-  },
-  mapSkippedText: {
-    fontFamily: 'Lora_400Regular',
-    color: colors.text,
-    opacity: 0.6,
-    fontStyle: 'italic',
   },
   errorText: {
     fontFamily: 'Lora_400Regular',

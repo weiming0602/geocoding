@@ -4,10 +4,6 @@ import { batchGeocode, batchGeocodeDownload } from '../../../shared/api/client';
 import type { BatchResult, BatchSource } from '../../../shared/api/types';
 import BatchMapView from '../components/BatchMapView';
 
-// A few thousand DOM-backed MapLibre markers noticeably bogs the browser
-// down; skip the map above this and point at the download instead.
-const MAX_MARKERS_FOR_MAP = 300;
-
 export default function Batch() {
   const [email, setEmail] = useState('');
   const [serviceKey, setServiceKey] = useState('');
@@ -225,16 +221,10 @@ export default function Batch() {
                   </tbody>
                 </table>
               </div>
-              {successMarkers.length > 0 && successMarkers.length < MAX_MARKERS_FOR_MAP && (
+              {successMarkers.length > 0 && (
                 <div style={{ marginTop: 'var(--space-4)' }}>
                   <BatchMapView markers={successMarkers} />
                 </div>
-              )}
-              {successMarkers.length >= MAX_MARKERS_FOR_MAP && (
-                <p className="text-muted" style={{ marginTop: 'var(--space-4)' }}>
-                  Map skipped: {successMarkers.length} successful results is too many to render smoothly.
-                  Use Download results to get the coordinates instead.
-                </p>
               )}
             </>
           )}
