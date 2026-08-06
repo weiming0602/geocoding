@@ -104,6 +104,14 @@ street_names, read-only from the server) and `geocoding_users`
   `feedback` table either way (see `feedback.js`) -- there's no public
   listing or reply endpoint, reviewing/replying is manual (psql + email),
   same as `users.js`'s `upsertUser`.
+- `ALLOW_TEST_EMPTY_SERVICE_KEY` (optional, default off) lets all three
+  batch endpoints accept an empty `serviceKey` for any known email,
+  purely to skip looking one up while testing (see `quota.js`'s
+  `checkQuota`) -- a *wrong* key is still rejected either way. **Never
+  set this anywhere real customers' quota is at stake**: there's no
+  separate staging server in this setup, so if a box is also taking
+  live payments, this must stay unset there. Logs a startup warning
+  when enabled.
 
 # Known gaps (don't assume these are done)
 - `geocoding-server/src/emailDelivery.js`'s `sendResultsEmail` (the

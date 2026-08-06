@@ -39,6 +39,14 @@ const USERS_DSN =
 const PORT = Number(process.env.PORT) || 3001;
 const OFFSET_FEET = Number(process.env.OFFSET_FEET) || 20;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+// See quota.js's allowsEmptyServiceKeyForTesting -- lets an empty
+// serviceKey through validation so checkQuota can decide whether to
+// accept it. Read at request time (like billing.js's isConfigured()),
+// not cached at startup, so it can change without a restart. Never set
+// this anywhere real customers' quota is at stake.
+function allowsTestEmptyServiceKey() {
+  return process.env.ALLOW_TEST_EMPTY_SERVICE_KEY === 'true';
+}
 
 // A client with no server-reachable filesystem path (e.g. a phone) sends the
 // picked file's contents directly instead; fileContent takes priority when
@@ -92,7 +100,10 @@ app.post('/geocode/batch', async (req, res) => {
     if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
       throw new ValidationError('email must be a valid email address');
     }
-    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+    if (
+      !allowsTestEmptyServiceKey() &&
+      (typeof serviceKey !== 'string' || !serviceKey.trim())
+    ) {
       throw new ValidationError('serviceKey must be a non-empty string');
     }
 
@@ -129,7 +140,10 @@ app.post('/geocode/batch/download', async (req, res) => {
     if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
       throw new ValidationError('email must be a valid email address');
     }
-    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+    if (
+      !allowsTestEmptyServiceKey() &&
+      (typeof serviceKey !== 'string' || !serviceKey.trim())
+    ) {
       throw new ValidationError('serviceKey must be a non-empty string');
     }
 
@@ -169,7 +183,10 @@ app.post('/geocode/batch/email', async (req, res) => {
     if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
       throw new ValidationError('email must be a valid email address');
     }
-    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+    if (
+      !allowsTestEmptyServiceKey() &&
+      (typeof serviceKey !== 'string' || !serviceKey.trim())
+    ) {
       throw new ValidationError('serviceKey must be a non-empty string');
     }
 
@@ -363,6 +380,13 @@ if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`geocoding-server listening on http://localhost:${PORT}`);
     console.log(`using database: ${GEOCODING_DSN}`);
+    if (allowsTestEmptyServiceKey()) {
+      console.warn(
+        '⚠ ALLOW_TEST_EMPTY_SERVICE_KEY is set -- batch geocoding accepts an empty ' +
+          'service key for ANY known email. Never enable this where real customers’ ' +
+          'quota is at stake.'
+      );
+    }
   });
 }
 

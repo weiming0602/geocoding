@@ -1,6 +1,16 @@
 const { getUser, verifyServiceKey, ensureCurrentPeriod, recordUsage } = require('./users');
 const { NotFoundError, QuotaExceededError, UnauthorizedError } = require('./errors');
 
+// Lets a local/test box skip entering a service key at all -- an empty
+// key is accepted for ANY known email, so it must never be set
+// anywhere real customers' quota is actually at stake (it defeats the
+// entire point of the service key: knowing just an email becomes
+// enough to spend that account's quota again). Off unless explicitly
+// enabled; server.js logs a loud startup warning when it's on.
+function allowsEmptyServiceKeyForTesting() {
+  return process.env.ALLOW_TEST_EMPTY_SERVICE_KEY === 'true';
+}
+
 /**
  * Looks up a user by email, verifies their service key matches (so
  * knowing an account's email alone isn't enough to spend its quota --
@@ -16,7 +26,8 @@ async function checkQuota(usersDb, email, serviceKey, requestedCount) {
   if (!user) {
     throw new NotFoundError(`no active subscription found for ${email}`);
   }
-  if (!(await verifyServiceKey(usersDb, email, serviceKey))) {
+  const skipKeyCheck = !serviceKey && allowsEmptyServiceKeyForTesting();
+  if (!skipKeyCheck && !(await verifyServiceKey(usersDb, email, serviceKey))) {
     throw new UnauthorizedError('service key is missing or does not match this account');
   }
 
