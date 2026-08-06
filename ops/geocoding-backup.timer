@@ -1,0 +1,16 @@
+# Fires geocoding-backup.service daily -- geocoding_users changes
+# continuously now that real payments/feedback are live, so this runs
+# far more often than the once-a-year TIGER update.
+#
+# Persistent=true means a run missed while the box was off gets caught
+# up at next boot instead of silently skipped.
+
+[Unit]
+Description=Run geocoding-backup.service daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

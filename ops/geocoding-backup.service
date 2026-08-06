@@ -1,0 +1,23 @@
+# systemd service for ops/backup-databases.sh -- pg_dumps both
+# `geocoding` and `geocoding_users` (the latter has real customer data:
+# accounts, service keys, quota, feedback) to a local backup directory,
+# pruning anything older than 14 days. Triggered by
+# geocoding-backup.timer, not meant to be started directly (though
+# `systemctl start` works fine for a manual test run).
+#
+# Install (on the Lightsail instance, adjust paths for that box -- and
+# see backup-databases.sh's own header for the local-disk-only caveat):
+#   sudo cp ops/geocoding-backup.service ops/geocoding-backup.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now geocoding-backup.timer
+#
+# Check status / logs:
+#   systemctl status geocoding-backup.timer
+#   journalctl -u geocoding-backup.service
+
+[Unit]
+Description=Back up geocoding and geocoding_users Postgres databases
+
+[Service]
+Type=oneshot
+ExecStart=/home/my_ai/projects/geocoding/ops/backup-databases.sh

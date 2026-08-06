@@ -31,6 +31,13 @@ street_names, read-only from the server) and `geocoding_users`
 - Server tests: `cd geocoding-server && node --test` — **not** `npm test`,
   that script is a placeholder stub. 134 tests, same throwaway-database-
   per-test pattern (see `test/helpers.js`).
+- Database backup (pg_dumps `geocoding` + `geocoding_users` -- the
+  latter has real customer accounts/service keys/quota/feedback, not
+  reconstructable from anywhere else -- to `~/backups/geocoding`,
+  pruning anything older than 14 days): `ops/backup-databases.sh` -- see
+  `ops/` for the systemd timer/service pair and a crontab alternative.
+  Local-disk-only as-is; see the script's own header for what changes
+  once this is actually deployed.
 - Feedback cleanup (deletes comments older than N days, default 90):
   `cd geocoding-server && node scripts/cleanup-feedback.js [days]` -- see
   `ops/` for the systemd timer/service pair and a crontab alternative.
