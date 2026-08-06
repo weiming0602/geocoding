@@ -90,11 +90,20 @@ street_names, read-only from the server) and `geocoding_users`
   the page *says* and which PayPal app it talks to -- keep them in sync
   with the server's own `PAYPAL_CLIENT_ID`/`PAYPAL_API_BASE`, which is
   what actually decides sandbox vs. live.
+- `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_REGION`/`SES_FROM_EMAIL`
+  (all optional -- unset = `emailDelivery.js`'s stub) email the service
+  key after `/billing/purchase`, via AWS SES. Use an IAM user scoped to
+  only `ses:SendEmail`; `SES_FROM_EMAIL` must be a verified identity, and
+  while the SES account is in its sandbox, so must the recipient.
 
 # Known gaps (don't assume these are done)
-- `geocoding-server/src/emailDelivery.js` is a **deliberate stub** — logs
-  and returns instead of sending. Every caller goes through this one
-  function, so a real provider only needs to change this file.
+- `geocoding-server/src/emailDelivery.js`'s `sendResultsEmail` (the
+  batch-results ZIP attachment) is a **deliberate stub** — logs and
+  returns instead of sending; a real ZIP-by-email path needs a raw MIME
+  message, not just the plain-text send `sendServiceKeyEmail` uses.
+  `sendServiceKeyEmail` (the purchase service-key email) is wired up for
+  real via AWS SES, falling back to the same stub pattern when SES env
+  vars aren't set.
 - No signup/login flow — `users.js`'s `upsertUser()` is a manual admin
   operation, and account creation itself (via `/billing/purchase` or
   `upsertUser`/`addToTier`) isn't authenticated. Batch geocoding itself

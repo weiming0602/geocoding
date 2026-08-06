@@ -15,7 +15,7 @@ const { buildZip } = require('./zip');
 const { reverseGeocode } = require('./reverseGeocode');
 const { openUsersDb, getUser, ensureCurrentPeriod, addToTier } = require('./users');
 const { checkQuota, useQuota } = require('./quota');
-const { sendResultsEmail } = require('./emailDelivery');
+const { sendResultsEmail, sendServiceKeyEmail } = require('./emailDelivery');
 const { findTier } = require('./pricing');
 const { captureOrder } = require('./billing');
 const {
@@ -262,6 +262,17 @@ app.post('/billing/purchase', async (req, res) => {
 
     const usersDb = await usersDbPromise;
     const user = await addToTier(usersDb, email, tier.addressCount);
+
+    // The purchase itself has already succeeded (money captured, quota
+    // granted) by this point -- an email hiccup shouldn't undo that or
+    // fail the request, so its outcome is only reported, never thrown.
+    const emailResult = await sendServiceKeyEmail(email, {
+      serviceKey: user.service_key,
+      tier: user.tier,
+      purchased: tier.addressCount,
+      priceCents: tier.priceCents,
+    });
+
     res.json({
       email: user.email,
       tier: user.tier,
@@ -272,6 +283,7 @@ app.post('/billing/purchase', async (req, res) => {
       priceCents: tier.priceCents,
       stubbed: capture.stubbed,
       serviceKey: user.service_key,
+      serviceKeyEmailed: emailResult.delivered,
     });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });

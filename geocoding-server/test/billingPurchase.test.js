@@ -33,6 +33,8 @@ test('POST /billing/purchase tops up an existing user and returns the new quota'
       assert.equal(body.stubbed, true);
       // Topping up an existing account must not invalidate its service key.
       assert.equal(body.serviceKey, existing.service_key);
+      // withTestServer clears SES env vars, so the email send is stubbed too.
+      assert.equal(body.serviceKeyEmailed, false);
 
       assert.equal((await getUser(usersDb, 'alice@example.com')).tier, 6000);
     },

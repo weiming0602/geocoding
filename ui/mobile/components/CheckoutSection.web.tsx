@@ -35,6 +35,7 @@ export default function CheckoutSection({ addressCount, onBack }: Props) {
   const [status, setStatus] = useState<Status>('idle');
   const [message, setMessage] = useState('');
   const [serviceKey, setServiceKey] = useState('');
+  const [serviceKeyEmailed, setServiceKeyEmailed] = useState(false);
   const containerRef = useRef<View>(null);
   const emailRef = useRef(email);
   emailRef.current = email;
@@ -83,6 +84,7 @@ export default function CheckoutSection({ addressCount, onBack }: Props) {
               }
               setStatus('success');
               setServiceKey(body.serviceKey ?? '');
+              setServiceKeyEmailed(Boolean(body.serviceKeyEmailed));
               setMessage(
                 body.stubbed
                   ? `Done (test mode, no real charge) — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
@@ -144,7 +146,10 @@ export default function CheckoutSection({ addressCount, onBack }: Props) {
             <View style={styles.noteCard}>
               <Text style={styles.noteText}>
                 Your service key — save this now. You'll need to enter it, along with your account
-                email, every time you run batch geocoding. There's no recovery flow if you lose it.
+                email, every time you run batch geocoding. There's no recovery flow if you lose it.{' '}
+                {serviceKeyEmailed
+                  ? "We've also emailed it to you, so it's not just on this screen."
+                  : "We couldn't confirm it was emailed to you, so this screen is the only copy right now — save it before you navigate away."}
               </Text>
               <Text selectable style={styles.serviceKeyText}>
                 {serviceKey}
