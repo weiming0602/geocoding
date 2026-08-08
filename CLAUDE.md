@@ -7,9 +7,13 @@ interpolation), `geocoding-server/` (Express API), `ui/mobile/`
 (Expo/React Native app), `ui/desktop/` (React web app).
 `geocoding-server/README.md` documents the matching/interpolation
 algorithm in detail — read that before touching `geocode.js` or
-`interpolate.py`. Two Postgres databases: `geocoding` (streets/
-street_names, read-only from the server) and `geocoding_users`
-(subscriptions/quota/feedback, read-write).
+`interpolate.py`. `DATA_SOURCES.md` documents where the underlying data
+itself comes from (TIGER/Line, Maine E911), its licensing, and how it
+stays current — read that before answering any question about data
+provenance/licensing or touching the ingest pipeline. Two Postgres
+databases: `geocoding` (streets/street_names, read-only from the
+server) and `geocoding_users` (subscriptions/quota/feedback,
+read-write).
 
 # Bash commands
 - Python: `.venv\Scripts\python -m geocoding.update_state "dbname=geocoding" --state ME`
