@@ -8,7 +8,12 @@ const { ValidationError, UpstreamError } = require('./errors');
 // noticeably more expensive than exact-match ones; both are why the
 // query below is kept to two clauses, not one per tag per word.
 const OVERPASS_URL = process.env.OVERPASS_URL || 'https://overpass-api.de/api/interpreter';
-const OVERPASS_TIMEOUT_SECONDS = 25;
+// Kept fairly short (rather than Overpass's own 180s max) so a single
+// attempt fails fast enough to leave room for a retry -- see
+// fetchOverpassWithRetry -- within a request/response cycle a user is
+// still willing to wait on.
+const OVERPASS_TIMEOUT_SECONDS = 15;
+const OVERPASS_MAX_ATTEMPTS = 2;
 const MAX_RESULTS = 200;
 const MAX_RADIUS_METERS = 25000;
 
@@ -68,6 +73,61 @@ function addressLineFromTags(tags) {
 }
 
 /**
+ * POSTs one attempt to Overpass and returns the parsed JSON body, or
+ * throws UpstreamError. The free instance is load-balanced across
+ * several backend mirrors (the "Announced endpoint" in
+ * https://overpass-api.de/api/status varies call to call) of uneven,
+ * fluctuating load -- an attempt landing on a busy one can time out
+ * even when Overpass overall has free capacity, so
+ * fetchOverpassWithRetry below gives a second attempt a chance to land
+ * somewhere lighter rather than failing the whole search on one slow
+ * backend. 429 (rate-limited) is not retried -- hitting the same 2-
+ * slot-per-IP limit again immediately would just make it worse.
+ */
+async function fetchOverpassOnce(overpassQuery) {
+  let response;
+  try {
+    response = await fetch(OVERPASS_URL, {
+      method: 'POST',
+      // Overpass returns 406 without both of these: an explicit
+      // Content-Type (Node's fetch, unlike a browser's, doesn't infer one
+      // for a plain string body) and a real User-Agent identifying the
+      // client (Node's default fetch UA gets filtered; Overpass's own
+      // usage policy asks callers to identify themselves anyway).
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'User-Agent': 'Meridian-Geocoding-Server/1.0 (+https://github.com/meridian-geocoding)',
+      },
+      body: overpassQuery,
+      signal: AbortSignal.timeout((OVERPASS_TIMEOUT_SECONDS + 3) * 1000),
+    });
+  } catch (err) {
+    throw new UpstreamError(`place search is temporarily unavailable: ${err.message}`);
+  }
+
+  if (response.status === 429) {
+    throw new UpstreamError('place search is rate-limited right now -- try again in a minute');
+  }
+  if (!response.ok) {
+    throw new UpstreamError(`place search is temporarily unavailable (status ${response.status})`);
+  }
+  return response.json();
+}
+
+async function fetchOverpassWithRetry(overpassQuery) {
+  let lastErr;
+  for (let attempt = 1; attempt <= OVERPASS_MAX_ATTEMPTS; attempt += 1) {
+    try {
+      return await fetchOverpassOnce(overpassQuery);
+    } catch (err) {
+      lastErr = err;
+      if (/rate-limited/.test(err.message)) throw err; // don't hammer a limit we just hit
+    }
+  }
+  throw lastErr;
+}
+
+/**
  * Searches Overpass for places near (latitude, longitude) matching
  * `query`, extracting a Meridian-geocodable address line from each
  * result that has one. Results with a name/coordinate but no usable
@@ -97,35 +157,7 @@ async function searchPlaces(query, latitude, longitude, radiusMeters) {
   }
 
   const overpassQuery = buildOverpassQuery(words, latitude, longitude, radiusMeters);
-
-  let response;
-  try {
-    response = await fetch(OVERPASS_URL, {
-      method: 'POST',
-      // Overpass returns 406 without both of these: an explicit
-      // Content-Type (Node's fetch, unlike a browser's, doesn't infer one
-      // for a plain string body) and a real User-Agent identifying the
-      // client (Node's default fetch UA gets filtered; Overpass's own
-      // usage policy asks callers to identify themselves anyway).
-      headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Meridian-Geocoding-Server/1.0 (+https://github.com/meridian-geocoding)',
-      },
-      body: overpassQuery,
-      signal: AbortSignal.timeout((OVERPASS_TIMEOUT_SECONDS + 5) * 1000),
-    });
-  } catch (err) {
-    throw new UpstreamError(`place search is temporarily unavailable: ${err.message}`);
-  }
-
-  if (response.status === 429) {
-    throw new UpstreamError('place search is rate-limited right now -- try again in a minute');
-  }
-  if (!response.ok) {
-    throw new UpstreamError(`place search is temporarily unavailable (status ${response.status})`);
-  }
-
-  const body = await response.json();
+  const body = await fetchOverpassWithRetry(overpassQuery);
   const elements = Array.isArray(body.elements) ? body.elements : [];
 
   const seen = new Set();
@@ -147,4 +179,11 @@ async function searchPlaces(query, latitude, longitude, radiusMeters) {
   return { results, skipped, truncated: results.length >= MAX_RESULTS };
 }
 
-module.exports = { searchPlaces, buildOverpassQuery, addressLineFromTags, MAX_RESULTS, MAX_RADIUS_METERS };
+module.exports = {
+  searchPlaces,
+  buildOverpassQuery,
+  addressLineFromTags,
+  MAX_RESULTS,
+  MAX_RADIUS_METERS,
+  OVERPASS_MAX_ATTEMPTS,
+};

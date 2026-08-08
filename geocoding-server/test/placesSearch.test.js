@@ -168,6 +168,52 @@ test(
   )
 );
 
+test('searchPlaces retries once and succeeds if a later attempt lands on a healthier backend', async () => {
+  const saved = global.fetch;
+  let calls = 0;
+  global.fetch = async () => {
+    calls += 1;
+    if (calls === 1) return { ok: false, status: 504 };
+    return {
+      ok: true,
+      json: async () => ({
+        elements: [
+          {
+            tags: {
+              name: 'Thai Palace',
+              'addr:housenumber': '10',
+              'addr:street': 'Main St',
+              'addr:postcode': '04101',
+            },
+          },
+        ],
+      }),
+    };
+  };
+  try {
+    const result = await searchPlaces('thai', 43.66, -70.26, 5000);
+    assert.equal(calls, 2);
+    assert.equal(result.results.length, 1);
+  } finally {
+    global.fetch = saved;
+  }
+});
+
+test('searchPlaces does not retry a 429 -- retrying a rate limit would only make it worse', async () => {
+  const saved = global.fetch;
+  let calls = 0;
+  global.fetch = async () => {
+    calls += 1;
+    return { ok: false, status: 429 };
+  };
+  try {
+    await assert.rejects(() => searchPlaces('thai', 43.66, -70.26, 5000), /rate-limited/);
+    assert.equal(calls, 1);
+  } finally {
+    global.fetch = saved;
+  }
+});
+
 test('searchPlaces validates its inputs before ever calling fetch', async () => {
   await assert.rejects(() => searchPlaces('', 43.66, -70.26, 5000), ValidationError);
   await assert.rejects(() => searchPlaces('thai', 'not-a-number', -70.26, 5000), ValidationError);

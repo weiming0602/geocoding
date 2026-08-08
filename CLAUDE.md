@@ -33,7 +33,7 @@ read-write).
   `console.log`/`console.error`) durably via journald instead of an
   ephemeral terminal or `/tmp` file.
 - Server tests: `cd geocoding-server && node --test` — **not** `npm test`,
-  that script is a placeholder stub. 147 tests, same throwaway-database-
+  that script is a placeholder stub. 149 tests, same throwaway-database-
   per-test pattern (see `test/helpers.js`); 1 pre-existing failure on
   non-Windows boxes (`zip.test.js`'s PowerShell-extraction check, `spawnSync
   powershell.exe ENOENT`) is expected and unrelated to any change here.
@@ -137,8 +137,15 @@ read-write).
   requires both an explicit `Content-Type` header (Node's `fetch`,
   unlike a browser's, won't infer one for a plain string body -- omitting
   it gets a 406) and a real `User-Agent` identifying the client (Node's
-  default fetch UA gets filtered by Overpass, also as a 406). Results
-  need `addr:housenumber` + `addr:street` + `addr:postcode` tags to
+  default fetch UA gets filtered by Overpass, also as a 406). The free
+  instance load-balances across several backend mirrors of uneven,
+  fluctuating load (the "Announced endpoint" in its own `/api/status`
+  varies call to call), so a single attempt landing on a busy one can
+  time out even when Overpass overall has capacity --
+  `OVERPASS_MAX_ATTEMPTS` retries once on a timeout/5xx before giving
+  up, but never retries a 429 (rate-limited), since hitting the same
+  2-slot-per-IP limit again immediately would just make it worse.
+  Results need `addr:housenumber` + `addr:street` + `addr:postcode` tags to
   produce a Meridian-geocodable address line (`addressLineFromTags`) --
   anything else is counted in `skipped`, not silently dropped. The page
   downloads matched addresses as a plain `.txt` list, one per line, ready
