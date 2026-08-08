@@ -6,6 +6,7 @@ import Checkout from './pages/Checkout';
 import Geocode from './pages/Geocode';
 import Help from './pages/Help';
 import Overview from './pages/Overview';
+import OwnerDashboard from './pages/OwnerDashboard';
 import PlanQuota from './pages/PlanQuota';
 import Pricing from './pages/Pricing';
 import Progress from './pages/Progress';
@@ -19,6 +20,7 @@ export default function App() {
         <Layout>
           <Routes>
             <Route path="/" element={<Overview />} />
+            <Route path="/owner" element={<OwnerDashboard />} />
             <Route path="/geocode" element={<Geocode />} />
             <Route path="/reverse-geocode" element={<ReverseGeocode />} />
             <Route path="/batch" element={<Batch />} />
