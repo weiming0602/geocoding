@@ -67,6 +67,15 @@ export default function ReverseGeocodeForm() {
       <Text style={styles.title}>Reverse geocode</Text>
       <Text style={styles.subtitle}>Get the nearest address for a coordinate.</Text>
 
+      <View style={styles.noteCard}>
+        <Text style={styles.noteText}>
+          Lost in an unfamiliar city? This is exactly what reverse geocoding is for. A visitor
+          standing on an unfamiliar street doesn't know the address — but their phone knows its
+          own coordinates. Tap "Use Current Location" and we'll tell you exactly where you're
+          standing, down to the nearest street and side.
+        </Text>
+      </View>
+
       <Text style={styles.label}>Coordinate (latitude, longitude)</Text>
       <TextInput
         style={styles.input}
@@ -151,7 +160,21 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: colors.text,
     opacity: 0.7,
+    marginBottom: space[4],
+  },
+  noteCard: {
+    borderWidth: 1,
+    borderColor: colors.divider,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    padding: space[3],
     marginBottom: space[6],
+  },
+  noteText: {
+    fontFamily: 'Lora_400Regular',
+    fontSize: 13,
+    color: colors.text,
+    lineHeight: 19,
   },
   label: {
     fontFamily: 'Lora_400Regular',

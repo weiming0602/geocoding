@@ -49,9 +49,16 @@ export default function ReverseGeocode() {
   return (
     <div>
       <h1 style={{ fontSize: 42 }}>Reverse geocode</h1>
-      <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
+      <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         Click a point on the map to get its nearest address — matches /reverse-geocode.
       </p>
+
+      <div className="plate" style={{ marginBottom: 'var(--space-6)', padding: 'var(--space-3)' }}>
+        Lost in an unfamiliar city? This is exactly what reverse geocoding is for. A visitor
+        standing on an unfamiliar street doesn't know the address — but their phone knows its own
+        coordinates. Send us that location and we'll tell you exactly where you're standing, down
+        to the nearest street and side.
+      </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 'var(--space-6)', alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
