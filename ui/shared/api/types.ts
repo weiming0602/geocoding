@@ -84,3 +84,19 @@ export type QuotaStatus = {
 export type ApiErrorResponse = {
   error: string;
 };
+
+// POST /places/search -- free-text place search (via the public
+// Overpass API, see placesSearch.js) near a point. `skipped` counts
+// matched places that had a name/coordinate but not enough of a street
+// address to produce a geocodable line; `truncated` is true when more
+// results existed than the server's MAX_RESULTS cap.
+export type PlaceResult = {
+  name: string;
+  address: string;
+};
+
+export type PlaceSearchResponse = {
+  results: PlaceResult[];
+  skipped: number;
+  truncated: boolean;
+};

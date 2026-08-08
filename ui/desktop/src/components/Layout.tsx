@@ -9,6 +9,7 @@ const NAV_LINKS = [
   { to: '/', label: 'Overview', end: true },
   { to: '/geocode', label: 'Geocode' },
   { to: '/reverse-geocode', label: 'Reverse geocode' },
+  { to: '/find-places', label: 'Find places' },
   { to: '/batch', label: 'Batch' },
   { to: '/plan-quota', label: 'Plan & quota' },
   { to: '/pricing', label: 'Pricing' },

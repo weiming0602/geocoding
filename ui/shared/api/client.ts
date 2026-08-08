@@ -4,6 +4,7 @@ import type {
   BatchSource,
   Coordinates,
   GeocodeResult,
+  PlaceSearchResponse,
   QuotaStatus,
   ReverseGeocodeResult,
 } from './types';
@@ -91,4 +92,11 @@ export async function batchGeocodeDownload(
 
 export function getQuota(email: string, baseUrl = DEFAULT_API_BASE_URL): Promise<QuotaStatus> {
   return getJson<QuotaStatus>(baseUrl, `/quota?email=${encodeURIComponent(email)}`);
+}
+
+export function searchPlaces(
+  params: { query: string; latitude: number; longitude: number; radiusMeters: number },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<PlaceSearchResponse> {
+  return postJson<PlaceSearchResponse>(baseUrl, '/places/search', params);
 }

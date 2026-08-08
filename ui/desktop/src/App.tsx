@@ -3,6 +3,7 @@ import { HashRouter as Router, Route, Routes } from 'react-router';
 import Layout from './components/Layout';
 import Batch from './pages/Batch';
 import Checkout from './pages/Checkout';
+import FindPlaces from './pages/FindPlaces';
 import Geocode from './pages/Geocode';
 import Help from './pages/Help';
 import Overview from './pages/Overview';
@@ -23,6 +24,7 @@ export default function App() {
             <Route path="/owner" element={<OwnerDashboard />} />
             <Route path="/geocode" element={<Geocode />} />
             <Route path="/reverse-geocode" element={<ReverseGeocode />} />
+            <Route path="/find-places" element={<FindPlaces />} />
             <Route path="/batch" element={<Batch />} />
             <Route path="/plan-quota" element={<PlanQuota />} />
             <Route path="/pricing" element={<Pricing />} />

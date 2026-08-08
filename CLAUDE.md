@@ -33,8 +33,10 @@ read-write).
   `console.log`/`console.error`) durably via journald instead of an
   ephemeral terminal or `/tmp` file.
 - Server tests: `cd geocoding-server && node --test` — **not** `npm test`,
-  that script is a placeholder stub. 134 tests, same throwaway-database-
-  per-test pattern (see `test/helpers.js`).
+  that script is a placeholder stub. 147 tests, same throwaway-database-
+  per-test pattern (see `test/helpers.js`); 1 pre-existing failure on
+  non-Windows boxes (`zip.test.js`'s PowerShell-extraction check, `spawnSync
+  powershell.exe ENOENT`) is expected and unrelated to any change here.
 - Database backup (pg_dumps `geocoding` + `geocoding_users` -- the
   latter has real customer accounts/service keys/quota/feedback, not
   reconstructable from anywhere else -- to `~/backups/geocoding`,
@@ -121,6 +123,27 @@ read-write).
   `MobileRedirectBanner`/`InstallAppBanner`, never both -- see
   `deviceDetection.ts`'s `isMobileDevice`). Purely a dismissible prompt,
   never an automatic redirect.
+- `OVERPASS_URL` (optional, default `https://overpass-api.de/api/interpreter`) --
+  the public Overpass API instance `POST /places/search`
+  (`geocoding-server/src/placesSearch.js`) queries for OpenStreetMap
+  points-of-interest near a clicked map location, matched against a
+  free-text query (`ui/desktop`'s Find Places page, `/find-places`).
+  Free, no API key/billing, same "public data only" sourcing as
+  everything else in this project -- but shared and genuinely rate-
+  limited (2 concurrent request slots per IP; see
+  `https://overpass-api.de/api/status`), so failures/timeouts/429s are
+  expected in normal operation, not a sign of a bug -- they surface as
+  `UpstreamError` -> HTTP 502, distinct from a real 500. Overpass
+  requires both an explicit `Content-Type` header (Node's `fetch`,
+  unlike a browser's, won't infer one for a plain string body -- omitting
+  it gets a 406) and a real `User-Agent` identifying the client (Node's
+  default fetch UA gets filtered by Overpass, also as a 406). Results
+  need `addr:housenumber` + `addr:street` + `addr:postcode` tags to
+  produce a Meridian-geocodable address line (`addressLineFromTags`) --
+  anything else is counted in `skipped`, not silently dropped. The page
+  downloads matched addresses as a plain `.txt` list, one per line, ready
+  to feed straight into Batch geocode -- this search itself does not use
+  Meridian's own geocoding.
 - `FEEDBACK_NOTIFY_EMAIL` (optional -- unset = stub) is where `POST
   /feedback` emails you when a comment/question comes in; uses the same
   SES credentials above. The comment is saved in `geocoding_users`'

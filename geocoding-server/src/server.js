@@ -14,6 +14,7 @@ const {
 const { resultsToCsv } = require('./resultsCsv');
 const { buildZip } = require('./zip');
 const { reverseGeocode } = require('./reverseGeocode');
+const { searchPlaces } = require('./placesSearch');
 const { openUsersDb, getUser, ensureCurrentPeriod, addToTier } = require('./users');
 const { ensureFeedbackTable, submitFeedback } = require('./feedback');
 const { checkQuota, useQuota } = require('./quota');
@@ -27,6 +28,7 @@ const {
   QuotaExceededError,
   PaymentError,
   UnauthorizedError,
+  UpstreamError,
 } = require('./errors');
 
 // Unix socket, peer-authenticated (no password) -- the socket path must be
@@ -399,6 +401,25 @@ app.post('/reverse-geocode', async (req, res) => {
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Free-text place search (via the public Overpass API -- see
+// placesSearch.js) near a point, returning whichever results have
+// enough of an address to feed into batch geocoding. Not gated by
+// quota/service key -- it doesn't touch geocoding_users or run any
+// Meridian geocoding itself, just returns addresses a client could
+// choose to run through /geocode/batch afterward.
+app.post('/places/search', async (req, res) => {
+  const { query, latitude, longitude, radiusMeters } = req.body || {};
+  try {
+    const result = await searchPlaces(query, latitude, longitude, radiusMeters);
+    res.json(result);
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof UpstreamError) return res.status(502).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: 'internal error' });
   }
