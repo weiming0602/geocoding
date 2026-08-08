@@ -1,7 +1,9 @@
 import { NavLink } from 'react-router';
 import type { ReactNode } from 'react';
 
+import { isMobileDevice } from '../deviceDetection';
 import InstallAppBanner from './InstallAppBanner';
+import MobileRedirectBanner, { MOBILE_APP_URL } from './MobileRedirectBanner';
 
 const NAV_LINKS = [
   { to: '/', label: 'Overview', end: true },
@@ -15,6 +17,13 @@ const NAV_LINKS = [
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
+  // Showing both banners would be a contradictory pitch to the same
+  // mobile visitor ("install this page" vs. "go use a different app")
+  // -- the redirect banner only wins that slot once a real mobile URL
+  // is actually configured; otherwise install-as-PWA stays the only
+  // option, same as before this existed.
+  const showMobileRedirect = Boolean(MOBILE_APP_URL) && isMobileDevice();
+
   return (
     <div
       style={{
@@ -26,7 +35,7 @@ export default function Layout({ children }: { children: ReactNode }) {
         flexDirection: 'column',
       }}
     >
-      <InstallAppBanner />
+      {showMobileRedirect ? <MobileRedirectBanner /> : <InstallAppBanner />}
       <nav className="nav">
         <div className="nav-brand">Meridian</div>
         {NAV_LINKS.map((link) => (

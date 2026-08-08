@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react';
 
+import { isIos, isStandalone } from '../deviceDetection';
+
 // Chrome/Android/Edge fire this before showing their own install UI; we
 // capture it so we can trigger the same install flow from our own button
 // instead of waiting for the browser's native mini-infobar. Not a
@@ -10,19 +12,6 @@ type BeforeInstallPromptEvent = Event & {
 };
 
 const DISMISSED_KEY = 'meridian-install-banner-dismissed';
-
-function isStandalone() {
-  return (
-    window.matchMedia('(display-mode: standalone)').matches ||
-    // iOS Safari's own (non-standard) flag for "launched from a home
-    // screen icon" -- matchMedia above doesn't cover it on iOS.
-    (navigator as unknown as { standalone?: boolean }).standalone === true
-  );
-}
-
-function isIos() {
-  return /iphone|ipad|ipod/i.test(navigator.userAgent);
-}
 
 export default function InstallAppBanner() {
   const [installEvent, setInstallEvent] = useState<BeforeInstallPromptEvent | null>(null);

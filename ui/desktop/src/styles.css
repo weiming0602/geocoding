@@ -230,11 +230,12 @@ textarea.input { min-height: 90px; resize: vertical; }
   border-bottom: 1px solid var(--color-divider);
   font-family: var(--font-body); font-size: 13px;
 }
-.install-banner button {
+.install-banner button, .install-banner a {
   font-family: var(--font-heading); font-weight: var(--font-heading-weight);
   font-size: 13px; color: var(--color-accent); background: transparent;
   border: 1px solid var(--color-accent); border-radius: var(--radius-md);
   padding: var(--space-1) var(--space-3); cursor: pointer;
+  text-decoration: none; display: inline-block;
 }
 .install-banner button[aria-label='Dismiss'] {
   margin-left: auto; border-color: transparent; color: var(--color-text);

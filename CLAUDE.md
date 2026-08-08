@@ -114,6 +114,13 @@ read-write).
   key after `/billing/purchase`, via AWS SES. Use an IAM user scoped to
   only `ses:SendEmail`; `SES_FROM_EMAIL` must be a verified identity, and
   while the SES account is in its sandbox, so must the recipient.
+- `VITE_MOBILE_APP_URL` (`ui/desktop` only, optional, unset by default --
+  no mobile deployment exists yet) -- when set, a mobile visitor to
+  `ui/desktop` sees a banner prompting them to `ui/mobile` instead of the
+  "install this as a PWA" banner (`Layout.tsx` renders at most one of
+  `MobileRedirectBanner`/`InstallAppBanner`, never both -- see
+  `deviceDetection.ts`'s `isMobileDevice`). Purely a dismissible prompt,
+  never an automatic redirect.
 - `FEEDBACK_NOTIFY_EMAIL` (optional -- unset = stub) is where `POST
   /feedback` emails you when a comment/question comes in; uses the same
   SES credentials above. The comment is saved in `geocoding_users`'
