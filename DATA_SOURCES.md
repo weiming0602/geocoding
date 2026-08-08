@@ -42,6 +42,19 @@ geocoding request. Current as of August 2026.
   Dept. of Safety / Emergency Services & Communications and would require a
   direct data-sharing request, not a public download (checked directly;
   not something to assume changes without re-checking).
+- **Why this isn't universal:** Real per-structure point data is genuinely
+  more accurate than interpolation — it's a surveyed location, not a
+  proportional guess along a street's range — but it isn't something every
+  state publishes openly. The US DOT maintains a National Address Database
+  (NAD) aggregating whatever states/counties choose to contribute; checked
+  directly (via DOT's own "NAD County Participation Status" layer), 24
+  states plus DC currently have 100% open point coverage, several states
+  are partial, and some — including New Hampshire — currently have none in
+  the public domain. Maine happens to be one of the fully-covered states,
+  independent of the NAD, via its own public E911 GIS feed. This is exactly
+  why TIGER range-interpolation is the necessary baseline everywhere (it
+  has full US coverage on its own), with real point data layered on top
+  only where a state actually makes it available.
 
 ## How the data gets in (and stays current)
 
