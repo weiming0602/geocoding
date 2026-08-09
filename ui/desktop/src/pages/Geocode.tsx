@@ -48,7 +48,7 @@ export default function Geocode() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 42 }}>Geocode</h1>
+      <h1>Geocode</h1>
       <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
         Convert a street address to coordinates — matches /geocode.
       </p>

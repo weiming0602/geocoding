@@ -104,7 +104,7 @@ export default function Batch() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 42 }}>Batch geocoding</h1>
+      <h1>Batch geocoding</h1>
       <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
         Matches /geocode/batch — one address per line, checked against your account's monthly quota.
         Upload a file, or (if this app and geocoding-server share a filesystem) point at a

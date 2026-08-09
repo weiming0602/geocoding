@@ -66,7 +66,7 @@ export default function FindPlaces() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 42 }}>Find places</h1>
+      <h1>Find places</h1>
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         Search for a kind of place (via OpenStreetMap) near a point you click on the map, then
         download the results as an address list ready for{' '}

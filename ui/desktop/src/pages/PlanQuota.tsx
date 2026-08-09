@@ -31,7 +31,7 @@ export default function PlanQuota() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 42 }}>Plan &amp; quota</h1>
+      <h1>Plan &amp; quota</h1>
       <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
         Usage resets on the 1st of each calendar month, per account email.
       </p>

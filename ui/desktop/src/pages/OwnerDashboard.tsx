@@ -12,7 +12,7 @@ export default function OwnerDashboard() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 42 }}>Owner dashboard</h1>
+      <h1>Owner dashboard</h1>
       <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
         Not linked anywhere in the app -- bookmark this page if you want to check back on it.
       </p>

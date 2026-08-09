@@ -219,7 +219,7 @@ export default function ImportAddresses() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 42 }}>Import addresses</h1>
+      <h1>Import addresses</h1>
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         Upload a CSV or Excel export -- even one with street number, street name, city, and state
         or ZIP split across separate columns -- map which column is which, and download a clean

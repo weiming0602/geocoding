@@ -48,7 +48,7 @@ export default function ReverseGeocode() {
 
   return (
     <div>
-      <h1 style={{ fontSize: 42 }}>Reverse geocode</h1>
+      <h1>Reverse geocode</h1>
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         Click a point on the map to get its nearest address — matches /reverse-geocode.
       </p>

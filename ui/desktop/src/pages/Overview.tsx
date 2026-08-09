@@ -6,7 +6,7 @@ import { Link } from 'react-router';
 export default function Overview() {
   return (
     <div>
-      <h1 style={{ fontSize: 42 }}>Overview</h1>
+      <h1>Overview</h1>
       <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
         What would you like to do?
       </p>

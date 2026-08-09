@@ -14,7 +14,9 @@ export const colors = {
   surface: '#eae9e9',
   text: '#201f1d',
   accent: '#b68235',
-  accent2: '#ac803e',
+  // Deep teal/verdigris -- a genuinely different hue from accent, not
+  // another shade of brown, for real two-color contrast.
+  accent2: '#3a7d68',
   divider: 'rgba(32, 31, 29, 0.16)',
 
   neutral100: '#f8f4f4',
@@ -61,7 +63,7 @@ export const space = {
 } as const;
 
 export const radius = {
-  sm: 2,
-  md: 4,
-  lg: 7,
+  sm: 6,
+  md: 10,
+  lg: 18,
 } as const;
