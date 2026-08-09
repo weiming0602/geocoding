@@ -1,7 +1,7 @@
 import React from 'react';
 import { ActivityIndicator, StyleSheet, Text, TouchableOpacity } from 'react-native';
 
-import { colors } from '../../shared/theme';
+import { colors, radius } from '../../shared/theme';
 
 type Variant = 'primary' | 'secondary' | 'ghost';
 
@@ -41,7 +41,7 @@ const styles = StyleSheet.create({
   base: {
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 4,
+    borderRadius: radius.md,
     borderWidth: 1,
     paddingVertical: 9,
     paddingHorizontal: 17,
