@@ -279,8 +279,8 @@ export default function BatchGeocodeForm({ initialFile, onConsumedInitialFile, s
               <Text style={styles.resultAddress}>{result.address}</Text>
               {result.success ? (
                 <Text style={styles.cardMeta} selectable>
-                  {result.coordinates.latitude.toFixed(6)}, {result.coordinates.longitude.toFixed(6)} (
-                  {result.rangeSide} side)
+                  {result.coordinates.latitude.toFixed(6)}, {result.coordinates.longitude.toFixed(6)}
+                  {result.source === 'interpolation' ? ` (${result.rangeSide} side)` : ''}
                 </Text>
               ) : (
                 <Text style={styles.errorText}>{result.error}</Text>

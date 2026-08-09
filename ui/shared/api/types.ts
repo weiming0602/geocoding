@@ -18,15 +18,45 @@ export type StreetMatch = {
   state_abbr?: string;
 };
 
-// POST /geocode
-export type GeocodeResult = {
-  input: { number: number; streetName: string; zip: string; state?: string };
-  match: StreetMatch;
-  rangeSide: 'left' | 'right';
-  offsetSide: 'left' | 'right';
-  offsetFeet: number;
-  coordinates: Coordinates;
+// A Maine E911 address point -- an exact match (see matchAddressPoint in
+// geocode.js), preferred over interpolation whenever one exists. No
+// rangeSide/offsetSide/offsetFeet: those describe *estimating* a point
+// along a street segment, which doesn't apply when the point itself is
+// already known exactly.
+export type AddressPointMatch = {
+  siteUid: string;
+  fullname: string;
+  town: string;
+  county: string;
+  state_abbr: string;
 };
+
+type GeocodeInput = { number: number; streetName: string; zip: string; state?: string; town?: string | null };
+
+// POST /geocode -- a discriminated union (on `source`), not one shape
+// with optional fields, because rangeSide/offsetSide/offsetFeet only
+// exist for an interpolation match; an address_point match has none of
+// them at all (see geocode.js). Rendering code must check `source`
+// before assuming rangeSide exists -- ui/desktop's Geocode.tsx and
+// Batch.tsx, and ui/mobile's GeocodeForm.tsx and BatchGeocodeForm.tsx,
+// used to render an empty "side" tag for every address_point result
+// because they didn't.
+export type GeocodeResult =
+  | {
+      input: GeocodeInput;
+      match: AddressPointMatch;
+      source: 'address_point';
+      coordinates: Coordinates;
+    }
+  | {
+      input: GeocodeInput;
+      match: StreetMatch;
+      source: 'interpolation';
+      rangeSide: 'left' | 'right';
+      offsetSide: 'left' | 'right';
+      offsetFeet: number;
+      coordinates: Coordinates;
+    };
 
 // POST /reverse-geocode -- NOT the same shape as GeocodeResult: the side
 // field is `side` here (not `rangeSide`), and the resolved point is

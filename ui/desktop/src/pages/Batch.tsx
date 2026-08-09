@@ -235,8 +235,13 @@ export default function Batch() {
                         <td>
                           {result.success ? (
                             <span style={{ fontVariantNumeric: 'tabular-nums' }}>
-                              {result.coordinates.latitude.toFixed(6)}, {result.coordinates.longitude.toFixed(6)} ·{' '}
-                              <span className="tag tag-accent">{result.rangeSide} side</span>
+                              {result.coordinates.latitude.toFixed(6)}, {result.coordinates.longitude.toFixed(6)}
+                              {result.source === 'interpolation' && (
+                                <>
+                                  {' · '}
+                                  <span className="tag tag-accent">{result.rangeSide} side</span>
+                                </>
+                              )}
                             </span>
                           ) : (
                             <span style={{ color: '#a4402a' }}>{result.error}</span>

@@ -27,7 +27,7 @@ export default function Geocode() {
         address: trimmed,
         latitude: response.coordinates.latitude,
         longitude: response.coordinates.longitude,
-        rangeSide: response.rangeSide,
+        rangeSide: response.source === 'interpolation' ? response.rangeSide : undefined,
       };
       setResult(lookup);
       addLookup(lookup);
@@ -109,7 +109,7 @@ export default function Geocode() {
           <MapView
             latitude={result?.latitude}
             longitude={result?.longitude}
-            label={result ? `${result.address} (${result.rangeSide} side)` : undefined}
+            label={result ? `${result.address}${result.rangeSide ? ` (${result.rangeSide} side)` : ''}` : undefined}
           />
 
           {result && (
@@ -121,8 +121,13 @@ export default function Geocode() {
                 <div className="card-kicker">Result</div>
                 <div className="card-title">{result.address}</div>
                 <div className="card-meta" style={{ fontVariantNumeric: 'tabular-nums' }}>
-                  {result.latitude.toFixed(6)}, {result.longitude.toFixed(6)} ·{' '}
-                  <span className="tag tag-accent">{result.rangeSide} side</span>
+                  {result.latitude.toFixed(6)}, {result.longitude.toFixed(6)}
+                  {result.rangeSide && (
+                    <>
+                      {' · '}
+                      <span className="tag tag-accent">{result.rangeSide} side</span>
+                    </>
+                  )}
                 </div>
               </div>
               <button className="btn btn-ghost" onClick={handleCopy}>

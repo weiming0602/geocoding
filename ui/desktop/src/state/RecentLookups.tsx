@@ -5,7 +5,10 @@ export type RecentLookup = {
   address: string;
   latitude: number;
   longitude: number;
-  rangeSide: 'left' | 'right';
+  // Absent for an exact Maine E911 address-point match -- rangeSide only
+  // describes an *estimated* position along a street segment, which
+  // doesn't apply when the point itself is already known exactly.
+  rangeSide?: 'left' | 'right';
 };
 
 const STORAGE_KEY = 'meridian.recentLookups';

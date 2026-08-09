@@ -2,7 +2,7 @@ import React, { useCallback, useState } from 'react';
 import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { geocode } from '../../shared/api/client';
-import type { Coordinates, StreetMatch } from '../../shared/api/types';
+import type { Coordinates } from '../../shared/api/types';
 import { colors, radius, space } from '../../shared/theme';
 import GeocodeMap from './GeocodeMap';
 import ThemedButton from './ThemedButton';
@@ -12,7 +12,11 @@ export default function GeocodeForm() {
   const [loading, setLoading] = useState(false);
   const [coordinates, setCoordinates] = useState<Coordinates | null>(null);
   const [matchedStreet, setMatchedStreet] = useState<string | null>(null);
-  const [match, setMatch] = useState<StreetMatch | null>(null);
+  // A single already-formatted detail line -- an interpolation match has
+  // a numeric street ID, an address_point (exact E911) match has none of
+  // that (a siteUid/town/state instead), so there's no one shared shape
+  // worth carrying the raw match object around for.
+  const [matchDetail, setMatchDetail] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const handleGeocode = useCallback(async () => {
@@ -20,7 +24,7 @@ export default function GeocodeForm() {
     if (!trimmedAddress) {
       setCoordinates(null);
       setMatchedStreet(null);
-      setMatch(null);
+      setMatchDetail(null);
       setError('Enter an address first.');
       return;
     }
@@ -29,13 +33,18 @@ export default function GeocodeForm() {
     setError(null);
     setCoordinates(null);
     setMatchedStreet(null);
-    setMatch(null);
+    setMatchDetail(null);
 
     try {
       const result = await geocode(trimmedAddress);
       setCoordinates(result.coordinates);
-      setMatchedStreet(`${result.match.fullname} (${result.rangeSide} side)`);
-      setMatch(result.match);
+      if (result.source === 'interpolation') {
+        setMatchedStreet(`${result.match.fullname} (${result.rangeSide} side)`);
+        setMatchDetail(`Street ID: ${result.match.id}`);
+      } else {
+        setMatchedStreet(result.match.fullname);
+        setMatchDetail(`Exact match (Maine E911) · ${result.match.town}, ${result.match.state_abbr}`);
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Geocoding failed.';
       setError(message);
@@ -73,7 +82,7 @@ export default function GeocodeForm() {
           <Text style={styles.cardMeta} selectable>
             {coordinates.latitude.toFixed(6)}, {coordinates.longitude.toFixed(6)}
           </Text>
-          {match && <Text style={styles.cardMeta}>Street ID: {match.id}</Text>}
+          {matchDetail && <Text style={styles.cardMeta}>{matchDetail}</Text>}
           <View style={styles.spacing}>
             <GeocodeMap
               latitude={coordinates.latitude}
