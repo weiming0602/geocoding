@@ -2,17 +2,23 @@ const { ValidationError, UpstreamError } = require('./errors');
 
 // Public Overpass instance -- free, no API key, no billing account,
 // consistent with how every other data source in this project is
-// sourced (see DATA_SOURCES.md). It's shared and rate-limited (2
+// sourced (see DATA_SOURCES.md). It's the fallback search path (see
+// searchPlaces), tried only when Nominatim's own search below comes up
+// empty -- real-world testing found Overpass shared and rate-limited (2
 // concurrent request slots per IP as of writing -- check
-// https://overpass-api.de/api/status), and regex tag queries are
-// noticeably more expensive than exact-match ones; both are why the
-// query below is kept to two clauses, not one per tag per word.
+// https://overpass-api.de/api/status) enough to be unreliable as the
+// primary path, and regex tag queries are noticeably more expensive
+// than exact-match ones; both are why the query below is kept to two
+// clauses, not one per tag per word.
 const OVERPASS_URL = process.env.OVERPASS_URL || 'https://overpass-api.de/api/interpreter';
-// Kept fairly short (rather than Overpass's own 180s max) so a single
-// attempt fails fast enough to leave room for a retry -- see
-// fetchOverpassWithRetry -- within a request/response cycle a user is
-// still willing to wait on.
-const OVERPASS_TIMEOUT_SECONDS = 15;
+// Kept short (rather than Overpass's own 180s max, or even the 15s this
+// used to be back when Overpass was the primary search path) -- now
+// that Overpass only runs after Nominatim has already come up empty, a
+// slow failure here is pure dead time on top of whatever Nominatim
+// already took, so failing fast (and leaving room for one retry -- see
+// fetchOverpassWithRetry -- to land on a healthier backend) matters more
+// than giving a single attempt every possible chance to succeed.
+const OVERPASS_TIMEOUT_SECONDS = 8;
 const OVERPASS_MAX_ATTEMPTS = 2;
 const MAX_RESULTS = 200;
 const MAX_RADIUS_METERS = 25000;
@@ -27,6 +33,25 @@ const MAX_RADIUS_METERS = 25000;
 // batched). https://operations.osmfoundation.org/policies/nominatim/
 const NOMINATIM_URL = process.env.NOMINATIM_URL || 'https://nominatim.openstreetmap.org/search';
 const NOMINATIM_TIMEOUT_MS = 10000;
+// Nominatim's own POI search results, capped independently of MAX_RESULTS --
+// there's no reason to ask for more than a page's worth up front.
+const NOMINATIM_SEARCH_LIMIT = 50;
+
+// Nominatim's usage policy is an absolute max of 1 request/second --
+// stricter than Overpass's, and now load-bearing (searchPlaces below
+// calls it for both the "near <place>" lookup and the place search
+// itself, up to twice per user search). A per-process last-call
+// timestamp enforces this across every caller sharing this module,
+// regardless of how many call sites end up hitting Nominatim -- getting
+// this wrong risks the whole shared instance blocking this server's IP
+// entirely, which would be worse than today's occasional slow query.
+const NOMINATIM_MIN_INTERVAL_MS = 1100;
+let lastNominatimCallAt = 0;
+async function throttleNominatim() {
+  const wait = NOMINATIM_MIN_INTERVAL_MS - (Date.now() - lastNominatimCallAt);
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  lastNominatimCallAt = Date.now();
+}
 
 /**
  * Splits a free-text query into individual words for tag matching --
@@ -113,6 +138,7 @@ function parseNearQuery(query) {
  * `searchPlaces` already uses for Overpass failures.
  */
 async function geocodePlaceName(locationPhrase) {
+  await throttleNominatim();
   const url = `${NOMINATIM_URL}?format=json&limit=1&q=${encodeURIComponent(locationPhrase)}`;
   let response;
   try {
@@ -135,6 +161,90 @@ async function geocodePlaceName(locationPhrase) {
     );
   }
   return { latitude: parseFloat(results[0].lat), longitude: parseFloat(results[0].lon) };
+}
+
+/**
+ * Converts a center point + radius into Nominatim's viewbox format
+ * (minLon,minLat,maxLon,maxLat) -- an approximation (flat-earth degrees,
+ * not a true geodesic circle) that's more than accurate enough for
+ * constraining a place search, same spirit as Overpass's own `around`.
+ */
+function metersToViewbox(latitude, longitude, radiusMeters) {
+  const latDelta = radiusMeters / 111320;
+  const lonDelta = radiusMeters / (111320 * Math.cos((latitude * Math.PI) / 180));
+  return [longitude - lonDelta, latitude - latDelta, longitude + lonDelta, latitude + latDelta].join(',');
+}
+
+/**
+ * Builds a Meridian-format address line from Nominatim's `addressdetails`
+ * object, or null if there isn't enough to form one -- same
+ * house-number/street/ZIP requirement as addressLineFromTags. `city` is
+ * whichever of Nominatim's several place-size fields is actually present
+ * (a town/village/hamlet has no `city` field at all).
+ */
+function addressLineFromNominatim(address) {
+  const houseNumber = address.house_number;
+  const road = address.road;
+  const postcode = address.postcode;
+  if (!houseNumber || !road || !postcode) return null;
+
+  const city = address.city || address.town || address.village || address.hamlet;
+  const state = address.state;
+  const cityState = [city, state].filter(Boolean).join(', ');
+  const middle = cityState ? `, ${cityState}` : '';
+  return `${houseNumber} ${road}${middle} ${postcode}`.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Searches Nominatim itself for places matching `terms` within
+ * `radiusMeters` of (latitude, longitude) -- tried first in searchPlaces
+ * below, before ever touching Overpass. Fast and usually reliable, but
+ * Nominatim only matches literal text: a business's own name, or an
+ * exact OSM taxonomy word (e.g. "restaurant" matches every
+ * amenity=restaurant node) -- a colloquial category term like "pizza"
+ * that only exists as a cuisine tag, not a name or a type value, won't
+ * match here at all. That gap is exactly what the Overpass fallback
+ * covers. Returns `{ results: [], skipped: 0 }` on a clean zero-result
+ * search (not an error -- searchPlaces treats an empty result set as
+ * "try Overpass instead", not a failure).
+ */
+async function searchNominatimPlaces(terms, latitude, longitude, radiusMeters) {
+  await throttleNominatim();
+  const viewbox = metersToViewbox(latitude, longitude, radiusMeters);
+  const url =
+    `${NOMINATIM_URL}?format=json&addressdetails=1&bounded=1` +
+    `&limit=${NOMINATIM_SEARCH_LIMIT}&viewbox=${viewbox}&q=${encodeURIComponent(terms)}`;
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Meridian-Geocoding-Server/1.0 (+https://github.com/meridian-geocoding)',
+      },
+      signal: AbortSignal.timeout(NOMINATIM_TIMEOUT_MS),
+    });
+  } catch (err) {
+    throw new UpstreamError(`place search via Nominatim failed: ${err.message}`);
+  }
+  if (!response.ok) {
+    throw new UpstreamError(`place search via Nominatim failed (status ${response.status})`);
+  }
+
+  const elements = await response.json();
+  const seen = new Set();
+  const results = [];
+  let skipped = 0;
+  for (const element of Array.isArray(elements) ? elements : []) {
+    const address = addressLineFromNominatim(element.address || {});
+    if (!address) {
+      skipped += 1;
+      continue;
+    }
+    if (seen.has(address)) continue;
+    seen.add(address);
+    results.push({ name: element.name || address, address });
+    if (results.length >= MAX_RESULTS) break;
+  }
+  return { results, skipped };
 }
 
 /**
@@ -193,9 +303,13 @@ async function fetchOverpassWithRetry(overpassQuery) {
 }
 
 /**
- * Searches Overpass for places matching `query`, extracting a Meridian-
- * geocodable address line from each result that has one. Results with
- * a name/coordinate but no usable street address are counted in
+ * Searches for places matching `query`, extracting a Meridian-geocodable
+ * address line from each result that has one. Tries Nominatim first
+ * (searchNominatimPlaces -- fast, usually reliable, but misses
+ * colloquial category terms), falling back to Overpass (buildOverpassQuery
+ * -- broader recall via regex tag matching, but the less reliable of the
+ * two) only when Nominatim comes back empty or fails outright. Results
+ * with a name/coordinate but no usable street address are counted in
  * `skipped`, not silently dropped. Throws UpstreamError (not a generic
  * Error) for anything that's Overpass's (or Nominatim's) fault -- a
  * timeout, a rate limit, a non-2xx response -- so callers can tell "the
@@ -241,6 +355,27 @@ async function searchPlaces(query, latitude, longitude, radiusMeters) {
     throw new ValidationError('query must contain at least one word');
   }
 
+  const center = locationPhrase ? { latitude: resolvedLatitude, longitude: resolvedLongitude } : undefined;
+
+  // Nominatim first -- fast and usually reliable, at the cost of missing
+  // colloquial category terms (see searchNominatimPlaces). A clean
+  // zero-result search or any Nominatim-side failure both fall through
+  // to Overpass rather than giving up; only Overpass's own failure is
+  // actually surfaced to the caller, since by that point it's the last
+  // thing that was tried.
+  try {
+    const nominatimResult = await searchNominatimPlaces(terms, resolvedLatitude, resolvedLongitude, radiusMeters);
+    if (nominatimResult.results.length > 0) {
+      return {
+        ...nominatimResult,
+        truncated: nominatimResult.results.length >= MAX_RESULTS,
+        center,
+      };
+    }
+  } catch {
+    // Fall through to Overpass.
+  }
+
   const overpassQuery = buildOverpassQuery(words, resolvedLatitude, resolvedLongitude, radiusMeters);
   const body = await fetchOverpassWithRetry(overpassQuery);
   const elements = Array.isArray(body.elements) ? body.elements : [];
@@ -265,10 +400,7 @@ async function searchPlaces(query, latitude, longitude, radiusMeters) {
     results,
     skipped,
     truncated: results.length >= MAX_RESULTS,
-    // Only set when resolved via a "near <place>" clause -- callers
-    // that supplied explicit coordinates already know where they
-    // searched, so echoing those back would just be noise.
-    center: locationPhrase ? { latitude: resolvedLatitude, longitude: resolvedLongitude } : undefined,
+    center,
   };
 }
 
@@ -277,6 +409,8 @@ module.exports = {
   buildOverpassQuery,
   addressLineFromTags,
   parseNearQuery,
+  addressLineFromNominatim,
+  metersToViewbox,
   MAX_RESULTS,
   MAX_RADIUS_METERS,
   OVERPASS_MAX_ATTEMPTS,

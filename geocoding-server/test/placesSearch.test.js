@@ -6,6 +6,8 @@ const {
   buildOverpassQuery,
   addressLineFromTags,
   parseNearQuery,
+  addressLineFromNominatim,
+  metersToViewbox,
   MAX_RESULTS,
 } = require('../src/placesSearch');
 const { ValidationError, UpstreamError } = require('../src/errors');
@@ -39,6 +41,42 @@ test('addressLineFromTags returns null when housenumber, street, or postcode is 
   assert.equal(addressLineFromTags({ 'addr:housenumber': '997', 'addr:postcode': '04091' }), null);
   assert.equal(addressLineFromTags({ 'addr:housenumber': '997', 'addr:street': 'Pequawket Trl' }), null);
   assert.equal(addressLineFromTags({ name: 'Some Place' }), null);
+});
+
+test('addressLineFromNominatim builds a Meridian-format line from Nominatim addressdetails', () => {
+  assert.equal(
+    addressLineFromNominatim({
+      house_number: '653',
+      road: 'Congress Street',
+      city: 'Portland',
+      state: 'Maine',
+      postcode: '04101',
+    }),
+    '653 Congress Street, Portland, Maine 04101'
+  );
+});
+
+test('addressLineFromNominatim falls back through town/village/hamlet when there is no city field', () => {
+  assert.equal(
+    addressLineFromNominatim({ house_number: '10', road: 'Main St', town: 'Brunswick', postcode: '04011' }),
+    '10 Main St, Brunswick 04011'
+  );
+  assert.equal(
+    addressLineFromNominatim({ house_number: '10', road: 'Main St', village: 'Freeport', postcode: '04032' }),
+    '10 Main St, Freeport 04032'
+  );
+});
+
+test('addressLineFromNominatim returns null when house_number, road, or postcode is missing', () => {
+  assert.equal(addressLineFromNominatim({ road: 'Main St', postcode: '04011' }), null);
+  assert.equal(addressLineFromNominatim({ house_number: '10', postcode: '04011' }), null);
+  assert.equal(addressLineFromNominatim({ house_number: '10', road: 'Main St' }), null);
+});
+
+test('metersToViewbox produces a box centered on the given point', () => {
+  const [minLon, minLat, maxLon, maxLat] = metersToViewbox(43.66, -70.26, 1000).split(',').map(Number);
+  assert.ok(minLon < -70.26 && maxLon > -70.26);
+  assert.ok(minLat < 43.66 && maxLat > 43.66);
 });
 
 test('buildOverpassQuery includes an around clause and a filter per word per tag', () => {
@@ -169,12 +207,17 @@ test(
   )
 );
 
-test('searchPlaces retries once and succeeds if a later attempt lands on a healthier backend', async () => {
+// Nominatim is tried before Overpass now (see searchPlaces), so these
+// two tests -- specifically about Overpass's own retry behavior -- route
+// by URL and make Nominatim fail fast (network error), isolating the
+// Overpass-only call count from Nominatim's.
+test('searchPlaces retries Overpass once and succeeds if a later attempt lands on a healthier backend', async () => {
   const saved = global.fetch;
-  let calls = 0;
-  global.fetch = async () => {
-    calls += 1;
-    if (calls === 1) return { ok: false, status: 504 };
+  let overpassCalls = 0;
+  global.fetch = async (url) => {
+    if (typeof url === 'string' && url.includes('nominatim')) throw new Error('nominatim down');
+    overpassCalls += 1;
+    if (overpassCalls === 1) return { ok: false, status: 504 };
     return {
       ok: true,
       json: async () => ({
@@ -193,23 +236,24 @@ test('searchPlaces retries once and succeeds if a later attempt lands on a healt
   };
   try {
     const result = await searchPlaces('thai', 43.66, -70.26, 5000);
-    assert.equal(calls, 2);
+    assert.equal(overpassCalls, 2);
     assert.equal(result.results.length, 1);
   } finally {
     global.fetch = saved;
   }
 });
 
-test('searchPlaces does not retry a 429 -- retrying a rate limit would only make it worse', async () => {
+test('searchPlaces does not retry a 429 from Overpass -- retrying a rate limit would only make it worse', async () => {
   const saved = global.fetch;
-  let calls = 0;
-  global.fetch = async () => {
-    calls += 1;
+  let overpassCalls = 0;
+  global.fetch = async (url) => {
+    if (typeof url === 'string' && url.includes('nominatim')) throw new Error('nominatim down');
+    overpassCalls += 1;
     return { ok: false, status: 429 };
   };
   try {
     await assert.rejects(() => searchPlaces('thai', 43.66, -70.26, 5000), /rate-limited/);
-    assert.equal(calls, 1);
+    assert.equal(overpassCalls, 1);
   } finally {
     global.fetch = saved;
   }
@@ -316,6 +360,63 @@ test(
         () => searchPlaces('barber shop near Brunswick, Maine', undefined, undefined, 5000),
         UpstreamError
       );
+    }
+  )
+);
+
+test(
+  'searchPlaces uses real Nominatim POI results directly, never touching Overpass',
+  withFetchByUrl(
+    {
+      // The POI search call (searchNominatimPlaces) is distinguishable
+      // from the near-clause geocode call (geocodePlaceName) by its
+      // extra query params -- both hit the same nominatim host.
+      nominatim: async (url) => {
+        if (String(url).includes('addressdetails=1')) {
+          return {
+            ok: true,
+            json: async () => [
+              {
+                name: 'Clippers Barber Shop',
+                address: { house_number: '16', road: 'Vannah Avenue', city: 'Portland', state: 'Maine', postcode: '04103' },
+              },
+            ],
+          };
+        }
+        return { ok: true, json: async () => [{ lat: '43.9145', lon: '-69.9653' }] };
+      },
+      overpass: async () => {
+        throw new Error('Overpass should not be called when Nominatim already found results');
+      },
+    },
+    async () => {
+      const result = await searchPlaces('barber shop near Brunswick, Maine', undefined, undefined, 5000);
+      assert.deepEqual(result.results, [
+        { name: 'Clippers Barber Shop', address: '16 Vannah Avenue, Portland, Maine 04103' },
+      ]);
+    }
+  )
+);
+
+test(
+  'searchPlaces falls back to Overpass when Nominatim finds zero POI results',
+  withFetchByUrl(
+    {
+      nominatim: async () => ({ ok: true, json: async () => [] }),
+      overpass: async () => ({
+        ok: true,
+        json: async () => ({
+          elements: [
+            {
+              tags: { name: 'Pizza Place', 'addr:housenumber': '5', 'addr:street': 'Elm St', 'addr:postcode': '04011' },
+            },
+          ],
+        }),
+      }),
+    },
+    async () => {
+      const result = await searchPlaces('pizza', 43.9, -69.96, 5000);
+      assert.deepEqual(result.results, [{ name: 'Pizza Place', address: '5 Elm St 04011' }]);
     }
   )
 );

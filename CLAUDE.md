@@ -33,7 +33,7 @@ read-write).
   `console.log`/`console.error`) durably via journald instead of an
   ephemeral terminal or `/tmp` file.
 - Server tests: `cd geocoding-server && node --test` — **not** `npm test`,
-  that script is a placeholder stub. 155 tests, same throwaway-database-
+  that script is a placeholder stub. 161 tests, same throwaway-database-
   per-test pattern (see `test/helpers.js`); 1 pre-existing failure on
   non-Windows boxes (`zip.test.js`'s PowerShell-extraction check, `spawnSync
   powershell.exe ENOENT`) is expected and unrelated to any change here.
@@ -123,53 +123,66 @@ read-write).
   `MobileRedirectBanner`/`InstallAppBanner`, never both -- see
   `deviceDetection.ts`'s `isMobileDevice`). Purely a dismissible prompt,
   never an automatic redirect.
-- `OVERPASS_URL` (optional, default `https://overpass-api.de/api/interpreter`) --
-  the public Overpass API instance `POST /places/search`
-  (`geocoding-server/src/placesSearch.js`) queries for OpenStreetMap
-  points-of-interest near a clicked map location, matched against a
-  free-text query (`ui/desktop`'s Find Places page, `/find-places`).
-  Free, no API key/billing, same "public data only" sourcing as
-  everything else in this project -- but shared and genuinely rate-
-  limited (2 concurrent request slots per IP; see
-  `https://overpass-api.de/api/status`), so failures/timeouts/429s are
-  expected in normal operation, not a sign of a bug -- they surface as
-  `UpstreamError` -> HTTP 502, distinct from a real 500. Overpass
-  requires both an explicit `Content-Type` header (Node's `fetch`,
-  unlike a browser's, won't infer one for a plain string body -- omitting
-  it gets a 406) and a real `User-Agent` identifying the client (Node's
-  default fetch UA gets filtered by Overpass, also as a 406). The free
-  instance load-balances across several backend mirrors of uneven,
-  fluctuating load (the "Announced endpoint" in its own `/api/status`
-  varies call to call), so a single attempt landing on a busy one can
-  time out even when Overpass overall has capacity --
-  `OVERPASS_MAX_ATTEMPTS` retries once on a timeout/5xx before giving
-  up, but never retries a 429 (rate-limited), since hitting the same
-  2-slot-per-IP limit again immediately would just make it worse.
-  Results need `addr:housenumber` + `addr:street` + `addr:postcode` tags to
-  produce a Meridian-geocodable address line (`addressLineFromTags`) --
-  anything else is counted in `skipped`, not silently dropped. The page
-  downloads matched addresses as a plain `.txt` list, one per line, ready
-  to feed straight into Batch geocode -- this search itself does not use
-  Meridian's own geocoding.
-- `NOMINATIM_URL` (optional, default
-  `https://nominatim.openstreetmap.org/search`) -- a second, different
-  free/public OSM service `searchPlaces` calls only when the query
-  includes a "near &lt;place&gt;" clause (`parseNearQuery`, e.g. "barber
-  shop near Brunswick, Maine"), to resolve that place name to
-  coordinates without requiring a map click first. Distinct from
-  Overpass: Nominatim is a purpose-built place-name search index, not a
-  spatial query language, and has its own stricter usage policy (max 1
-  request/second, real `User-Agent` required -- fine here since it's one
-  lookup per user-initiated search, never batched). Always takes
-  priority over any explicit `latitude`/`longitude` also passed in, on
-  the theory that what the user just typed is a stronger signal than a
-  possibly-stale map click; without a "near" clause, `latitude`/
-  `longitude` are still required same as before this existed. Throws
-  `ValidationError` (the user's fault -- be more specific, or click the
-  map) when nothing matches, `UpstreamError` for a Nominatim-side
-  failure. The response's `center` field (only set when resolved this
-  way) lets `FindPlaces.tsx` move the map/marker to reflect where the
-  search actually landed.
+- `POST /places/search` (`geocoding-server/src/placesSearch.js`,
+  `ui/desktop`'s Find Places page and `ui/mobile`'s Find Places tab)
+  searches for a kind of place near a point, matched against a free-text
+  query. Tries two different free/public OSM services, in order:
+  1. **Nominatim first** (`NOMINATIM_URL`, default
+     `https://nominatim.openstreetmap.org/search`) -- fast and usually
+     reliable, but it's a purpose-built place-name/text search index,
+     not a spatial query language: it only matches literal text (a
+     business's own name, or an exact OSM taxonomy word like
+     "restaurant" or "hairdresser"), so a colloquial category term like
+     "pizza" or "coffee" that only exists as a `cuisine`/`shop` tag
+     value, not a name or a type word, won't match at all
+     (`searchNominatimPlaces`). Its own usage policy is stricter than
+     Overpass's -- an absolute max of 1 request/second -- and now
+     load-bearing (up to two calls per search: resolving a "near
+     &lt;place&gt;" clause, then the place search itself), so
+     `throttleNominatim` enforces that interval across every call site
+     sharing the module, not per-caller.
+  2. **Overpass as fallback** (`OVERPASS_URL`, default
+     `https://overpass-api.de/api/interpreter`) -- only tried when
+     Nominatim comes back with zero results or fails outright
+     (`searchPlaces`'s try/catch around the Nominatim call). Broader
+     recall via regex matching against `name`/`cuisine`/`amenity`/`shop`
+     tags directly (`buildOverpassQuery`), at the cost of being the less
+     reliable of the two -- shared and genuinely rate-limited (2
+     concurrent request slots per IP; see
+     `https://overpass-api.de/api/status`), so failures/timeouts/429s
+     here are expected in normal operation. `OVERPASS_TIMEOUT_SECONDS`
+     is kept short (8s) since a slow failure here is pure dead time on
+     top of whatever Nominatim already took -- failing fast (with one
+     retry, `OVERPASS_MAX_ATTEMPTS`, to land on a healthier backend
+     given the free instance load-balances across several mirrors of
+     uneven load) matters more than giving a single attempt every
+     possible chance to succeed. Never retries a 429 (rate-limited),
+     since hitting the same 2-slot-per-IP limit again immediately would
+     just make it worse. Also requires both an explicit `Content-Type`
+     header (Node's `fetch`, unlike a browser's, won't infer one for a
+     plain string body -- omitting it gets a 406) and a real
+     `User-Agent` (Node's default fetch UA gets filtered, also as a
+     406).
+
+  Both paths throw `UpstreamError` (not a generic `Error`) for anything
+  that's the upstream service's fault -- a timeout, a rate limit, a
+  non-2xx response -- surfacing as HTTP 502, distinct from a real 500.
+  `latitude`/`longitude` are optional when the query includes a "near
+  &lt;place&gt;" clause (`parseNearQuery`, e.g. "barber shop near
+  Brunswick, Maine") -- that place name is geocoded via Nominatim and
+  always takes priority over any explicit coordinates also passed in, on
+  the theory that what the user just typed is a stronger signal of
+  intent than a possibly-stale map click or GPS fix; without a "near"
+  clause, `latitude`/`longitude` are required. The response's `center`
+  field (only set when resolved via a "near" clause) lets the caller
+  move the map/marker to reflect where the search actually landed.
+  Either path's results need a house number + street + ZIP to produce a
+  Meridian-geocodable address line (`addressLineFromTags` for Overpass,
+  `addressLineFromNominatim` for Nominatim) -- anything else is counted
+  in `skipped`, not silently dropped. Both apps' Find Places screens
+  download/export matched addresses as a plain address list ready to
+  feed straight into Batch geocode / Import Addresses -- this search
+  itself does not use Meridian's own geocoding.
 - `FEEDBACK_NOTIFY_EMAIL` (optional -- unset = stub) is where `POST
   /feedback` emails you when a comment/question comes in; uses the same
   SES credentials above. The comment is saved in `geocoding_users`'
