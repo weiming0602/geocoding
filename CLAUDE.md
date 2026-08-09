@@ -213,7 +213,12 @@ read-write).
   (`filterableColumns`); a search box covers free-text columns like the
   address itself. "Select all shown"/"Deselect all shown" only touch
   the currently filtered rows, leaving anything hidden by the filter
-  untouched.
+  untouched. "Send to Batch geocode" skips the download/re-upload round
+  trip by navigating to `/batch` with the address list in router state
+  (`navigate('/batch', { state: { fileContent, fileName } })`) --
+  `Batch.tsx`'s `pickedFile` reads that via a lazy `useState`
+  initializer so it only applies on the navigation that carried it, not
+  on every re-render or a later plain visit to `/batch`.
 - `ui/desktop` is a scaffold only (Vite + React + react-router, routes
   for every screen, `ui/shared`'s API client wired up and proven working
   against a live `geocoding-server`) — no real screen UI implemented yet.

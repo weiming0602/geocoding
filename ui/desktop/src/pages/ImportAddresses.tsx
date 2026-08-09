@@ -1,4 +1,5 @@
 import { useCallback, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router';
 import * as XLSX from 'xlsx';
 
 export type ColumnRole = 'ignore' | 'streetFull' | 'streetNumber' | 'streetName' | 'city' | 'state' | 'zip';
@@ -67,6 +68,7 @@ type StatusFilter = 'all' | 'valid' | 'flagged';
 const ALL = '__all__';
 
 export default function ImportAddresses() {
+  const navigate = useNavigate();
   const [step, setStep] = useState<Step>('upload');
   const [fileName, setFileName] = useState('');
   const [headers, setHeaders] = useState<string[]>([]);
@@ -174,10 +176,14 @@ export default function ImportAddresses() {
     setIncluded((arr) => arr.map((v, i) => (indices.includes(i) ? value : v)));
   }, []);
 
+  const selectedLines = useMemo(
+    () => previewRows.filter((_, i) => included[i]).map((r) => r.address),
+    [previewRows, included]
+  );
+
   const handleDownload = useCallback(() => {
-    const lines = previewRows.filter((_, i) => included[i]).map((r) => r.address);
-    if (lines.length === 0) return;
-    const content = lines.join('\n');
+    if (selectedLines.length === 0) return;
+    const content = selectedLines.join('\n');
     const blob = new Blob([content], { type: 'text/plain' });
     const objectUrl = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -187,7 +193,16 @@ export default function ImportAddresses() {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(objectUrl);
-  }, [previewRows, included]);
+  }, [selectedLines]);
+
+  // Skips the download/re-upload round trip -- Batch.tsx picks this up
+  // via its pickedFile initializer reading location.state on mount.
+  const handleSendToBatch = useCallback(() => {
+    if (selectedLines.length === 0) return;
+    navigate('/batch', {
+      state: { fileContent: selectedLines.join('\n'), fileName: 'imported-addresses.txt' },
+    });
+  }, [selectedLines, navigate]);
 
   const reset = useCallback(() => {
     setStep('upload');
@@ -421,7 +436,10 @@ export default function ImportAddresses() {
             <button className="btn btn-secondary" onClick={() => setStep('map')}>
               Back to mapping
             </button>
-            <button className="btn btn-primary" onClick={handleDownload} disabled={includedCount === 0}>
+            <button className="btn btn-primary" onClick={handleSendToBatch} disabled={includedCount === 0}>
+              Send to Batch geocode
+            </button>
+            <button className="btn btn-secondary" onClick={handleDownload} disabled={includedCount === 0}>
               Download address list (.txt)
             </button>
           </div>

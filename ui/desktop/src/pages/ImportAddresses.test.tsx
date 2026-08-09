@@ -1,8 +1,10 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { MemoryRouter, Route, Routes } from 'react-router';
 import * as XLSX from 'xlsx';
 import { describe, expect, it } from 'vitest';
 
 import ImportAddresses, { buildAddressLine, guessRole, isGeocodableAddressLine, type ColumnRole } from './ImportAddresses';
+import Batch from './Batch';
 
 describe('guessRole', () => {
   it('recognizes common header spellings for each role', () => {
@@ -95,7 +97,14 @@ describe('ImportAddresses component (upload -> map -> preview -> filter)', () =>
   ].join('\n');
 
   async function uploadAndPreview() {
-    const { container } = render(<ImportAddresses />);
+    const { container } = render(
+      <MemoryRouter initialEntries={['/import-addresses']}>
+        <Routes>
+          <Route path="/import-addresses" element={<ImportAddresses />} />
+          <Route path="/batch" element={<Batch />} />
+        </Routes>
+      </MemoryRouter>
+    );
     const file = new File([csv], 'addresses.csv', { type: 'text/csv' });
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [file] } });
@@ -153,5 +162,16 @@ describe('ImportAddresses component (upload -> map -> preview -> filter)', () =>
     fireEvent.change(citySelect, { target: { value: '__all__' } });
     const table = within(container.querySelector('table') as HTMLTableElement);
     expect(table.getAllByRole('row')).toHaveLength(6); // 5 data rows + header
+  });
+
+  it('"Send to Batch geocode" navigates to Batch with the selected rows pre-filled, skipping download', async () => {
+    await uploadAndPreview();
+    // Default selection: the 3 valid rows (Chestnut, Custom House Wharf, Deerfield).
+    fireEvent.click(screen.getByRole('button', { name: 'Send to Batch geocode' }));
+
+    // Batch.tsx renders the picked file's name in place of the file-path input.
+    const filePathInput = await screen.findByPlaceholderText('C:\\software\\database\\addresses.txt');
+    expect(filePathInput).toHaveValue('imported-addresses.txt');
+    expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument(); // only shown when pickedFile is set
   });
 });

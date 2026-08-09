@@ -1,14 +1,26 @@
 import { useCallback, useRef, useState } from 'react';
+import { useLocation } from 'react-router';
 
 import { batchGeocode, batchGeocodeDownload } from '../../../shared/api/client';
 import type { BatchResult, BatchSource } from '../../../shared/api/types';
 import BatchMapView from '../components/BatchMapView';
 
+type ForwardedFile = { fileContent: string; fileName?: string };
+
 export default function Batch() {
+  const location = useLocation();
   const [email, setEmail] = useState('');
   const [serviceKey, setServiceKey] = useState('');
   const [filePath, setFilePath] = useState('');
-  const [pickedFile, setPickedFile] = useState<{ name: string; content: string } | null>(null);
+  // Populated on mount when arriving via Import Addresses' "Send to
+  // Batch geocode" button (navigate('/batch', { state: {...} })) --
+  // the lazy initializer only runs once, so it won't re-trigger on a
+  // later re-render or a plain back-navigation without that state.
+  const [pickedFile, setPickedFile] = useState<{ name: string; content: string } | null>(() => {
+    const state = location.state as ForwardedFile | null;
+    if (!state?.fileContent) return null;
+    return { name: state.fileName ?? 'imported-addresses.txt', content: state.fileContent };
+  });
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [results, setResults] = useState<BatchResult[] | null>(null);
