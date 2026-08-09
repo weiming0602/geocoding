@@ -17,6 +17,17 @@ const OVERPASS_MAX_ATTEMPTS = 2;
 const MAX_RESULTS = 200;
 const MAX_RADIUS_METERS = 25000;
 
+// OSM's own place-name search (a different service from Overpass --
+// Overpass has no free-text/place-name lookup at all) -- resolves a
+// "near <place>" clause (see parseNearQuery) to coordinates, so a query
+// like "barber shop near Brunswick, Maine" doesn't require first
+// clicking a point on the map. Free, no API key, but a stricter usage
+// policy than Overpass's: max 1 request/second and a real User-Agent
+// (both fine here -- one lookup per user-initiated search, never
+// batched). https://operations.osmfoundation.org/policies/nominatim/
+const NOMINATIM_URL = process.env.NOMINATIM_URL || 'https://nominatim.openstreetmap.org/search';
+const NOMINATIM_TIMEOUT_MS = 10000;
+
 /**
  * Splits a free-text query into individual words for tag matching --
  * Overpass has no free-text/semantic search, only tag equality/regex, so
@@ -70,6 +81,60 @@ function addressLineFromTags(tags) {
   const cityState = [city, state].filter(Boolean).join(', ');
   const middle = cityState ? `, ${cityState}` : '';
   return `${houseNumber} ${street}${middle} ${postcode}`.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * Splits "barber shop near Brunswick, Maine" into `{ terms: 'barber
+ * shop', locationPhrase: 'Brunswick, Maine' }`. Only the last "near"
+ * counts as the split point (rightmost, not first) -- there's no reason
+ * a place name itself would contain the word "near", but a query
+ * plausibly could ("things to do near near Brunswick" is unlikely, but
+ * matching last keeps `terms` intact even in that edge case). Returns
+ * `locationPhrase: null` when there's no "near" clause at all, or when
+ * either side would be empty -- callers fall back to requiring an
+ * explicit latitude/longitude in that case.
+ */
+function parseNearQuery(query) {
+  const trimmed = query.trim();
+  const match = /^(.*)\s+near\s+(.+)$/i.exec(trimmed);
+  if (!match) return { terms: trimmed, locationPhrase: null };
+  const terms = match[1].trim();
+  const locationPhrase = match[2].trim();
+  if (!terms || !locationPhrase) return { terms: trimmed, locationPhrase: null };
+  return { terms, locationPhrase };
+}
+
+/**
+ * Resolves a place name (a town, a street, a landmark -- anything
+ * Nominatim's own search covers) to coordinates via OSM's Nominatim.
+ * Throws ValidationError (the user's fault -- try a more specific
+ * phrase) when nothing matches, UpstreamError (Nominatim's fault) for
+ * a network failure or non-2xx response, matching the same split
+ * `searchPlaces` already uses for Overpass failures.
+ */
+async function geocodePlaceName(locationPhrase) {
+  const url = `${NOMINATIM_URL}?format=json&limit=1&q=${encodeURIComponent(locationPhrase)}`;
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: {
+        'User-Agent': 'Meridian-Geocoding-Server/1.0 (+https://github.com/meridian-geocoding)',
+      },
+      signal: AbortSignal.timeout(NOMINATIM_TIMEOUT_MS),
+    });
+  } catch (err) {
+    throw new UpstreamError(`could not look up "${locationPhrase}": ${err.message}`);
+  }
+  if (!response.ok) {
+    throw new UpstreamError(`could not look up "${locationPhrase}" (status ${response.status})`);
+  }
+  const results = await response.json();
+  if (!Array.isArray(results) || results.length === 0) {
+    throw new ValidationError(
+      `couldn't find a location matching "${locationPhrase}" -- try being more specific, or click a point on the map instead`
+    );
+  }
+  return { latitude: parseFloat(results[0].lat), longitude: parseFloat(results[0].lon) };
 }
 
 /**
@@ -128,21 +193,27 @@ async function fetchOverpassWithRetry(overpassQuery) {
 }
 
 /**
- * Searches Overpass for places near (latitude, longitude) matching
- * `query`, extracting a Meridian-geocodable address line from each
- * result that has one. Results with a name/coordinate but no usable
- * street address are counted in `skipped`, not silently dropped.
- * Throws UpstreamError (not a generic Error) for anything that's
- * Overpass's fault -- a timeout, a rate limit, a non-2xx response --
- * so callers can tell "the free public service is having a moment"
- * apart from a real bug.
+ * Searches Overpass for places matching `query`, extracting a Meridian-
+ * geocodable address line from each result that has one. Results with
+ * a name/coordinate but no usable street address are counted in
+ * `skipped`, not silently dropped. Throws UpstreamError (not a generic
+ * Error) for anything that's Overpass's (or Nominatim's) fault -- a
+ * timeout, a rate limit, a non-2xx response -- so callers can tell "the
+ * free public service is having a moment" apart from a real bug.
+ *
+ * `latitude`/`longitude` are optional when `query` contains a "near
+ * <place>" clause (see parseNearQuery) -- that place name is geocoded
+ * via Nominatim and always takes priority over any explicit
+ * coordinates passed in, on the theory that what the user just typed
+ * is a stronger signal of intent than a possibly-stale map click.
+ * Without a "near" clause, `latitude`/`longitude` are required, same as
+ * before this existed. The response's `center` field reports back
+ * whatever coordinates were actually searched from, so a caller (e.g.
+ * the map) can reflect where a "near <place>" query actually landed.
  */
 async function searchPlaces(query, latitude, longitude, radiusMeters) {
   if (typeof query !== 'string' || !query.trim()) {
     throw new ValidationError('query must be a non-empty string');
-  }
-  if (typeof latitude !== 'number' || typeof longitude !== 'number') {
-    throw new ValidationError('latitude and longitude must be numbers');
   }
   if (typeof radiusMeters !== 'number' || radiusMeters <= 0) {
     throw new ValidationError('radiusMeters must be a positive number');
@@ -151,12 +222,26 @@ async function searchPlaces(query, latitude, longitude, radiusMeters) {
     throw new ValidationError(`radiusMeters must be at most ${MAX_RADIUS_METERS}`);
   }
 
-  const words = queryWords(query);
+  const { terms, locationPhrase } = parseNearQuery(query);
+
+  let resolvedLatitude = latitude;
+  let resolvedLongitude = longitude;
+  if (locationPhrase) {
+    const resolved = await geocodePlaceName(locationPhrase);
+    resolvedLatitude = resolved.latitude;
+    resolvedLongitude = resolved.longitude;
+  } else if (typeof latitude !== 'number' || typeof longitude !== 'number') {
+    throw new ValidationError(
+      'latitude and longitude must be numbers, or include "near <place>" in the query'
+    );
+  }
+
+  const words = queryWords(terms);
   if (words.length === 0) {
     throw new ValidationError('query must contain at least one word');
   }
 
-  const overpassQuery = buildOverpassQuery(words, latitude, longitude, radiusMeters);
+  const overpassQuery = buildOverpassQuery(words, resolvedLatitude, resolvedLongitude, radiusMeters);
   const body = await fetchOverpassWithRetry(overpassQuery);
   const elements = Array.isArray(body.elements) ? body.elements : [];
 
@@ -176,13 +261,22 @@ async function searchPlaces(query, latitude, longitude, radiusMeters) {
     if (results.length >= MAX_RESULTS) break;
   }
 
-  return { results, skipped, truncated: results.length >= MAX_RESULTS };
+  return {
+    results,
+    skipped,
+    truncated: results.length >= MAX_RESULTS,
+    // Only set when resolved via a "near <place>" clause -- callers
+    // that supplied explicit coordinates already know where they
+    // searched, so echoing those back would just be noise.
+    center: locationPhrase ? { latitude: resolvedLatitude, longitude: resolvedLongitude } : undefined,
+  };
 }
 
 module.exports = {
   searchPlaces,
   buildOverpassQuery,
   addressLineFromTags,
+  parseNearQuery,
   MAX_RESULTS,
   MAX_RADIUS_METERS,
   OVERPASS_MAX_ATTEMPTS,

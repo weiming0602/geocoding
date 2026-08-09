@@ -21,13 +21,18 @@ export default function FindPlaces() {
   const [skipped, setSkipped] = useState(0);
   const [truncated, setTruncated] = useState(false);
 
+  // "barber shop near Brunswick, Maine" resolves its own center
+  // server-side (via Nominatim) -- only queries without a "near" clause
+  // need a map click first.
+  const hasNearClause = /\bnear\b/i.test(query);
+
   const handleSearch = useCallback(async () => {
     if (!query.trim()) {
       setError('Enter what you’re looking for first.');
       return;
     }
-    if (!center) {
-      setError('Click a point on the map to search near.');
+    if (!hasNearClause && !center) {
+      setError('Click a point on the map to search near, or add "near <place>" to your search.');
       return;
     }
     setLoading(true);
@@ -36,19 +41,22 @@ export default function FindPlaces() {
     try {
       const response = await searchPlaces({
         query: query.trim(),
-        latitude: center.latitude,
-        longitude: center.longitude,
+        latitude: center?.latitude,
+        longitude: center?.longitude,
         radiusMeters,
       });
       setResults(response.results);
       setSkipped(response.skipped);
       setTruncated(response.truncated);
+      // Reflects where a "near <place>" query actually landed -- moves
+      // the map/marker to match without the user having to click or pan.
+      if (response.center) setCenter(response.center);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Search failed.');
     } finally {
       setLoading(false);
     }
-  }, [query, center, radiusMeters]);
+  }, [query, hasNearClause, center, radiusMeters]);
 
   const handleDownload = useCallback(() => {
     if (!results || results.length === 0) return;
@@ -68,16 +76,18 @@ export default function FindPlaces() {
     <div>
       <h1>Find places</h1>
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
-        Search for a kind of place (via OpenStreetMap) near a point you click on the map, then
-        download the results as an address list ready for{' '}
-        <a href="#/batch">Batch geocode</a>.
+        Search for a kind of place (via OpenStreetMap) near a point you click on the map -- or
+        just type where, e.g. "barber shop near Brunswick, Maine" -- then download the results as
+        an address list ready for <a href="#/batch">Batch geocode</a>.
       </p>
 
       <div className="plate" style={{ marginBottom: 'var(--space-6)', padding: 'var(--space-3)' }}>
         This search itself doesn't use Meridian's own geocoding — it's powered by public
         OpenStreetMap data, matched against whatever you type (e.g. "pizza", "hardware store",
-        "asian restaurant"). What you get back is a plain address list, which you can then run
-        through Batch geocode for precise, Meridian-computed coordinates.
+        "asian restaurant"). Adding "near &lt;place&gt;" looks that place up via OSM's own
+        place-name search (Nominatim, also free/public) instead of requiring a map click. What you
+        get back is a plain address list, which you can then run through Batch geocode for
+        precise, Meridian-computed coordinates.
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 'var(--space-6)', alignItems: 'start' }}>
@@ -86,7 +96,7 @@ export default function FindPlaces() {
             <label>What are you looking for?</label>
             <input
               className="input"
-              placeholder="e.g. pizza, hardware store"
+              placeholder='e.g. "pizza" or "barber shop near Brunswick, ME"'
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -110,7 +120,9 @@ export default function FindPlaces() {
           <p className="text-muted" style={{ fontSize: 12, margin: 0 }}>
             {center
               ? `Searching near ${center.latitude.toFixed(5)}, ${center.longitude.toFixed(5)}`
-              : 'Click a point on the map to set where to search near.'}
+              : hasNearClause
+                ? 'Will look up that location when you hit Search.'
+                : 'Click a point on the map, or add "near <place>" to your search.'}
           </p>
 
           <button className="btn btn-primary btn-block" onClick={handleSearch} disabled={loading}>

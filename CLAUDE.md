@@ -33,7 +33,7 @@ read-write).
   `console.log`/`console.error`) durably via journald instead of an
   ephemeral terminal or `/tmp` file.
 - Server tests: `cd geocoding-server && node --test` — **not** `npm test`,
-  that script is a placeholder stub. 149 tests, same throwaway-database-
+  that script is a placeholder stub. 155 tests, same throwaway-database-
   per-test pattern (see `test/helpers.js`); 1 pre-existing failure on
   non-Windows boxes (`zip.test.js`'s PowerShell-extraction check, `spawnSync
   powershell.exe ENOENT`) is expected and unrelated to any change here.
@@ -151,6 +151,25 @@ read-write).
   downloads matched addresses as a plain `.txt` list, one per line, ready
   to feed straight into Batch geocode -- this search itself does not use
   Meridian's own geocoding.
+- `NOMINATIM_URL` (optional, default
+  `https://nominatim.openstreetmap.org/search`) -- a second, different
+  free/public OSM service `searchPlaces` calls only when the query
+  includes a "near &lt;place&gt;" clause (`parseNearQuery`, e.g. "barber
+  shop near Brunswick, Maine"), to resolve that place name to
+  coordinates without requiring a map click first. Distinct from
+  Overpass: Nominatim is a purpose-built place-name search index, not a
+  spatial query language, and has its own stricter usage policy (max 1
+  request/second, real `User-Agent` required -- fine here since it's one
+  lookup per user-initiated search, never batched). Always takes
+  priority over any explicit `latitude`/`longitude` also passed in, on
+  the theory that what the user just typed is a stronger signal than a
+  possibly-stale map click; without a "near" clause, `latitude`/
+  `longitude` are still required same as before this existed. Throws
+  `ValidationError` (the user's fault -- be more specific, or click the
+  map) when nothing matches, `UpstreamError` for a Nominatim-side
+  failure. The response's `center` field (only set when resolved this
+  way) lets `FindPlaces.tsx` move the map/marker to reflect where the
+  search actually landed.
 - `FEEDBACK_NOTIFY_EMAIL` (optional -- unset = stub) is where `POST
   /feedback` emails you when a comment/question comes in; uses the same
   SES credentials above. The comment is saved in `geocoding_users`'

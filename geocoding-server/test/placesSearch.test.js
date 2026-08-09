@@ -5,6 +5,7 @@ const {
   searchPlaces,
   buildOverpassQuery,
   addressLineFromTags,
+  parseNearQuery,
   MAX_RESULTS,
 } = require('../src/placesSearch');
 const { ValidationError, UpstreamError } = require('../src/errors');
@@ -219,4 +220,109 @@ test('searchPlaces validates its inputs before ever calling fetch', async () => 
   await assert.rejects(() => searchPlaces('thai', 'not-a-number', -70.26, 5000), ValidationError);
   await assert.rejects(() => searchPlaces('thai', 43.66, -70.26, -1), ValidationError);
   await assert.rejects(() => searchPlaces('thai', 43.66, -70.26, 999999), ValidationError);
+});
+
+test('parseNearQuery splits terms from a trailing "near <place>" clause', () => {
+  assert.deepEqual(parseNearQuery('barber shop near Brunswick, Maine'), {
+    terms: 'barber shop',
+    locationPhrase: 'Brunswick, Maine',
+  });
+  assert.deepEqual(parseNearQuery('pizza'), { terms: 'pizza', locationPhrase: null });
+  // "near" with nothing after it, or nothing before it, isn't a usable split.
+  assert.deepEqual(parseNearQuery('pizza near'), { terms: 'pizza near', locationPhrase: null });
+  assert.deepEqual(parseNearQuery('near Brunswick'), { terms: 'near Brunswick', locationPhrase: null });
+  // Rightmost "near" wins, so an incidental earlier "near" in the terms doesn't split there.
+  assert.deepEqual(parseNearQuery('things near me near Brunswick, Maine'), {
+    terms: 'things near me',
+    locationPhrase: 'Brunswick, Maine',
+  });
+});
+
+// searchPlaces with a "near <place>" query calls fetch twice: once to
+// Nominatim (geocode the place), once to Overpass (the actual search) --
+// this fake routes by URL the same way placesSearchEndpoint.test.js
+// routes by host, since a single generic fake can't serve both shapes.
+function withFetchByUrl(handlers, fn) {
+  return async () => {
+    const saved = global.fetch;
+    global.fetch = async (url, ...args) => {
+      if (typeof url === 'string' && url.includes('nominatim')) return handlers.nominatim(url, ...args);
+      return handlers.overpass(url, ...args);
+    };
+    try {
+      await fn();
+    } finally {
+      global.fetch = saved;
+    }
+  };
+}
+
+test(
+  'searchPlaces resolves a "near <place>" clause via Nominatim and searches from there',
+  withFetchByUrl(
+    {
+      nominatim: async (url) => {
+        assert.match(url, /q=Brunswick%2C%20Maine/);
+        return { ok: true, json: async () => [{ lat: '43.9145', lon: '-69.9653' }] };
+      },
+      overpass: async (_url, opts) => {
+        assert.match(opts.body, /around:5000,43\.9145,-69\.9653/);
+        assert.match(opts.body, /"name"~"barber",i/);
+        return { ok: true, json: async () => ({ elements: [] }) };
+      },
+    },
+    async () => {
+      const result = await searchPlaces('barber shop near Brunswick, Maine', undefined, undefined, 5000);
+      assert.deepEqual(result.center, { latitude: 43.9145, longitude: -69.9653 });
+    }
+  )
+);
+
+test(
+  'searchPlaces prefers the "near <place>" clause over explicit coordinates when both are given',
+  withFetchByUrl(
+    {
+      nominatim: async () => ({ ok: true, json: async () => [{ lat: '43.9145', lon: '-69.9653' }] }),
+      overpass: async (_url, opts) => {
+        assert.match(opts.body, /around:5000,43\.9145,-69\.9653/); // not the passed-in 0,0
+        return { ok: true, json: async () => ({ elements: [] }) };
+      },
+    },
+    async () => {
+      await searchPlaces('barber shop near Brunswick, Maine', 0, 0, 5000);
+    }
+  )
+);
+
+test(
+  'searchPlaces throws ValidationError when Nominatim finds nothing for the place name',
+  withFetchByUrl(
+    { nominatim: async () => ({ ok: true, json: async () => [] }), overpass: async () => ({ ok: true, json: async () => ({}) }) },
+    async () => {
+      await assert.rejects(
+        () => searchPlaces('barber shop near Nowhereville', undefined, undefined, 5000),
+        /couldn't find a location matching/
+      );
+    }
+  )
+);
+
+test(
+  'searchPlaces throws UpstreamError when Nominatim itself fails',
+  withFetchByUrl(
+    { nominatim: async () => ({ ok: false, status: 503 }), overpass: async () => ({ ok: true, json: async () => ({}) }) },
+    async () => {
+      await assert.rejects(
+        () => searchPlaces('barber shop near Brunswick, Maine', undefined, undefined, 5000),
+        UpstreamError
+      );
+    }
+  )
+);
+
+test('searchPlaces still requires latitude/longitude when there is no "near" clause', async () => {
+  await assert.rejects(
+    () => searchPlaces('barber shop', undefined, undefined, 5000),
+    /latitude and longitude must be numbers/
+  );
 });

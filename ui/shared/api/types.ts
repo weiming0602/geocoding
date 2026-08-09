@@ -99,4 +99,8 @@ export type PlaceSearchResponse = {
   results: PlaceResult[];
   skipped: number;
   truncated: boolean;
+  // Only set when the query included a "near <place>" clause (resolved
+  // via Nominatim server-side) -- lets the caller show/update the map
+  // to reflect where the search actually landed.
+  center?: { latitude: number; longitude: number };
 };
