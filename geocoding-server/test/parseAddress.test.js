@@ -83,6 +83,49 @@ test('a single comma before the state (no separate town) parses with town null',
   assert.equal(result.town, null);
 });
 
+// Regression test: "Street, Town, State, ZIP" (a trailing comma before
+// the ZIP, in addition to the usual street/town split) used to swallow
+// "Town, State" whole into `town` and leave `state` empty, since the
+// comma right before the ZIP looked identical to the normal "Street,
+// Town, <ZIP with no state>" shape. Broke Maine E911 address-point
+// matching (town must match exactly) for anyone typing a full state name
+// with its own trailing comma -- see geocode.js's matchAddressPoint.
+test('a trailing comma before the ZIP does not swallow the state into town', () => {
+  const result = parseAddress('13 Deerfield Dr, Brunswick, Maine, 04011');
+  assert.deepEqual(result, {
+    number: 13,
+    streetName: 'Deerfield Dr',
+    zip: '04011',
+    state: 'Maine',
+    town: 'Brunswick',
+  });
+});
+
+test('a trailing comma before the ZIP with a 2-letter state also parses correctly', () => {
+  const result = parseAddress('13 Deerfield Dr, Brunswick, ME, 04011');
+  assert.deepEqual(result, {
+    number: 13,
+    streetName: 'Deerfield Dr',
+    zip: '04011',
+    state: 'ME',
+    town: 'Brunswick',
+  });
+});
+
+// "Street, Town," with nothing else before the ZIP (only 2 commas, not
+// 3) is the ordinary no-state shape and must still parse with town only
+// -- the fix above must not touch this case.
+test('a trailing comma with no state segment still parses as town only (unchanged)', () => {
+  const result = parseAddress('13 Deerfield Dr, Brunswick, 04011');
+  assert.deepEqual(result, {
+    number: 13,
+    streetName: 'Deerfield Dr',
+    zip: '04011',
+    state: null,
+    town: 'Brunswick',
+  });
+});
+
 test('rejects a non-string address', () => {
   assert.throws(() => parseAddress(42), ValidationError);
 });

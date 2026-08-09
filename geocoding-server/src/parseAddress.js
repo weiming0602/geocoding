@@ -24,6 +24,7 @@ const US_STATE_CODES = new Set([
  * Handles the common shapes:
  *   "996 Pequawket Trl, Standish, ME 04091"
  *   "996 Pequawket Trl, Standish, Maine 04091"
+ *   "996 Pequawket Trl, Standish, Maine, 04091"
  *   "996 Pequawket Trl ME 04091"
  * Basic by design: assumes a leading house number and a trailing
  * 5-digit ZIP. Street name is everything up to the first comma (or,
@@ -33,9 +34,17 @@ const US_STATE_CODES = new Set([
  * null if it can't be confidently isolated (e.g. no comma and no
  * trailing 2-letter code). `town` is whatever sits between the first and
  * last comma (e.g. "Standish" above) -- null when there's only one comma
- * (or none), i.e. no town was given separately from the street/state.
+ * (or none), i.e. no town was given separately from the street/state. A
+ * comma directly before the ZIP with nothing after it (third example
+ * above) doesn't count as its own segment -- without dropping it, "state"
+ * would end up empty and "Standish, Maine" would incorrectly get
+ * swallowed whole into `town`, since it'd otherwise look identical to
+ * "everything between the first and last comma".
  * Used to match Maine's E911 address points, which are keyed by town
- * rather than ZIP (see matchAddressPoint in geocode.js).
+ * rather than ZIP (see matchAddressPoint in geocode.js) -- getting town
+ * wrong here (e.g. "Standish, Maine" instead of "Standish") silently
+ * falls back to interpolation instead of an exact match, since the E911
+ * lookup requires an exact town match.
  */
 function parseAddress(input) {
   if (typeof input !== 'string') {
@@ -67,18 +76,38 @@ function parseAddress(input) {
   const zipIndexInAfterNumber = zipMatches[zipMatches.length - 1].index - numberMatch[0].length;
   const beforeZip = afterNumber.slice(0, zipIndexInAfterNumber);
 
-  const commaIndex = beforeZip.indexOf(',');
+  const commaIndices = [...beforeZip.matchAll(/,/g)].map((m) => m.index);
   let streetPart;
   let state = null;
   let town = null;
 
-  if (commaIndex >= 0) {
-    streetPart = beforeZip.slice(0, commaIndex);
-    const lastCommaIndex = beforeZip.lastIndexOf(',');
-    const stateCandidate = beforeZip.slice(lastCommaIndex + 1).trim();
+  if (commaIndices.length > 0) {
+    streetPart = beforeZip.slice(0, commaIndices[0]);
+
+    // With 3+ commas, a trailing one directly before the ZIP (nothing but
+    // whitespace after it) is a separator, not its own segment -- drop it
+    // so the real state segment (e.g. "Maine" in "..., Standish, Maine,
+    // 04091") gets split out instead of absorbed into town. Only applies
+    // past 2 commas: with exactly 2, that same "empty after the last
+    // comma" shape is the normal "Street, Town, <zip>" case (no state
+    // given at all), which already works via the empty-state fallback
+    // below and must keep working unchanged.
+    let usableCommaIndices = commaIndices;
+    let stateSliceEnd = beforeZip.length;
+    if (commaIndices.length > 2) {
+      const trueLastComma = commaIndices[commaIndices.length - 1];
+      if (!beforeZip.slice(trueLastComma + 1).trim()) {
+        stateSliceEnd = trueLastComma;
+        usableCommaIndices = commaIndices.slice(0, -1);
+      }
+    }
+
+    const firstComma = usableCommaIndices[0];
+    const lastComma = usableCommaIndices[usableCommaIndices.length - 1];
+    const stateCandidate = beforeZip.slice(lastComma + 1, stateSliceEnd).trim();
     state = stateCandidate || null;
-    if (lastCommaIndex > commaIndex) {
-      const townCandidate = beforeZip.slice(commaIndex + 1, lastCommaIndex).trim();
+    if (lastComma > firstComma) {
+      const townCandidate = beforeZip.slice(firstComma + 1, lastComma).trim();
       town = townCandidate || null;
     }
   } else {
