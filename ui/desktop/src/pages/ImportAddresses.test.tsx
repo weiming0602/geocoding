@@ -1,7 +1,8 @@
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import * as XLSX from 'xlsx';
 import { describe, expect, it } from 'vitest';
 
-import { buildAddressLine, guessRole, isGeocodableAddressLine, type ColumnRole } from './ImportAddresses';
+import ImportAddresses, { buildAddressLine, guessRole, isGeocodableAddressLine, type ColumnRole } from './ImportAddresses';
 
 describe('guessRole', () => {
   it('recognizes common header spellings for each role', () => {
@@ -80,5 +81,77 @@ describe('SheetJS round trip (the actual file-parsing path)', () => {
 
     const line2 = buildAddressLine(rows[2], mapping);
     expect(isGeocodableAddressLine(line2)).toBe(false); // missing house number
+  });
+});
+
+describe('ImportAddresses component (upload -> map -> preview -> filter)', () => {
+  const csv = [
+    'House Number,Street Name,City,State,Zip Code',
+    '91,Chestnut St,Portland,ME,04101',
+    '20,Custom House Wharf,Portland,ME,04101',
+    '13,Deerfield Dr,Brunswick,ME,04011',
+    ',Congress St,Portland,ME,04101', // missing number -- flagged
+    '43,Middle St,Portland,ME,', // missing zip -- flagged
+  ].join('\n');
+
+  async function uploadAndPreview() {
+    const { container } = render(<ImportAddresses />);
+    const file = new File([csv], 'addresses.csv', { type: 'text/csv' });
+    const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(input, { target: { files: [file] } });
+
+    await waitFor(() => screen.getByText('Map your columns'));
+    fireEvent.click(screen.getByRole('button', { name: 'Preview addresses' }));
+    await waitFor(() => screen.getByText(/row.*selected/));
+    return container;
+  }
+
+  it('auto-maps columns, builds address lines, and flags incomplete rows by default', async () => {
+    await uploadAndPreview();
+
+    expect(screen.getByText('91 Chestnut St, Portland, ME 04101')).toBeInTheDocument();
+    expect(screen.getByText('13 Deerfield Dr, Brunswick, ME 04011')).toBeInTheDocument();
+    expect(screen.getByText('3 of 5 rows selected')).toBeInTheDocument();
+    expect(screen.getAllByText('missing number or ZIP')).toHaveLength(2);
+  });
+
+  it('filters rows by a column value (City) and by status', async () => {
+    const container = await uploadAndPreview();
+    const table = () => within(container.querySelector('table') as HTMLTableElement);
+
+    const citySelect = screen.getByLabelText('City') as HTMLSelectElement;
+    fireEvent.change(citySelect, { target: { value: 'Brunswick' } });
+    expect(screen.getByText(/Showing 1 of 5 rows/)).toBeInTheDocument();
+    expect(table().getByText('13 Deerfield Dr, Brunswick, ME 04011')).toBeInTheDocument();
+    expect(table().queryByText(/Chestnut St/)).not.toBeInTheDocument();
+
+    fireEvent.change(citySelect, { target: { value: '__all__' } });
+    const statusSelect = screen.getByLabelText('Status') as HTMLSelectElement;
+    fireEvent.change(statusSelect, { target: { value: 'flagged' } });
+    expect(screen.getByText(/Showing 2 of 5 rows/)).toBeInTheDocument();
+    expect(screen.getAllByText('missing number or ZIP')).toHaveLength(2);
+  });
+
+  it('"Select all shown" / "Deselect all shown" only affect the currently filtered rows', async () => {
+    const container = await uploadAndPreview();
+    expect(screen.getByText('3 of 5 rows selected')).toBeInTheDocument();
+
+    const citySelect = screen.getByLabelText('City') as HTMLSelectElement;
+    // 4 Portland rows (2 already checked, 2 flagged/unchecked); Deerfield
+    // (Brunswick, already checked) is the only row NOT shown by this filter.
+    fireEvent.change(citySelect, { target: { value: 'Portland' } });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Select all shown' }));
+    // All 4 Portland rows now checked, plus Deerfield (untouched, was already checked) = 5 of 5.
+    expect(screen.getByText('5 of 5 rows selected')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Deselect all shown' }));
+    // Deselects the 4 Portland rows; Deerfield (not shown, untouched) stays checked.
+    expect(screen.getByText('1 of 5 rows selected')).toBeInTheDocument();
+
+    // Clearing the filter should reveal all 5 rows again, still 1 selected.
+    fireEvent.change(citySelect, { target: { value: '__all__' } });
+    const table = within(container.querySelector('table') as HTMLTableElement);
+    expect(table.getAllByRole('row')).toHaveLength(6); // 5 data rows + header
   });
 });

@@ -29,15 +29,20 @@ export function guessRole(header: string): ColumnRole {
   return 'ignore';
 }
 
+// Shared by buildAddressLine (to assemble the address line) and the
+// preview step's column filters (to list a mapped column's distinct
+// values) -- one lookup, so both agree on which column a role points at.
+export function getMappedValue(row: string[], mapping: Record<number, ColumnRole>, role: ColumnRole): string {
+  const idx = Object.keys(mapping).find((i) => mapping[Number(i)] === role);
+  return idx !== undefined ? (row[Number(idx)] ?? '').toString().trim() : '';
+}
+
 // Mirrors placesSearch.js's addressLineFromTags shape server-side:
 // "<street>, <city>, <state> <zip>" with city/state omitted gracefully
 // when blank -- kept in sync so imported rows and Overpass-found places
 // produce the same address-line format.
 export function buildAddressLine(row: string[], mapping: Record<number, ColumnRole>): string {
-  const get = (role: ColumnRole) => {
-    const idx = Object.keys(mapping).find((i) => mapping[Number(i)] === role);
-    return idx !== undefined ? (row[Number(idx)] ?? '').toString().trim() : '';
-  };
+  const get = (role: ColumnRole) => getMappedValue(row, mapping, role);
   let street = get('streetFull');
   if (!street) {
     street = [get('streetNumber'), get('streetName')].filter(Boolean).join(' ');
@@ -58,6 +63,8 @@ export function isGeocodableAddressLine(line: string): boolean {
 }
 
 type Step = 'upload' | 'map' | 'preview';
+type StatusFilter = 'all' | 'valid' | 'flagged';
+const ALL = '__all__';
 
 export default function ImportAddresses() {
   const [step, setStep] = useState<Step>('upload');
@@ -67,6 +74,13 @@ export default function ImportAddresses() {
   const [hasHeaderRow, setHasHeaderRow] = useState(true);
   const [mapping, setMapping] = useState<Record<number, ColumnRole>>({});
   const [included, setIncluded] = useState<boolean[]>([]);
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
+  // Keyed by original column index, not role -- every column in the
+  // uploaded file gets a filter, including ones ignored/unmapped for
+  // the address itself (e.g. a "Region" or "Notes" column), since those
+  // can still be useful for deciding which rows belong in the export.
+  const [columnFilters, setColumnFilters] = useState<Record<number, string>>({});
+  const [search, setSearch] = useState('');
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -120,10 +134,45 @@ export default function ImportAddresses() {
 
   const handleContinueToPreview = useCallback(() => {
     setIncluded(previewRows.map((r) => r.valid));
+    setStatusFilter('all');
+    setColumnFilters({});
+    setSearch('');
     setStep('preview');
   }, [previewRows]);
 
   const includedCount = included.filter(Boolean).length;
+
+  // A per-column filter dropdown is only useful for columns with a
+  // handful of repeating values (e.g. City, Region, a status flag) --
+  // one with as many distinct values as rows (the address/name columns
+  // themselves) would just be a duplicate of the search box, so those
+  // are left out.
+  const filterableColumns = useMemo(() => {
+    return headers
+      .map((header, i) => {
+        const values = new Set(rows.map((r) => r[i]).filter(Boolean));
+        return { index: i, header, values: [...values].sort() };
+      })
+      .filter((c) => c.values.length > 1 && c.values.length <= 50);
+  }, [headers, rows]);
+
+  const visibleIndices = useMemo(() => {
+    const searchLower = search.trim().toLowerCase();
+    return previewRows.reduce<number[]>((acc, r, i) => {
+      if (statusFilter === 'valid' && !r.valid) return acc;
+      if (statusFilter === 'flagged' && r.valid) return acc;
+      for (const [colIndex, value] of Object.entries(columnFilters)) {
+        if (value !== ALL && r.row[Number(colIndex)] !== value) return acc;
+      }
+      if (searchLower && !r.address.toLowerCase().includes(searchLower)) return acc;
+      acc.push(i);
+      return acc;
+    }, []);
+  }, [previewRows, statusFilter, columnFilters, search]);
+
+  const setIncludedForIndices = useCallback((indices: number[], value: boolean) => {
+    setIncluded((arr) => arr.map((v, i) => (indices.includes(i) ? value : v)));
+  }, []);
 
   const handleDownload = useCallback(() => {
     const lines = previewRows.filter((_, i) => included[i]).map((r) => r.address);
@@ -147,6 +196,9 @@ export default function ImportAddresses() {
     setRows([]);
     setMapping({});
     setIncluded([]);
+    setStatusFilter('all');
+    setColumnFilters({});
+    setSearch('');
     setError(null);
   }, []);
 
@@ -252,9 +304,82 @@ export default function ImportAddresses() {
             {includedCount} of {previewRows.length} row{previewRows.length === 1 ? '' : 's'} selected
           </div>
           <p className="text-muted" style={{ fontSize: 12, marginBottom: 'var(--space-3)' }}>
-            Rows missing a street number or ZIP are unchecked by default. Check/uncheck any row, or
-            fix the mapping if something looks wrong.
+            Rows missing a street number or ZIP are unchecked by default. Use the filters to narrow
+            down to the rows you want, then select/deselect them all at once -- or check/uncheck any
+            row individually.
           </p>
+
+          <div
+            className="card elev-sm"
+            style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-3)', marginBottom: 'var(--space-3)' }}
+          >
+            <div className="field" style={{ minWidth: 160, marginBottom: 0 }}>
+              <label htmlFor="import-filter-status">Status</label>
+              <select
+                id="import-filter-status"
+                className="input"
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+              >
+                <option value="all">All rows</option>
+                <option value="valid">Valid only</option>
+                <option value="flagged">Flagged only</option>
+              </select>
+            </div>
+            {filterableColumns.map((c) => (
+              <div key={c.index} className="field" style={{ minWidth: 160, marginBottom: 0 }}>
+                <label htmlFor={`import-filter-col-${c.index}`}>{c.header}</label>
+                <select
+                  id={`import-filter-col-${c.index}`}
+                  className="input"
+                  value={columnFilters[c.index] ?? ALL}
+                  onChange={(e) =>
+                    setColumnFilters((f) => ({ ...f, [c.index]: e.target.value }))
+                  }
+                >
+                  <option value={ALL}>All</option>
+                  {c.values.map((v) => (
+                    <option key={v} value={v}>
+                      {v}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+            <div className="field" style={{ minWidth: 200, flex: 1, marginBottom: 0 }}>
+              <label htmlFor="import-filter-search">Search address</label>
+              <input
+                id="import-filter-search"
+                className="input"
+                placeholder="e.g. Portland"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
+            <span className="text-muted" style={{ fontSize: 12 }}>
+              Showing {visibleIndices.length} of {previewRows.length} row{previewRows.length === 1 ? '' : 's'}
+            </span>
+            <button
+              className="btn btn-secondary"
+              style={{ padding: '2px 10px', fontSize: 12 }}
+              onClick={() => setIncludedForIndices(visibleIndices, true)}
+              disabled={visibleIndices.length === 0}
+            >
+              Select all shown
+            </button>
+            <button
+              className="btn btn-secondary"
+              style={{ padding: '2px 10px', fontSize: 12 }}
+              onClick={() => setIncludedForIndices(visibleIndices, false)}
+              disabled={visibleIndices.length === 0}
+            >
+              Deselect all shown
+            </button>
+          </div>
+
           <div style={{ overflowX: 'auto' }}>
             <table className="table">
               <thead>
@@ -265,27 +390,30 @@ export default function ImportAddresses() {
                 </tr>
               </thead>
               <tbody>
-                {previewRows.map((r, i) => (
-                  <tr key={i}>
-                    <td>
-                      <input
-                        type="checkbox"
-                        checked={included[i] ?? false}
-                        onChange={(e) =>
-                          setIncluded((arr) => arr.map((v, j) => (j === i ? e.target.checked : v)))
-                        }
-                      />
-                    </td>
-                    <td>{r.address || <span className="text-muted">(empty)</span>}</td>
-                    <td>
-                      {r.valid ? (
-                        <span className="tag tag-accent">OK</span>
-                      ) : (
-                        <span style={{ color: '#a4402a', fontSize: 12 }}>missing number or ZIP</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
+                {visibleIndices.map((i) => {
+                  const r = previewRows[i];
+                  return (
+                    <tr key={i}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          checked={included[i] ?? false}
+                          onChange={(e) =>
+                            setIncluded((arr) => arr.map((v, j) => (j === i ? e.target.checked : v)))
+                          }
+                        />
+                      </td>
+                      <td>{r.address || <span className="text-muted">(empty)</span>}</td>
+                      <td>
+                        {r.valid ? (
+                          <span className="tag tag-accent">OK</span>
+                        ) : (
+                          <span style={{ color: '#a4402a', fontSize: 12 }}>missing number or ZIP</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

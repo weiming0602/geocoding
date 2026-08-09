@@ -206,6 +206,14 @@ read-write).
   line (same leading-house-number/trailing-5-digit-ZIP rule
   `parseAddress.js` enforces server-side, reimplemented client-side in
   `isGeocodableAddressLine` since this step never touches the server).
+  The preview step's filter bar covers every column in the uploaded
+  file, not just the ones mapped to an address role (e.g. a "Region" or
+  "Notes" column someone didn't map to anything is still filterable) --
+  a column only gets a dropdown if it has 2-50 distinct values
+  (`filterableColumns`); a search box covers free-text columns like the
+  address itself. "Select all shown"/"Deselect all shown" only touch
+  the currently filtered rows, leaving anything hidden by the filter
+  untouched.
 - `ui/desktop` is a scaffold only (Vite + React + react-router, routes
   for every screen, `ui/shared`'s API client wired up and proven working
   against a live `geocoding-server`) — no real screen UI implemented yet.
