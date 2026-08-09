@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
-import { useLocation } from 'react-router';
+import { Link, useLocation } from 'react-router';
 
 import { batchGeocode, batchGeocodeDownload } from '../../../shared/api/client';
 import type { BatchResult, BatchSource } from '../../../shared/api/types';
@@ -21,6 +21,12 @@ export default function Batch() {
     if (!state?.fileContent) return null;
     return { name: state.fileName ?? 'imported-addresses.txt', content: state.fileContent };
   });
+  // Captured once on the same mount as pickedFile's initializer, and
+  // deliberately independent of it afterward -- clearing the picked file
+  // (e.g. to try a different source) shouldn't also hide the way back to
+  // Import Addresses, since the whole point is letting someone go back
+  // and adjust their filtered selection before committing to a run.
+  const [arrivedFromImport] = useState(() => Boolean((location.state as ForwardedFile | null)?.fileContent));
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [results, setResults] = useState<BatchResult[] | null>(null);
@@ -105,11 +111,19 @@ export default function Batch() {
   return (
     <div>
       <h1>Batch geocoding</h1>
-      <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
+      <p className="text-muted" style={{ marginBottom: arrivedFromImport ? 'var(--space-3)' : 'var(--space-6)' }}>
         Matches /geocode/batch — one address per line, checked against your account's monthly quota.
         Upload a file, or (if this app and geocoding-server share a filesystem) point at a
         server-side path.
       </p>
+
+      {arrivedFromImport && (
+        <p style={{ marginBottom: 'var(--space-6)' }}>
+          <Link to="/import-addresses" className="btn btn-secondary">
+            ← Back to Import Addresses
+          </Link>
+        </p>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 'var(--space-6)', alignItems: 'start' }}>
         <div className="card elev-sm">

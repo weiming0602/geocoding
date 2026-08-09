@@ -210,15 +210,29 @@ read-write).
   file, not just the ones mapped to an address role (e.g. a "Region" or
   "Notes" column someone didn't map to anything is still filterable) --
   a column only gets a dropdown if it has 2-50 distinct values
-  (`filterableColumns`); a search box covers free-text columns like the
-  address itself. "Select all shown"/"Deselect all shown" only touch
-  the currently filtered rows, leaving anything hidden by the filter
-  untouched. "Send to Batch geocode" skips the download/re-upload round
-  trip by navigating to `/batch` with the address list in router state
-  (`navigate('/batch', { state: { fileContent, fileName } })`) --
-  `Batch.tsx`'s `pickedFile` reads that via a lazy `useState`
+  (`filterableColumns`); the search box matches anywhere in the full
+  generated address line, covering columns without their own dropdown.
+  "Select all matching"/"Deselect all matching" act on every row
+  matching the current filters, not just what's rendered -- for a file
+  with thousands of rows, only a `SAMPLE_SIZE` (100) sample is actually
+  rendered in the table to keep the page responsive, with a note telling
+  the user it's a sample and that the count/bulk actions still cover the
+  full matching set. "Send to Batch geocode" skips the download/re-
+  upload round trip by navigating to `/batch` with the address list in
+  router state (`navigate('/batch', { state: { fileContent, fileName }
+  })`) -- `Batch.tsx`'s `pickedFile` reads that via a lazy `useState`
   initializer so it only applies on the navigation that carried it, not
-  on every re-render or a later plain visit to `/batch`.
+  on every re-render or a later plain visit to `/batch`; a "Back to
+  Import Addresses" `Link` appears on Batch when arrived this way (own
+  `arrivedFromImport` flag, captured once, independent of `pickedFile`
+  so clearing the file doesn't hide the way back). The whole wizard's
+  state (`ImportAddressesState.tsx`'s `ImportAddressesStateProvider`,
+  wrapped around `<Routes>` in `App.tsx`) lives above the route rather
+  than as local state in `ImportAddresses.tsx`, so going to Batch and
+  back preserves the file, mapping, filters, and row selection instead
+  of resetting the wizard -- the point being a user comparing a few
+  different filtered selections shouldn't have to redo the upload/
+  mapping step each time.
 - `ui/desktop` is a scaffold only (Vite + React + react-router, routes
   for every screen, `ui/shared`'s API client wired up and proven working
   against a live `geocoding-server`) — no real screen UI implemented yet.

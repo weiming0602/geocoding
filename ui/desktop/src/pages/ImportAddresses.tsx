@@ -1,6 +1,8 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import * as XLSX from 'xlsx';
+
+import { ALL_FILTER_VALUE, useImportAddressesState, type StatusFilter } from '../state/ImportAddressesState';
 
 export type ColumnRole = 'ignore' | 'streetFull' | 'streetNumber' | 'streetName' | 'city' | 'state' | 'zip';
 
@@ -63,27 +65,38 @@ export function isGeocodableAddressLine(line: string): boolean {
   return Boolean(line) && line.length <= 200 && /^\d+\b/.test(line) && /\b\d{5}\b/.test(line);
 }
 
-type Step = 'upload' | 'map' | 'preview';
-type StatusFilter = 'all' | 'valid' | 'flagged';
-const ALL = '__all__';
+// Rendering every matching row for a file with thousands of rows would
+// make the preview table itself the bottleneck -- the table shows only
+// a sample; "Select/Deselect all matching" and the selected count still
+// operate on the full filtered set, not just what's rendered.
+const SAMPLE_SIZE = 100;
 
 export default function ImportAddresses() {
   const navigate = useNavigate();
-  const [step, setStep] = useState<Step>('upload');
-  const [fileName, setFileName] = useState('');
-  const [headers, setHeaders] = useState<string[]>([]);
-  const [rows, setRows] = useState<string[][]>([]);
-  const [hasHeaderRow, setHasHeaderRow] = useState(true);
-  const [mapping, setMapping] = useState<Record<number, ColumnRole>>({});
-  const [included, setIncluded] = useState<boolean[]>([]);
-  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
-  // Keyed by original column index, not role -- every column in the
-  // uploaded file gets a filter, including ones ignored/unmapped for
-  // the address itself (e.g. a "Region" or "Notes" column), since those
-  // can still be useful for deciding which rows belong in the export.
-  const [columnFilters, setColumnFilters] = useState<Record<number, string>>({});
-  const [search, setSearch] = useState('');
-  const [error, setError] = useState<string | null>(null);
+  const {
+    step,
+    setStep,
+    fileName,
+    setFileName,
+    headers,
+    setHeaders,
+    rows,
+    setRows,
+    hasHeaderRow,
+    setHasHeaderRow,
+    mapping,
+    setMapping,
+    included,
+    setIncluded,
+    statusFilter,
+    setStatusFilter,
+    columnFilters,
+    setColumnFilters,
+    search,
+    setSearch,
+    error,
+    setError,
+  } = useImportAddressesState();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleChooseFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -164,13 +177,16 @@ export default function ImportAddresses() {
       if (statusFilter === 'valid' && !r.valid) return acc;
       if (statusFilter === 'flagged' && r.valid) return acc;
       for (const [colIndex, value] of Object.entries(columnFilters)) {
-        if (value !== ALL && r.row[Number(colIndex)] !== value) return acc;
+        if (value !== ALL_FILTER_VALUE && r.row[Number(colIndex)] !== value) return acc;
       }
       if (searchLower && !r.address.toLowerCase().includes(searchLower)) return acc;
       acc.push(i);
       return acc;
     }, []);
   }, [previewRows, statusFilter, columnFilters, search]);
+
+  const displayedIndices = useMemo(() => visibleIndices.slice(0, SAMPLE_SIZE), [visibleIndices]);
+  const isSampled = visibleIndices.length > displayedIndices.length;
 
   const setIncludedForIndices = useCallback((indices: number[], value: boolean) => {
     setIncluded((arr) => arr.map((v, i) => (indices.includes(i) ? value : v)));
@@ -321,7 +337,9 @@ export default function ImportAddresses() {
           <p className="text-muted" style={{ fontSize: 12, marginBottom: 'var(--space-3)' }}>
             Rows missing a street number or ZIP are unchecked by default. Use the filters to narrow
             down to the rows you want, then select/deselect them all at once -- or check/uncheck any
-            row individually.
+            row individually. The status and column dropdowns match on one value; "Search address"
+            matches anywhere in the full generated address line, useful for columns without their
+            own dropdown (too many distinct values) or for matching part of a street name.
           </p>
 
           <div
@@ -347,12 +365,12 @@ export default function ImportAddresses() {
                 <select
                   id={`import-filter-col-${c.index}`}
                   className="input"
-                  value={columnFilters[c.index] ?? ALL}
+                  value={columnFilters[c.index] ?? ALL_FILTER_VALUE}
                   onChange={(e) =>
                     setColumnFilters((f) => ({ ...f, [c.index]: e.target.value }))
                   }
                 >
-                  <option value={ALL}>All</option>
+                  <option value={ALL_FILTER_VALUE}>All</option>
                   {c.values.map((v) => (
                     <option key={v} value={v}>
                       {v}
@@ -375,7 +393,9 @@ export default function ImportAddresses() {
 
           <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center', marginBottom: 'var(--space-2)' }}>
             <span className="text-muted" style={{ fontSize: 12 }}>
-              Showing {visibleIndices.length} of {previewRows.length} row{previewRows.length === 1 ? '' : 's'}
+              {isSampled
+                ? `Showing a sample of ${displayedIndices.length} of ${visibleIndices.length} matching rows`
+                : `Showing ${visibleIndices.length} of ${previewRows.length} row${previewRows.length === 1 ? '' : 's'}`}
             </span>
             <button
               className="btn btn-secondary"
@@ -383,7 +403,7 @@ export default function ImportAddresses() {
               onClick={() => setIncludedForIndices(visibleIndices, true)}
               disabled={visibleIndices.length === 0}
             >
-              Select all shown
+              Select all matching
             </button>
             <button
               className="btn btn-secondary"
@@ -391,9 +411,18 @@ export default function ImportAddresses() {
               onClick={() => setIncludedForIndices(visibleIndices, false)}
               disabled={visibleIndices.length === 0}
             >
-              Deselect all shown
+              Deselect all matching
             </button>
           </div>
+
+          {isSampled && (
+            <p className="text-muted" style={{ fontSize: 12, marginBottom: 'var(--space-2)' }}>
+              Only a sample of {displayedIndices.length} rows is listed below to keep this page fast
+              with {visibleIndices.length.toLocaleString()} matching rows -- "Select/Deselect all
+              matching" above, and the count at the top, both cover all {visibleIndices.length.toLocaleString()},
+              not just what's shown here. Narrow the filters to see a specific row.
+            </p>
+          )}
 
           <div style={{ overflowX: 'auto' }}>
             <table className="table">
@@ -405,7 +434,7 @@ export default function ImportAddresses() {
                 </tr>
               </thead>
               <tbody>
-                {visibleIndices.map((i) => {
+                {displayedIndices.map((i) => {
                   const r = previewRows[i];
                   return (
                     <tr key={i}>

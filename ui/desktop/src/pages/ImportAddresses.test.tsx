@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 import ImportAddresses, { buildAddressLine, guessRole, isGeocodableAddressLine, type ColumnRole } from './ImportAddresses';
 import Batch from './Batch';
+import { ImportAddressesStateProvider } from '../state/ImportAddressesState';
 
 describe('guessRole', () => {
   it('recognizes common header spellings for each role', () => {
@@ -99,10 +100,12 @@ describe('ImportAddresses component (upload -> map -> preview -> filter)', () =>
   async function uploadAndPreview() {
     const { container } = render(
       <MemoryRouter initialEntries={['/import-addresses']}>
-        <Routes>
-          <Route path="/import-addresses" element={<ImportAddresses />} />
-          <Route path="/batch" element={<Batch />} />
-        </Routes>
+        <ImportAddressesStateProvider>
+          <Routes>
+            <Route path="/import-addresses" element={<ImportAddresses />} />
+            <Route path="/batch" element={<Batch />} />
+          </Routes>
+        </ImportAddressesStateProvider>
       </MemoryRouter>
     );
     const file = new File([csv], 'addresses.csv', { type: 'text/csv' });
@@ -141,7 +144,7 @@ describe('ImportAddresses component (upload -> map -> preview -> filter)', () =>
     expect(screen.getAllByText('missing number or ZIP')).toHaveLength(2);
   });
 
-  it('"Select all shown" / "Deselect all shown" only affect the currently filtered rows', async () => {
+  it('"Select all matching" / "Deselect all matching" only affect the currently filtered rows', async () => {
     const container = await uploadAndPreview();
     expect(screen.getByText('3 of 5 rows selected')).toBeInTheDocument();
 
@@ -150,11 +153,11 @@ describe('ImportAddresses component (upload -> map -> preview -> filter)', () =>
     // (Brunswick, already checked) is the only row NOT shown by this filter.
     fireEvent.change(citySelect, { target: { value: 'Portland' } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Select all shown' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Select all matching' }));
     // All 4 Portland rows now checked, plus Deerfield (untouched, was already checked) = 5 of 5.
     expect(screen.getByText('5 of 5 rows selected')).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Deselect all shown' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Deselect all matching' }));
     // Deselects the 4 Portland rows; Deerfield (not shown, untouched) stays checked.
     expect(screen.getByText('1 of 5 rows selected')).toBeInTheDocument();
 
@@ -173,5 +176,26 @@ describe('ImportAddresses component (upload -> map -> preview -> filter)', () =>
     const filePathInput = await screen.findByPlaceholderText('C:\\software\\database\\addresses.txt');
     expect(filePathInput).toHaveValue('imported-addresses.txt');
     expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument(); // only shown when pickedFile is set
+    expect(screen.getByRole('link', { name: '← Back to Import Addresses' })).toBeInTheDocument();
+  });
+
+  it('going to Batch and back via "Back to Import Addresses" preserves the wizard state', async () => {
+    await uploadAndPreview();
+
+    // Narrow with a filter before forwarding, so we have something non-default to check survives.
+    const citySelect = screen.getByLabelText('City') as HTMLSelectElement;
+    fireEvent.change(citySelect, { target: { value: 'Brunswick' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send to Batch geocode' }));
+    await screen.findByRole('link', { name: '← Back to Import Addresses' });
+
+    fireEvent.click(screen.getByRole('link', { name: '← Back to Import Addresses' }));
+
+    // Still on the preview step (not reset to the upload step), same
+    // selection count, and the City filter is still set to Brunswick --
+    // proof the wizard state lived in a context above the route, not
+    // local state that unmounted when Batch's route took over.
+    expect(screen.getByText('3 of 5 rows selected')).toBeInTheDocument();
+    expect(screen.getByLabelText('City')).toHaveValue('Brunswick');
+    expect(screen.getByText(/Showing 1 of 5 rows/)).toBeInTheDocument();
   });
 });
