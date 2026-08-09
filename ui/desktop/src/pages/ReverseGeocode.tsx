@@ -1,6 +1,7 @@
 import { useCallback, useState } from 'react';
 
 import { reverseGeocode } from '../../../shared/api/client';
+import { parseCoordinateInput } from '../../../shared/parseCoordinateInput';
 import MapView from '../components/MapView';
 import { useRecentLookups } from '../state/RecentLookups';
 import type { RecentLookup } from '../state/RecentLookups';
@@ -9,12 +10,13 @@ type ReverseResult = RecentLookup & { distanceMeters: number };
 
 export default function ReverseGeocode() {
   const { recentLookups, addLookup } = useRecentLookups();
+  const [coordinateInput, setCoordinateInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ReverseResult | null>(null);
   const [copyLabel, setCopyLabel] = useState('Copy coordinates');
 
-  const handleMapClick = useCallback(
+  const runReverseGeocode = useCallback(
     async ({ latitude, longitude }: { latitude: number; longitude: number }) => {
       setLoading(true);
       setError(null);
@@ -38,6 +40,27 @@ export default function ReverseGeocode() {
     [addLookup]
   );
 
+  const handleMapClick = useCallback(
+    (coordinates: { latitude: number; longitude: number }) => {
+      // Reflects the clicked point back into the text field -- lets
+      // someone fine-tune a click by hand, or just see/copy exactly
+      // what was clicked, rather than the two entry points being
+      // disconnected from each other.
+      setCoordinateInput(`${coordinates.latitude}, ${coordinates.longitude}`);
+      runReverseGeocode(coordinates);
+    },
+    [runReverseGeocode]
+  );
+
+  const handleCoordinateSubmit = useCallback(() => {
+    const coordinates = parseCoordinateInput(coordinateInput);
+    if (!coordinates) {
+      setError('Enter coordinates as "latitude, longitude", e.g. 43.834391, -70.778549.');
+      return;
+    }
+    runReverseGeocode(coordinates);
+  }, [coordinateInput, runReverseGeocode]);
+
   const handleCopy = useCallback(() => {
     if (!result) return;
     navigator.clipboard?.writeText(`${result.latitude}, ${result.longitude}`).then(() => {
@@ -50,7 +73,8 @@ export default function ReverseGeocode() {
     <div>
       <h1>Reverse geocode</h1>
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
-        Click a point on the map to get its nearest address — matches /reverse-geocode.
+        Click a point on the map, or type coordinates directly, to get the nearest address —
+        matches /reverse-geocode.
       </p>
 
       <div className="plate" style={{ marginBottom: 'var(--space-6)', padding: 'var(--space-3)' }}>
@@ -62,9 +86,25 @@ export default function ReverseGeocode() {
 
       <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 'var(--space-6)', alignItems: 'start' }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
+          <div className="field">
+            <label>Coordinate (latitude, longitude)</label>
+            <input
+              className="input"
+              placeholder="e.g. 43.834391, -70.778549"
+              value={coordinateInput}
+              onChange={(e) => setCoordinateInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleCoordinateSubmit();
+              }}
+              disabled={loading}
+            />
+          </div>
+          <button className="btn btn-primary btn-block" onClick={handleCoordinateSubmit} disabled={loading}>
+            {loading ? 'Resolving…' : 'Reverse Geocode'}
+          </button>
           <div className="card" style={{ background: 'var(--color-surface)' }}>
             <p className="card-body" style={{ margin: 0 }}>
-              {loading ? 'Resolving…' : 'Click anywhere on the map to reverse-geocode that point.'}
+              Or click anywhere on the map to reverse-geocode that point.
             </p>
           </div>
           {error && (
