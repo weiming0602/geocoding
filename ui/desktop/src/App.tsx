@@ -6,6 +6,7 @@ import Checkout from './pages/Checkout';
 import FindPlaces from './pages/FindPlaces';
 import Geocode from './pages/Geocode';
 import Help from './pages/Help';
+import ImportAddresses from './pages/ImportAddresses';
 import Overview from './pages/Overview';
 import OwnerDashboard from './pages/OwnerDashboard';
 import PlanQuota from './pages/PlanQuota';
@@ -25,6 +26,7 @@ export default function App() {
             <Route path="/geocode" element={<Geocode />} />
             <Route path="/reverse-geocode" element={<ReverseGeocode />} />
             <Route path="/find-places" element={<FindPlaces />} />
+            <Route path="/import-addresses" element={<ImportAddresses />} />
             <Route path="/batch" element={<Batch />} />
             <Route path="/plan-quota" element={<PlanQuota />} />
             <Route path="/pricing" element={<Pricing />} />

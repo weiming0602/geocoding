@@ -192,6 +192,20 @@ read-write).
   can't spend anything).
 - `ui/mobile` has no server-URL abstraction yet — check the relevant
   component before assuming the API base URL is configurable.
+- `ui/desktop`'s Import Addresses page (`/import-addresses`,
+  `ImportAddresses.tsx`) turns a messy CSV/Excel export -- e.g. street
+  number, street name, city, and state/ZIP each in their own column --
+  into a clean address list ready for Batch geocode. Parsing (via
+  SheetJS's `xlsx` package, installed from SheetJS's own CDN rather than
+  the public npm registry, which has stopped receiving their security
+  fixes -- see the `xlsx` entry in `package.json`) happens entirely in
+  the browser; nothing is uploaded to the server. Column-role guesses
+  (`guessRole`) are just a starting point the user confirms/fixes on the
+  mapping step -- nothing here silently commits to a wrong guess. Rows
+  are flagged, not dropped, when they can't produce a geocodable address
+  line (same leading-house-number/trailing-5-digit-ZIP rule
+  `parseAddress.js` enforces server-side, reimplemented client-side in
+  `isGeocodableAddressLine` since this step never touches the server).
 - `ui/desktop` is a scaffold only (Vite + React + react-router, routes
   for every screen, `ui/shared`'s API client wired up and proven working
   against a live `geocoding-server`) — no real screen UI implemented yet.
