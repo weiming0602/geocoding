@@ -2,68 +2,17 @@ import { useCallback, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import * as XLSX from 'xlsx';
 
+import {
+  ROLE_OPTIONS,
+  guessRole,
+  buildAddressLine,
+  isGeocodableAddressLine,
+  type ColumnRole,
+} from '../../../shared/importAddresses';
 import { ALL_FILTER_VALUE, useImportAddressesState, type StatusFilter } from '../state/ImportAddressesState';
 
-export type ColumnRole = 'ignore' | 'streetFull' | 'streetNumber' | 'streetName' | 'city' | 'state' | 'zip';
-
-const ROLE_OPTIONS: { value: ColumnRole; label: string }[] = [
-  { value: 'ignore', label: 'Ignore this column' },
-  { value: 'streetFull', label: 'Street (number + name together)' },
-  { value: 'streetNumber', label: 'Street number' },
-  { value: 'streetName', label: 'Street name' },
-  { value: 'city', label: 'City' },
-  { value: 'state', label: 'State' },
-  { value: 'zip', label: 'ZIP code' },
-];
-
-// Best-guess mapping from a header cell's text -- the user confirms or
-// fixes this on the mapping step, so a wrong guess costs one click, not
-// a bad import. Order matters: streetNumber's pattern is checked before
-// the broader streetFull/streetName ones so e.g. "Street Number" doesn't
-// fall through to matching "street".
-export function guessRole(header: string): ColumnRole {
-  const h = header.toLowerCase().trim();
-  if (/house\s*(no\.?|number)\b|street\s*(no\.?|number)\b|addr.*num|^(no|num|number)$/.test(h)) return 'streetNumber';
-  if (/full.*addr|^address$|^address ?1$|street.*addr/.test(h)) return 'streetFull';
-  if (/street.*name|^street$|^road$/.test(h)) return 'streetName';
-  if (/city|town/.test(h)) return 'city';
-  if (/state|province/.test(h)) return 'state';
-  if (/zip|postal/.test(h)) return 'zip';
-  return 'ignore';
-}
-
-// Shared by buildAddressLine (to assemble the address line) and the
-// preview step's column filters (to list a mapped column's distinct
-// values) -- one lookup, so both agree on which column a role points at.
-export function getMappedValue(row: string[], mapping: Record<number, ColumnRole>, role: ColumnRole): string {
-  const idx = Object.keys(mapping).find((i) => mapping[Number(i)] === role);
-  return idx !== undefined ? (row[Number(idx)] ?? '').toString().trim() : '';
-}
-
-// Mirrors placesSearch.js's addressLineFromTags shape server-side:
-// "<street>, <city>, <state> <zip>" with city/state omitted gracefully
-// when blank -- kept in sync so imported rows and Overpass-found places
-// produce the same address-line format.
-export function buildAddressLine(row: string[], mapping: Record<number, ColumnRole>): string {
-  const get = (role: ColumnRole) => getMappedValue(row, mapping, role);
-  let street = get('streetFull');
-  if (!street) {
-    street = [get('streetNumber'), get('streetName')].filter(Boolean).join(' ');
-  }
-  const city = get('city');
-  const state = get('state');
-  const zip = get('zip');
-  const cityState = [city, state].filter(Boolean).join(', ');
-  const middle = cityState ? `, ${cityState}` : '';
-  return `${street}${middle}${zip ? ` ${zip}` : ''}`.replace(/\s+/g, ' ').trim();
-}
-
-// Same leading-number / trailing-5-digit-ZIP rule geocoding-server's
-// parseAddress.js enforces -- flagging it here means a row that won't
-// geocode gets caught before download, not after a wasted Batch run.
-export function isGeocodableAddressLine(line: string): boolean {
-  return Boolean(line) && line.length <= 200 && /^\d+\b/.test(line) && /\b\d{5}\b/.test(line);
-}
+export type { ColumnRole } from '../../../shared/importAddresses';
+export { guessRole, buildAddressLine, isGeocodableAddressLine } from '../../../shared/importAddresses';
 
 // Rendering every matching row for a file with thousands of rows would
 // make the preview table itself the bottleneck -- the table shows only

@@ -3,10 +3,17 @@ import { ScrollView, StyleSheet } from 'react-native';
 
 import BatchGeocodeForm from '../components/BatchGeocodeForm';
 
-export default function BatchGeocodeScreen() {
+type Props = {
+  initialFile?: { name: string; content: string } | null;
+  onConsumedInitialFile?: () => void;
+  showBackToImport?: boolean;
+  onBackToImport?: () => void;
+};
+
+export default function BatchGeocodeScreen(props: Props) {
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <BatchGeocodeForm />
+      <BatchGeocodeForm {...props} />
     </ScrollView>
   );
 }

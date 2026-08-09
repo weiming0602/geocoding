@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { Alert, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 // expo-file-system's new Paths/File API (SDK 57) has a broken internal
@@ -17,17 +17,42 @@ type PickedFile = {
   content: string;
 };
 
-export default function BatchGeocodeForm() {
+type Props = {
+  // Set once by App.tsx when arriving via Import Addresses' "Send to
+  // Batch" button -- consumed as pickedFile's initial value below, then
+  // immediately reported back as consumed (onConsumedInitialFile) so
+  // App.tsx can clear it; without that, revisiting this tab later
+  // (unrelated to Import) would keep reverting to the old imported file.
+  initialFile?: PickedFile | null;
+  onConsumedInitialFile?: () => void;
+  // Independent of initialFile's one-shot lifecycle -- stays true for
+  // this whole Batch visit (App.tsx only resets it on a direct tab-bar
+  // switch), so the way back to Import Addresses doesn't disappear just
+  // because the picked file was cleared or already consumed.
+  showBackToImport?: boolean;
+  onBackToImport?: () => void;
+};
+
+export default function BatchGeocodeForm({ initialFile, onConsumedInitialFile, showBackToImport, onBackToImport }: Props) {
   const [email, setEmail] = useState('');
   const [serviceKey, setServiceKey] = useState('');
   const [filePath, setFilePath] = useState('');
-  const [pickedFile, setPickedFile] = useState<PickedFile | null>(null);
+  const [pickedFile, setPickedFile] = useState<PickedFile | null>(() => initialFile ?? null);
   const [picking, setPicking] = useState(false);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [results, setResults] = useState<BatchResult[] | null>(null);
   const [quota, setQuota] = useState<{ remaining: number; tier: number } | string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // Runs once per mount (this component fully unmounts/remounts on every
+  // tab switch, per App.tsx's conditional rendering) -- reports the
+  // initial file as consumed right away so App.tsx can clear it, rather
+  // than it silently reapplying on some later, unrelated visit to this tab.
+  useEffect(() => {
+    if (initialFile) onConsumedInitialFile?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Builds the request body from whichever source is active: a file picked
   // on-device (its contents are read up front, since the server has no way
@@ -152,6 +177,12 @@ export default function BatchGeocodeForm() {
     <View style={styles.container}>
       <Text style={styles.title}>Batch geocoding</Text>
       <Text style={styles.subtitle}>One address per line.</Text>
+
+      {showBackToImport && (
+        <View style={styles.spacing}>
+          <ThemedButton title="← Back to Import Addresses" onPress={() => onBackToImport?.()} variant="secondary" block />
+        </View>
+      )}
 
       <Text style={styles.label}>Account email</Text>
       <TextInput

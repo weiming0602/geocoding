@@ -1,7 +1,7 @@
 import { createContext, useContext, useState } from 'react';
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
 
-import type { ColumnRole } from '../pages/ImportAddresses';
+import type { ColumnRole } from '../../../shared/importAddresses';
 
 export type Step = 'upload' | 'map' | 'preview';
 export type StatusFilter = 'all' | 'valid' | 'flagged';

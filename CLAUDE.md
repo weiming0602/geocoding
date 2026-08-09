@@ -211,6 +211,31 @@ read-write).
   can't spend anything).
 - `ui/mobile` has no server-URL abstraction yet — check the relevant
   component before assuming the API base URL is configurable.
+- `ui/mobile` has no interactive map at all -- `GeocodeMap.tsx` (native)
+  is display-only, a deep-link "Open in Maps" button, since no maplibre/
+  expo-maps setup exists there (`GeocodeMap.web.tsx` is the real map, web
+  only). `FindPlacesForm.tsx` (`Find Places` tab) leans entirely on this:
+  a "near &lt;place&gt;" clause or "Use My Location" (`expo-location`,
+  same pattern as `ReverseGeocodeForm.tsx`'s GPS button) instead of any
+  point-picking UI. `ImportAddressesForm.tsx` (`Import Addresses` tab)
+  is the mobile port of desktop's wizard, reading the picked file as
+  base64 via `expo-file-system`'s legacy `readAsStringAsync` (not
+  `arrayBuffer()`, a browser-only API) and feeding that straight to
+  `XLSX.read(base64, { type: 'base64' })`; column-role selection uses a
+  `Modal`-based picker (no native `<select>` exists), and desktop's
+  per-column-value filter dropdowns are deliberately left out in favor
+  of just a status filter + search box (would mean a modal per column on
+  a small screen otherwise) -- `SAMPLE_SIZE` is 50 here vs. desktop's
+  100, since every list in this app is a plain `.map()` over `View`s
+  inside a `ScrollView`, no `FlatList` virtualization anywhere. Both
+  screens' state is owned by `App.tsx` (`importState` for the wizard,
+  `pendingBatchFile`/`arrivedFromImport` for the "Send to Batch"/"Back
+  to Import Addresses" handoff) rather than local component state, since
+  every screen fully unmounts on a tab switch here (no router, just
+  conditional rendering) -- local state would reset on every visit.
+  `guessRole`/`buildAddressLine`/`isGeocodableAddressLine`/`ColumnRole`
+  live in `ui/shared/importAddresses.ts`, shared verbatim with
+  `ui/desktop/src/pages/ImportAddresses.tsx` rather than duplicated.
 - `ui/desktop`'s Import Addresses page (`/import-addresses`,
   `ImportAddresses.tsx`) turns a messy CSV/Excel export -- e.g. street
   number, street name, city, and state/ZIP each in their own column --
