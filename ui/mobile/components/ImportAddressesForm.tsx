@@ -7,7 +7,14 @@ import React, { useCallback, useMemo, useState } from 'react';
 import { Alert, Modal, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import * as XLSX from 'xlsx';
 
-import { ROLE_OPTIONS, guessRole, buildAddressLine, isGeocodableAddressLine, type ColumnRole } from '../../shared/importAddresses';
+import {
+  ROLE_OPTIONS,
+  guessRole,
+  buildAddressLine,
+  getMappedValue,
+  isGeocodableAddressLine,
+  type ColumnRole,
+} from '../../shared/importAddresses';
 import { colors, radius, space } from '../../shared/theme';
 import ThemedButton from './ThemedButton';
 
@@ -51,7 +58,7 @@ const SAMPLE_SIZE = 50;
 type Props = {
   state: ImportWizardState;
   onChange: (patch: Partial<ImportWizardState>) => void;
-  onSendToBatch: (file: { name: string; content: string }) => void;
+  onSendToBatch: (file: { name: string; content: string }, ids?: string[]) => void;
 };
 
 // Column-value filters (desktop's per-column dropdowns) are deliberately
@@ -128,11 +135,13 @@ export default function ImportAddressesForm({ state, onChange, onSendToBatch }: 
     }
   }, [onChange]);
 
+  const hasIdColumn = useMemo(() => Object.values(mapping).includes('id'), [mapping]);
+
   const previewRows = useMemo(
     () =>
       rows.map((row) => {
         const address = buildAddressLine(row, mapping);
-        return { row, address, valid: isGeocodableAddressLine(address) };
+        return { row, address, id: getMappedValue(row, mapping, 'id'), valid: isGeocodableAddressLine(address) };
       }),
     [rows, mapping]
   );
@@ -176,15 +185,20 @@ export default function ImportAddressesForm({ state, onChange, onSendToBatch }: 
     [included, onChange]
   );
 
-  const selectedLines = useMemo(
-    () => previewRows.filter((_, i) => included[i]).map((r) => r.address),
-    [previewRows, included]
-  );
+  // Kept as one filtered array (not two separately-filtered ones) so the
+  // address at selectedRows[i] and the ID at selectedRows[i] can never
+  // drift out of correspondence with each other.
+  const selectedRows = useMemo(() => previewRows.filter((_, i) => included[i]), [previewRows, included]);
+  const selectedLines = useMemo(() => selectedRows.map((r) => r.address), [selectedRows]);
+  const selectedIds = useMemo(() => selectedRows.map((r) => r.id), [selectedRows]);
 
   const handleSendToBatch = useCallback(() => {
     if (selectedLines.length === 0) return;
-    onSendToBatch({ name: 'imported-addresses.txt', content: selectedLines.join('\n') });
-  }, [selectedLines, onSendToBatch]);
+    onSendToBatch(
+      { name: 'imported-addresses.txt', content: selectedLines.join('\n') },
+      hasIdColumn ? selectedIds : undefined
+    );
+  }, [selectedLines, selectedIds, hasIdColumn, onSendToBatch]);
 
   const reset = useCallback(() => {
     onChange({ ...INITIAL_IMPORT_STATE });
@@ -344,7 +358,10 @@ export default function ImportAddressesForm({ state, onChange, onSendToBatch }: 
                   <View style={[styles.checkbox, checked && styles.checkboxChecked]}>
                     {checked && <Text style={styles.checkboxMark}>✓</Text>}
                   </View>
-                  <Text style={styles.rowAddress}>{r.address || '(empty)'}</Text>
+                  <View style={{ flex: 1 }}>
+                    {hasIdColumn && <Text style={styles.cardMeta}>{r.id || '—'}</Text>}
+                    <Text style={styles.rowAddress}>{r.address || '(empty)'}</Text>
+                  </View>
                 </View>
                 <Text style={r.valid ? styles.tagOk : styles.tagFlagged}>
                   {r.valid ? 'OK' : 'missing number or ZIP'}

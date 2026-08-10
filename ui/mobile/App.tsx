@@ -52,12 +52,15 @@ export default function App() {
     setImportState((prev) => ({ ...prev, ...patch }));
   }, []);
 
-  // pendingBatchFile is one-shot (BatchGeocodeScreen reports it consumed
-  // right after picking it up); arrivedFromImport persists for the whole
-  // Batch visit and is reset only by a direct tab-bar switch (goToScreen
-  // below), not by consuming or clearing the file -- mirrors desktop's
-  // independent arrivedFromImport flag in Batch.tsx.
+  // pendingBatchFile/pendingBatchIds are one-shot (BatchGeocodeScreen
+  // reports them consumed right after picking them up); arrivedFromImport
+  // persists for the whole Batch visit and is reset only by a direct
+  // tab-bar switch (goToScreen below), not by consuming or clearing the
+  // file -- mirrors desktop's independent arrivedFromImport flag in
+  // Batch.tsx. pendingBatchIds is the mapped ID column (if any), one per
+  // address line in pendingBatchFile.content, same order.
   const [pendingBatchFile, setPendingBatchFile] = useState<{ name: string; content: string } | null>(null);
+  const [pendingBatchIds, setPendingBatchIds] = useState<string[] | null>(null);
   const [arrivedFromImport, setArrivedFromImport] = useState(false);
 
   const goToScreen = useCallback((key: Screen) => {
@@ -65,8 +68,9 @@ export default function App() {
     setScreen(key);
   }, []);
 
-  const handleSendToBatch = useCallback((file: { name: string; content: string }) => {
+  const handleSendToBatch = useCallback((file: { name: string; content: string }, ids?: string[]) => {
     setPendingBatchFile(file);
+    setPendingBatchIds(ids ?? null);
     setArrivedFromImport(true);
     setScreen('batch');
   }, []);
@@ -101,7 +105,11 @@ export default function App() {
       {screen === 'batch' && (
         <BatchGeocodeScreen
           initialFile={pendingBatchFile}
-          onConsumedInitialFile={() => setPendingBatchFile(null)}
+          initialIds={pendingBatchIds}
+          onConsumedInitialFile={() => {
+            setPendingBatchFile(null);
+            setPendingBatchIds(null);
+          }}
           showBackToImport={arrivedFromImport}
           onBackToImport={() => goToScreen('import')}
         />

@@ -5,6 +5,7 @@ import BatchGeocodeForm from '../components/BatchGeocodeForm';
 
 type Props = {
   initialFile?: { name: string; content: string } | null;
+  initialIds?: string[] | null;
   onConsumedInitialFile?: () => void;
   showBackToImport?: boolean;
   onBackToImport?: () => void;

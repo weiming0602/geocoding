@@ -6,6 +6,7 @@ import {
   ROLE_OPTIONS,
   guessRole,
   buildAddressLine,
+  getMappedValue,
   isGeocodableAddressLine,
   type ColumnRole,
 } from '../../../shared/importAddresses';
@@ -87,11 +88,13 @@ export default function ImportAddresses() {
     }
   }, []);
 
+  const hasIdColumn = useMemo(() => Object.values(mapping).includes('id'), [mapping]);
+
   const previewRows = useMemo(
     () =>
       rows.map((row) => {
         const address = buildAddressLine(row, mapping);
-        return { row, address, valid: isGeocodableAddressLine(address) };
+        return { row, address, id: getMappedValue(row, mapping, 'id'), valid: isGeocodableAddressLine(address) };
       }),
     [rows, mapping]
   );
@@ -141,10 +144,15 @@ export default function ImportAddresses() {
     setIncluded((arr) => arr.map((v, i) => (indices.includes(i) ? value : v)));
   }, []);
 
-  const selectedLines = useMemo(
-    () => previewRows.filter((_, i) => included[i]).map((r) => r.address),
+  // Kept as one filtered array (not two separately-filtered ones) so the
+  // address at selectedRows[i] and the ID at selectedRows[i] can never
+  // drift out of correspondence with each other.
+  const selectedRows = useMemo(
+    () => previewRows.filter((_, i) => included[i]),
     [previewRows, included]
   );
+  const selectedLines = useMemo(() => selectedRows.map((r) => r.address), [selectedRows]);
+  const selectedIds = useMemo(() => selectedRows.map((r) => r.id), [selectedRows]);
 
   const handleDownload = useCallback(() => {
     if (selectedLines.length === 0) return;
@@ -161,13 +169,22 @@ export default function ImportAddresses() {
   }, [selectedLines]);
 
   // Skips the download/re-upload round trip -- Batch.tsx picks this up
-  // via its pickedFile initializer reading location.state on mount.
+  // via its pickedFile initializer reading location.state on mount. The
+  // mapped ID column (if any) rides along as a same-order parallel array
+  // -- the server's batch endpoint only ever sees plain address lines
+  // (fileContent, unchanged), so this doesn't touch that contract at
+  // all; Batch.tsx re-associates ids[i] with results[i] itself once the
+  // response comes back in the same order the addresses were sent.
   const handleSendToBatch = useCallback(() => {
     if (selectedLines.length === 0) return;
     navigate('/batch', {
-      state: { fileContent: selectedLines.join('\n'), fileName: 'imported-addresses.txt' },
+      state: {
+        fileContent: selectedLines.join('\n'),
+        fileName: 'imported-addresses.txt',
+        ids: hasIdColumn ? selectedIds : undefined,
+      },
     });
-  }, [selectedLines, navigate]);
+  }, [selectedLines, selectedIds, hasIdColumn, navigate]);
 
   const reset = useCallback(() => {
     setStep('upload');
@@ -378,6 +395,7 @@ export default function ImportAddresses() {
               <thead>
                 <tr>
                   <th></th>
+                  {hasIdColumn && <th>ID</th>}
                   <th>Address</th>
                   <th>Status</th>
                 </tr>
@@ -396,6 +414,9 @@ export default function ImportAddresses() {
                           }
                         />
                       </td>
+                      {hasIdColumn && (
+                        <td className="text-muted">{r.id || <span style={{ opacity: 0.5 }}>—</span>}</td>
+                      )}
                       <td>{r.address || <span className="text-muted">(empty)</span>}</td>
                       <td>
                         {r.valid ? (

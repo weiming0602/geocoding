@@ -17,6 +17,14 @@ type PickedFile = {
   content: string;
 };
 
+// RFC 4180-ish: only quote (and double internal quotes) when needed.
+function csvField(value: string): string {
+  if (/[",\n]/.test(value)) {
+    return `"${value.replace(/"/g, '""')}"`;
+  }
+  return value;
+}
+
 type Props = {
   // Set once by App.tsx when arriving via Import Addresses' "Send to
   // Batch" button -- consumed as pickedFile's initial value below, then
@@ -24,6 +32,12 @@ type Props = {
   // App.tsx can clear it; without that, revisiting this tab later
   // (unrelated to Import) would keep reverting to the old imported file.
   initialFile?: PickedFile | null;
+  // The ID column mapped in Import Addresses (if any), one per address
+  // line in initialFile.content, same order. Only ever valid alongside
+  // that exact file -- cleared the moment pickedFile changes away from
+  // it (see handleChooseFile/handleClearPickedFile), so an ID never ends
+  // up misattributed to a different, later-picked source.
+  initialIds?: string[] | null;
   onConsumedInitialFile?: () => void;
   // Independent of initialFile's one-shot lifecycle -- stays true for
   // this whole Batch visit (App.tsx only resets it on a direct tab-bar
@@ -33,11 +47,18 @@ type Props = {
   onBackToImport?: () => void;
 };
 
-export default function BatchGeocodeForm({ initialFile, onConsumedInitialFile, showBackToImport, onBackToImport }: Props) {
+export default function BatchGeocodeForm({
+  initialFile,
+  initialIds,
+  onConsumedInitialFile,
+  showBackToImport,
+  onBackToImport,
+}: Props) {
   const [email, setEmail] = useState('');
   const [serviceKey, setServiceKey] = useState('');
   const [filePath, setFilePath] = useState('');
   const [pickedFile, setPickedFile] = useState<PickedFile | null>(() => initialFile ?? null);
+  const [forwardedIds, setForwardedIds] = useState<string[] | null>(() => initialIds ?? null);
   const [picking, setPicking] = useState(false);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
@@ -82,6 +103,9 @@ export default function BatchGeocodeForm({ initialFile, onConsumedInitialFile, s
             });
 
       setPickedFile({ name: asset.name, content });
+      // A manually chosen file has no known ID mapping -- any IDs
+      // forwarded from Import Addresses applied to a different file.
+      setForwardedIds(null);
       setResults(null);
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Failed to read file.';
@@ -94,6 +118,7 @@ export default function BatchGeocodeForm({ initialFile, onConsumedInitialFile, s
 
   const handleClearPickedFile = useCallback(() => {
     setPickedFile(null);
+    setForwardedIds(null);
   }, []);
 
   const handleBatchGeocode = useCallback(async () => {
@@ -163,6 +188,47 @@ export default function BatchGeocodeForm({ initialFile, onConsumedInitialFile, s
       setDownloading(false);
     }
   }, [hasSource, buildBatchSource]);
+
+  const idsMatchResults = forwardedIds !== null && results !== null && forwardedIds.length === results.length;
+
+  const handleDownloadCsv = useCallback(() => {
+    if (!results || !idsMatchResults) return;
+
+    if (Platform.OS !== 'web') {
+      Alert.alert('Not supported', 'Downloading a CSV is only supported in the web build.');
+      return;
+    }
+
+    const header = 'ID,Address,Success,Latitude,Longitude,Side,Error';
+    const rows = results.map((result, index) => {
+      const id = forwardedIds![index];
+      if (result.success) {
+        return [
+          id,
+          result.address,
+          'true',
+          String(result.coordinates.latitude),
+          String(result.coordinates.longitude),
+          result.source === 'interpolation' ? result.rangeSide : '',
+          '',
+        ]
+          .map(csvField)
+          .join(',');
+      }
+      return [id, result.address, 'false', '', '', '', result.error].map(csvField).join(',');
+    });
+    const csv = [header, ...rows].join('\n');
+
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = 'batch-geocode-results.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(objectUrl);
+  }, [results, idsMatchResults, forwardedIds]);
 
   const successCount = results ? results.filter((r) => r.success).length : 0;
   const successMarkers = (results ?? [])
@@ -271,11 +337,26 @@ export default function BatchGeocodeForm({ initialFile, onConsumedInitialFile, s
 
       {!loading && results && (
         <View style={styles.spacing}>
-          <Text style={styles.cardTitle}>
-            {successCount} of {results.length} succeeded
-          </Text>
+          <View style={styles.resultsHeaderRow}>
+            <Text style={styles.cardTitle}>
+              {successCount} of {results.length} succeeded
+            </Text>
+            {idsMatchResults && (
+              <ThemedButton
+                title="Download results as CSV (with ID)"
+                onPress={handleDownloadCsv}
+                variant="secondary"
+              />
+            )}
+          </View>
+          {forwardedIds !== null && !idsMatchResults && (
+            <Text style={[styles.warningText, styles.spacing]}>
+              ID list from Import Addresses didn't line up with these results, so IDs are omitted.
+            </Text>
+          )}
           {results.map((result, index) => (
             <View key={index} style={styles.resultRow}>
+              {idsMatchResults && <Text style={styles.cardMeta}>{forwardedIds![index] || '—'}</Text>}
               <Text style={styles.resultAddress}>{result.address}</Text>
               {result.success ? (
                 <Text style={styles.cardMeta} selectable>
@@ -379,6 +460,13 @@ const styles = StyleSheet.create({
     fontSize: 17,
     color: colors.text,
     marginBottom: space[2],
+  },
+  resultsHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: space[2],
   },
   cardMeta: {
     fontFamily: 'Lora_400Regular',

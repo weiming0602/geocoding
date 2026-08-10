@@ -5,7 +5,15 @@ import { batchGeocode, batchGeocodeDownload } from '../../../shared/api/client';
 import type { BatchResult, BatchSource } from '../../../shared/api/types';
 import BatchMapView from '../components/BatchMapView';
 
-type ForwardedFile = { fileContent: string; fileName?: string };
+type ForwardedFile = { fileContent: string; fileName?: string; ids?: string[] };
+
+// Minimal RFC 4180 quoting -- wraps a field in quotes (doubling any
+// quotes inside it) whenever it contains a comma, quote, or newline;
+// left alone otherwise. Good enough for values coming out of a CSV/
+// Excel import in the first place.
+function csvField(value: string): string {
+  return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
+}
 
 export default function Batch() {
   const location = useLocation();
@@ -27,6 +35,11 @@ export default function Batch() {
   // Import Addresses, since the whole point is letting someone go back
   // and adjust their filtered selection before committing to a run.
   const [arrivedFromImport] = useState(() => Boolean((location.state as ForwardedFile | null)?.fileContent));
+  // The ID column mapped in Import Addresses (if any), one per selected
+  // row, in the same order as the address lines sent in fileContent --
+  // captured once alongside pickedFile/arrivedFromImport, independent of
+  // later state changes for the same reason those are.
+  const [forwardedIds] = useState<string[] | null>(() => (location.state as ForwardedFile | null)?.ids ?? null);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [results, setResults] = useState<BatchResult[] | null>(null);
@@ -107,6 +120,42 @@ export default function Batch() {
   const successMarkers = (results ?? [])
     .filter((r): r is Extract<BatchResult, { success: true }> => r.success)
     .map((r) => ({ address: r.address, latitude: r.coordinates.latitude, longitude: r.coordinates.longitude }));
+
+  // Only trust forwardedIds if it lines up 1:1 with results -- a
+  // mismatch shouldn't ever happen (results come back in the same order
+  // addresses were sent), but silently zipping mismatched arrays would
+  // attach the wrong ID to a row, which is worse than just not showing
+  // one at all.
+  const idsMatchResults = forwardedIds !== null && results !== null && forwardedIds.length === results.length;
+
+  const handleDownloadCsv = useCallback(() => {
+    if (!results || !idsMatchResults || !forwardedIds) return;
+    const header = ['ID', 'Address', 'Success', 'Latitude', 'Longitude', 'Side', 'Error'];
+    const lines = [header.join(',')];
+    results.forEach((result, i) => {
+      const row = result.success
+        ? [
+            forwardedIds[i],
+            result.address,
+            'true',
+            String(result.coordinates.latitude),
+            String(result.coordinates.longitude),
+            result.source === 'interpolation' ? result.rangeSide : '',
+            '',
+          ]
+        : [forwardedIds[i], result.address, 'false', '', '', '', result.error];
+      lines.push(row.map(csvField).join(','));
+    });
+    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = 'batch-geocode-results.csv';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(objectUrl);
+  }, [results, idsMatchResults, forwardedIds]);
 
   return (
     <div>
@@ -217,13 +266,27 @@ export default function Batch() {
         <div>
           {results && (
             <>
-              <div className="card-title" style={{ marginBottom: 'var(--space-3)' }}>
-                {successCount} of {results.length} succeeded
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-3)' }}>
+                <div className="card-title" style={{ marginBottom: 0 }}>
+                  {successCount} of {results.length} succeeded
+                </div>
+                {idsMatchResults && (
+                  <button className="btn btn-secondary" onClick={handleDownloadCsv}>
+                    Download results as CSV (with ID)
+                  </button>
+                )}
               </div>
+              {forwardedIds && !idsMatchResults && (
+                <p className="card-body" style={{ color: '#a4402a', marginBottom: 'var(--space-3)' }}>
+                  The imported ID column couldn't be matched to these results one-to-one, so it's
+                  been left out of this run's output.
+                </p>
+              )}
               <div style={{ overflowX: 'auto' }}>
                 <table className="table">
                   <thead>
                     <tr>
+                      {idsMatchResults && <th>ID</th>}
                       <th>Address</th>
                       <th>Result</th>
                     </tr>
@@ -231,6 +294,7 @@ export default function Batch() {
                   <tbody>
                     {results.map((result, index) => (
                       <tr key={index}>
+                        {idsMatchResults && forwardedIds && <td className="text-muted">{forwardedIds[index]}</td>}
                         <td>{result.address}</td>
                         <td>
                           {result.success ? (

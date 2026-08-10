@@ -5,10 +5,11 @@
 // (ui/mobile) -- neither the column-mapping guesses nor the address-
 // line format should ever drift between the two.
 
-export type ColumnRole = 'ignore' | 'streetFull' | 'streetNumber' | 'streetName' | 'city' | 'state' | 'zip';
+export type ColumnRole = 'ignore' | 'id' | 'streetFull' | 'streetNumber' | 'streetName' | 'city' | 'state' | 'zip';
 
 export const ROLE_OPTIONS: { value: ColumnRole; label: string }[] = [
   { value: 'ignore', label: 'Ignore this column' },
+  { value: 'id', label: 'Primary key / ID' },
   { value: 'streetFull', label: 'Street (number + name together)' },
   { value: 'streetNumber', label: 'Street number' },
   { value: 'streetName', label: 'Street name' },
@@ -19,11 +20,12 @@ export const ROLE_OPTIONS: { value: ColumnRole; label: string }[] = [
 
 // Best-guess mapping from a header cell's text -- the user confirms or
 // fixes this on the mapping step, so a wrong guess costs one tap/click,
-// not a bad import. Order matters: streetNumber's pattern is checked
-// before the broader streetFull/streetName ones so e.g. "Street Number"
-// doesn't fall through to matching "street".
+// not a bad import. Order matters: id and streetNumber's patterns are
+// checked before the broader streetFull/streetName ones so e.g. "Record
+// ID" or "Street Number" don't fall through to a looser later match.
 export function guessRole(header: string): ColumnRole {
   const h = header.toLowerCase().trim();
+  if (/^(id|record.?id|customer.?id|primary.?key|uu?id|ref(erence)?(.?(id|no\.?|num(ber)?))?)$/.test(h)) return 'id';
   if (/house\s*(no\.?|number)\b|street\s*(no\.?|number)\b|addr.*num|^(no|num|number)$/.test(h)) return 'streetNumber';
   if (/full.*addr|^address$|^address ?1$|street.*addr/.test(h)) return 'streetFull';
   if (/street.*name|^street$|^road$/.test(h)) return 'streetName';

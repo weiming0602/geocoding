@@ -1,11 +1,65 @@
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { MemoryRouter, Route, Routes } from 'react-router';
 import * as XLSX from 'xlsx';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import ImportAddresses, { buildAddressLine, guessRole, isGeocodableAddressLine, type ColumnRole } from './ImportAddresses';
 import Batch from './Batch';
 import { ImportAddressesStateProvider } from '../state/ImportAddressesState';
+
+// jsdom has no real WebGL2, which a real maplibre-gl Map requires -- any
+// test that drives a genuinely successful Batch result with coordinates
+// renders BatchMapView, which would otherwise throw during setup (and
+// again on unmount, since the map never finished initializing). Stubbed
+// with harmless no-ops; nothing here asserts on the map itself.
+vi.mock('maplibre-gl', () => {
+  class FakeMap {
+    on() {
+      return this;
+    }
+    addControl() {
+      return this;
+    }
+    addSource() {
+      return this;
+    }
+    addLayer() {
+      return this;
+    }
+    getSource() {
+      return { setData() {} };
+    }
+    getCanvas() {
+      return { style: {} };
+    }
+    remove() {}
+    resize() {}
+    fitBounds() {}
+    setCenter() {}
+    setZoom() {}
+    getZoom() {
+      return 10;
+    }
+  }
+  class FakePopup {
+    setLngLat() {
+      return this;
+    }
+    setText() {
+      return this;
+    }
+    addTo() {
+      return this;
+    }
+    remove() {}
+  }
+  class FakeLngLatBounds {
+    extend() {
+      return this;
+    }
+  }
+  return { Map: FakeMap, NavigationControl: class {}, Popup: FakePopup, GeoJSONSource: class {}, LngLatBounds: FakeLngLatBounds };
+});
 
 describe('guessRole', () => {
   it('recognizes common header spellings for each role', () => {
@@ -18,6 +72,16 @@ describe('guessRole', () => {
     expect(guessRole('Zip')).toBe('zip');
     expect(guessRole('Postal Code')).toBe('zip');
     expect(guessRole('Notes')).toBe('ignore');
+  });
+
+  it('recognizes common ID/primary-key header spellings', () => {
+    expect(guessRole('ID')).toBe('id');
+    expect(guessRole('Record ID')).toBe('id');
+    expect(guessRole('Customer ID')).toBe('id');
+    expect(guessRole('Primary Key')).toBe('id');
+    expect(guessRole('UUID')).toBe('id');
+    expect(guessRole('Ref')).toBe('id');
+    expect(guessRole('Reference No')).toBe('id');
   });
 });
 
@@ -197,5 +261,88 @@ describe('ImportAddresses component (upload -> map -> preview -> filter)', () =>
     expect(screen.getByText('3 of 5 rows selected')).toBeInTheDocument();
     expect(screen.getByLabelText('City')).toHaveValue('Brunswick');
     expect(screen.getByText(/Showing 1 of 5 rows/)).toBeInTheDocument();
+  });
+});
+
+describe('ImportAddresses ID column (forwarded through to Batch results)', () => {
+  const csvWithId = [
+    'Customer ID,House Number,Street Name,City,State,Zip Code',
+    'CUST-1,91,Chestnut St,Portland,ME,04101',
+    'CUST-2,13,Deerfield Dr,Brunswick,ME,04011',
+  ].join('\n');
+
+  it('auto-maps an ID column, shows it in preview, and carries it through Batch results + CSV export', async () => {
+    const savedFetch = globalThis.fetch;
+    globalThis.fetch = async (url: string | URL | Request) => {
+      // Batch.tsx's own POST to the local server -- this test isn't
+      // exercising Overpass/Nominatim, so any /geocode/batch call is
+      // the one to fake.
+      if (String(url).includes('/geocode/batch')) {
+        return {
+          ok: true,
+          json: async () => ({
+            results: [
+              {
+                address: '91 Chestnut St, Portland, ME 04101',
+                success: true,
+                source: 'interpolation',
+                rangeSide: 'left',
+                coordinates: { latitude: 43.66, longitude: -70.26 },
+              },
+              {
+                address: '13 Deerfield Dr, Brunswick, ME 04011',
+                success: true,
+                source: 'address_point',
+                coordinates: { latitude: 43.92, longitude: -69.89 },
+              },
+            ],
+          }),
+        } as Response;
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    };
+
+    try {
+      const { container } = render(
+        <MemoryRouter initialEntries={['/import-addresses']}>
+          <ImportAddressesStateProvider>
+            <Routes>
+              <Route path="/import-addresses" element={<ImportAddresses />} />
+              <Route path="/batch" element={<Batch />} />
+            </Routes>
+          </ImportAddressesStateProvider>
+        </MemoryRouter>
+      );
+      const file = new File([csvWithId], 'addresses.csv', { type: 'text/csv' });
+      const input = container.querySelector('input[type="file"]') as HTMLInputElement;
+      fireEvent.change(input, { target: { files: [file] } });
+      await waitFor(() => screen.getByText('Map your columns'));
+
+      // Auto-mapped as "Primary key / ID" from the "Customer ID" header.
+      const mappingTable = within(container.querySelector('table') as HTMLTableElement);
+      expect(mappingTable.getByText('Customer ID').closest('tr')?.textContent).toContain('Primary key / ID');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Preview addresses' }));
+      await waitFor(() => screen.getByText(/row.*selected/));
+      // "Customer ID" also becomes a filter dropdown (only 2 distinct
+      // values), so scope to the actual preview table -- "CUST-1" is
+      // also a <option> in that filter.
+      const previewTable = within(container.querySelector('table') as HTMLTableElement);
+      expect(previewTable.getByText('CUST-1')).toBeInTheDocument();
+      expect(previewTable.getByText('CUST-2')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: 'Send to Batch geocode' }));
+      await screen.findByPlaceholderText('C:\\software\\database\\addresses.txt');
+
+      fireEvent.click(screen.getByRole('button', { name: 'Batch geocode' }));
+      await screen.findByText('2 of 2 succeeded');
+
+      const resultsTable = within(screen.getAllByRole('table').slice(-1)[0]);
+      expect(resultsTable.getByText('CUST-1')).toBeInTheDocument();
+      expect(resultsTable.getByText('CUST-2')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Download results as CSV (with ID)' })).toBeInTheDocument();
+    } finally {
+      globalThis.fetch = savedFetch;
+    }
   });
 });

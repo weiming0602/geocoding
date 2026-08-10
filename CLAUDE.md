@@ -290,6 +290,33 @@ read-write).
   of resetting the wizard -- the point being a user comparing a few
   different filtered selections shouldn't have to redo the upload/
   mapping step each time.
+- Both apps' Import Addresses column mapping includes a `'id'` role
+  (`ROLE_OPTIONS`/`guessRole` in `ui/shared/importAddresses.ts` --
+  `guessRole` auto-detects headers like `id`, `record id`, `customer_id`,
+  `uuid`, `ref#` via regex) for a source file's own primary-key column,
+  kept separate from the address-line columns. When a column is mapped
+  to `id`, the preview step shows it alongside each row
+  (`hasIdColumn`/`previewRows[].id`, both apps), and "Send to Batch
+  geocode" forwards the per-row ID array alongside the address lines --
+  desktop via router state (`navigate('/batch', { state: { ids } })`,
+  `Batch.tsx`), mobile via `App.tsx`'s `pendingBatchIds` (lifted state,
+  same reasoning as `pendingBatchFile` -- see below) down through
+  `BatchGeocodeScreen`'s `initialIds` prop into `BatchGeocodeForm.tsx`'s
+  `forwardedIds`. The ID array is never embedded in the address-line
+  text itself (the `/geocode/batch` request body is untouched) -- both
+  `Batch.tsx` and `BatchGeocodeForm.tsx` zip `forwardedIds`/results back
+  together positionally after the batch response returns, relying on the
+  server preserving request order, and only render/export IDs at all
+  when the array's length still matches the results length
+  (`idsMatchResults`) -- a mismatch (e.g. a user swaps in a different
+  file after forwarding) silently drops the ID column rather than
+  showing wrong IDs, with a visible warning on mobile. Both apps offer a
+  "Download results as CSV (with ID)" button in that case, built
+  client-side (`csvField` for RFC-4180-ish quoting) rather than
+  extending the server's ZIP endpoint. Choosing a different file (or
+  clearing the picked one) on mobile's Batch tab clears `forwardedIds`
+  immediately (`handleChooseFile`/`handleClearPickedFile`), since a
+  freshly picked file was never paired with that ID list.
 - `ui/desktop` is a scaffold only (Vite + React + react-router, routes
   for every screen, `ui/shared`'s API client wired up and proven working
   against a live `geocoding-server`) — no real screen UI implemented yet.
