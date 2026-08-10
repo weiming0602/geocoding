@@ -47,6 +47,29 @@ export const MILESTONES: Milestone[] = [
       'Real per-house locations, not just estimates, for every matched Maine address.',
   },
   {
+    date: 'Aug 8, 2026',
+    title: 'Find places near an address',
+    description:
+      'Search for a kind of place -- a school, a pharmacy, a specific business -- near any address or area, and export the matches as a ready-to-geocode list.',
+  },
+  {
+    date: 'Aug 9, 2026',
+    title: 'Import addresses from a CSV or Excel export',
+    description:
+      "Upload a messy export -- street number, name, city, and ZIP each in their own column -- and get back a clean address list ready for batch geocoding. Works the same on phone and desktop.",
+  },
+  {
+    date: 'Aug 9, 2026',
+    title: 'Type in coordinates for reverse geocoding',
+    description: 'Look up the address at a latitude/longitude directly, not just by clicking the map.',
+  },
+  {
+    date: 'Aug 10, 2026',
+    title: 'Your own record IDs, carried through a batch',
+    description:
+      "Map a primary-key column when importing addresses, and it rides along to the final results -- no manual matching of rows back to your own records afterward.",
+  },
+  {
     date: 'Coming soon',
     title: 'New Hampshire accuracy upgrade',
     description: 'The same real per-house location data, for New Hampshire.',
