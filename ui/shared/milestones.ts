@@ -76,6 +76,12 @@ export const MILESTONES: Milestone[] = [
       "Found and closed a gap in how the batch endpoint read server-side files -- it's now restricted to only the files it's meant to read.",
   },
   {
+    date: 'Aug 11, 2026',
+    title: 'Address-matching accuracy fixes',
+    description:
+      "Fixed an edge case where certain street shapes could throw off an interpolated point, and tightened the exact-match path so a mismatched ZIP or state can no longer override a real address. Batch result CSVs now also show whether each match was an exact point or an estimate.",
+  },
+  {
     date: 'Coming soon',
     title: 'New Hampshire accuracy upgrade',
     description: 'The same real per-house location data, for New Hampshire.',
