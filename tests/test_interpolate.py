@@ -36,6 +36,30 @@ def test_interpolate_along_line_offset_left_of_northward_line():
     assert y == pytest.approx(0.5, abs=1e-6)
 
 
+def test_interpolate_along_line_duplicate_vertex_does_not_snap_early():
+    # Duplicate point at index 1/2 (a zero-length segment), total length 2.
+    # 75% of the way along should be 1.5 units in, past the duplicate --
+    # not snapped to it just because the walk passed through it first.
+    points = [(0.0, 0.0), (1.0, 0.0), (1.0, 0.0), (2.0, 0.0)]
+    x, y = interpolate_along_line(points, 0.75)
+    assert x == pytest.approx(1.5)
+    assert y == pytest.approx(0.0)
+
+
+def test_interpolate_along_line_duplicate_vertex_at_target_still_lands_on_it():
+    points = [(0.0, 0.0), (1.0, 0.0), (1.0, 0.0), (2.0, 0.0)]
+    x, y = interpolate_along_line(points, 0.5)
+    assert x == pytest.approx(1.0)
+    assert y == pytest.approx(0.0)
+
+
+def test_interpolate_along_line_all_duplicate_points_does_not_divide_by_zero():
+    points = [(5.0, 5.0), (5.0, 5.0), (5.0, 5.0)]
+    x, y = interpolate_along_line(points, 0.5)
+    assert x == pytest.approx(5.0)
+    assert y == pytest.approx(5.0)
+
+
 @pytest.fixture
 def conn(dsn):
     with psycopg.connect(dsn) as conn:

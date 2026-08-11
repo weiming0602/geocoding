@@ -56,7 +56,14 @@ def interpolate_along_line(
 
     dist_so_far = 0.0
     for (x1, y1), (x2, y2), seg_len in zip(points, points[1:], seg_lens):
-        if dist_so_far + seg_len >= target or seg_len == 0:
+        # seg_len == 0 was previously included here too, meant to handle a
+        # degenerate segment sitting exactly at the target distance -- but
+        # that case is already covered by ">=" alone (dist_so_far + 0 >=
+        # target only once dist_so_far has actually reached target).
+        # Including it unconditionally instead made the walk snap to *any*
+        # duplicate vertex it passed through, long before reaching the
+        # real target.
+        if dist_so_far + seg_len >= target:
             t = (target - dist_so_far) / seg_len if seg_len else 0.0
             x, y = x1 + t * (x2 - x1), y1 + t * (y2 - y1)
             seg_dx, seg_dy = x2 - x1, y2 - y1

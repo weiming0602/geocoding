@@ -43,7 +43,13 @@ function interpolateAlongLine(points, fraction, offsetFeet = 0, offsetSide = 'ri
     const [x1, y1] = points[i];
     const [x2, y2] = points[i + 1];
     const segLen = segLens[i];
-    if (distSoFar + segLen >= target || segLen === 0) {
+    // segLen === 0 was previously included here too, meant to handle a
+    // degenerate segment sitting exactly at the target distance -- but
+    // that case is already covered by ">=" alone (distSoFar + 0 >= target
+    // only once distSoFar has actually reached target). Including it
+    // unconditionally instead made the walk snap to *any* duplicate
+    // vertex it passed through, long before reaching the real target.
+    if (distSoFar + segLen >= target) {
       const t = segLen ? (target - distSoFar) / segLen : 0;
       x = x1 + t * (x2 - x1);
       y = y1 + t * (y2 - y1);
