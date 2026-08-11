@@ -70,6 +70,12 @@ export const MILESTONES: Milestone[] = [
       "Map a primary-key column when importing addresses, and it rides along to the final results -- no manual matching of rows back to your own records afterward.",
   },
   {
+    date: 'Aug 11, 2026',
+    title: 'Batch upload security hardening',
+    description:
+      "Found and closed a gap in how the batch endpoint read server-side files -- it's now restricted to only the files it's meant to read.",
+  },
+  {
     date: 'Coming soon',
     title: 'New Hampshire accuracy upgrade',
     description: 'The same real per-house location data, for New Hampshire.',
