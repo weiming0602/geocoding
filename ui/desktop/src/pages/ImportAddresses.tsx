@@ -215,7 +215,7 @@ export default function ImportAddresses() {
       </div>
 
       {step === 'upload' && (
-        <div className="card elev-sm" style={{ maxWidth: 480 }}>
+        <div className="card elev-sm" style={{ maxWidth: 480, margin: '0 auto' }}>
           <div className="field">
             <label>CSV or Excel file</label>
             <input

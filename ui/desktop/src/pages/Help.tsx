@@ -2,7 +2,7 @@ import FeedbackForm from '../components/FeedbackForm';
 
 export default function Help() {
   return (
-    <div style={{ maxWidth: 720 }}>
+    <div style={{ maxWidth: 720, margin: '0 auto' }}>
       <h1 style={{ marginBottom: 4 }}>How Meridian geocodes an address</h1>
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         A short guide to what happens when you look up, reverse-geocode, or batch-process addresses.

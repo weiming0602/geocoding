@@ -112,7 +112,7 @@ export default function Checkout() {
   }
 
   return (
-    <div style={{ maxWidth: 480 }}>
+    <div style={{ maxWidth: 480, margin: '0 auto' }}>
       <h1>Checkout</h1>
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         {tier.label} for {formatUsd(tier.priceCents)}.

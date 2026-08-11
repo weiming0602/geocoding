@@ -2,7 +2,7 @@ import { MILESTONES } from '../../../shared/milestones';
 
 export default function Progress() {
   return (
-    <div style={{ maxWidth: 720 }}>
+    <div style={{ maxWidth: 720, margin: '0 auto' }}>
       <h1 style={{ marginBottom: 4 }}>Progress</h1>
       <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
         A running record of what's shipped so far, and what's next.
