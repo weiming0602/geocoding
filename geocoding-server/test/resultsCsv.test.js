@@ -16,6 +16,7 @@ test('resultsToCsv splits successes and failures into separate CSVs', () => {
     {
       address: '997 Pequawket Trl, Standish, ME 04091',
       success: true,
+      source: 'interpolation',
       rangeSide: 'left',
       match: { id: 12, fullname: 'Pequawket Trl' },
       coordinates: { latitude: 43.834391, longitude: -70.778549 },
@@ -30,10 +31,10 @@ test('resultsToCsv splits successes and failures into separate CSVs', () => {
   const { successCsv, errorCsv } = resultsToCsv(results);
 
   const successLines = successCsv.trim().split('\r\n');
-  assert.equal(successLines[0], 'address,latitude,longitude,rangeSide,matchFullname');
+  assert.equal(successLines[0], 'address,latitude,longitude,source,rangeSide,matchFullname');
   assert.equal(
     successLines[1],
-    '"997 Pequawket Trl, Standish, ME 04091",43.834391,-70.778549,left,Pequawket Trl'
+    '"997 Pequawket Trl, Standish, ME 04091",43.834391,-70.778549,interpolation,left,Pequawket Trl'
   );
 
   const errorLines = errorCsv.trim().split('\r\n');
@@ -44,11 +45,31 @@ test('resultsToCsv splits successes and failures into separate CSVs', () => {
   );
 });
 
+test('resultsToCsv leaves rangeSide blank for an exact address_point match', () => {
+  const results = [
+    {
+      address: '13 Deerfield Dr, Brunswick, ME 04011',
+      success: true,
+      source: 'address_point',
+      match: { siteUid: 'urn:x', fullname: 'Deerfield Drive' },
+      coordinates: { latitude: 43.9221, longitude: -69.8934 },
+    },
+  ];
+
+  const { successCsv } = resultsToCsv(results);
+  const successLines = successCsv.trim().split('\r\n');
+  assert.equal(
+    successLines[1],
+    '"13 Deerfield Dr, Brunswick, ME 04011",43.9221,-69.8934,address_point,,Deerfield Drive'
+  );
+});
+
 test('resultsToCsv handles an all-success or all-failure batch', () => {
   const allSuccess = resultsToCsv([
     {
       address: 'A',
       success: true,
+      source: 'interpolation',
       rangeSide: 'right',
       match: { id: 1, fullname: 'A St' },
       coordinates: { latitude: 1, longitude: 2 },
@@ -59,6 +80,6 @@ test('resultsToCsv handles an all-success or all-failure batch', () => {
   const allFailure = resultsToCsv([{ address: 'B', success: false, error: 'nope' }]);
   assert.equal(
     allFailure.successCsv.trim(),
-    'address,latitude,longitude,rangeSide,matchFullname'
+    'address,latitude,longitude,source,rangeSide,matchFullname'
   );
 });

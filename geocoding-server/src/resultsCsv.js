@@ -13,7 +13,7 @@ function rowsToCsv(rows) {
 /** Splits geocodeBatch() results into a successes CSV and a failures CSV. */
 function resultsToCsv(results) {
   const successRows = [
-    ['address', 'latitude', 'longitude', 'rangeSide', 'matchFullname'],
+    ['address', 'latitude', 'longitude', 'source', 'rangeSide', 'matchFullname'],
   ];
   const errorRows = [['address', 'error']];
 
@@ -23,7 +23,11 @@ function resultsToCsv(results) {
         result.address,
         result.coordinates.latitude,
         result.coordinates.longitude,
-        result.rangeSide,
+        result.source,
+        // rangeSide only exists on an interpolation result -- an exact
+        // address_point match has no "side" to report, so this cell is
+        // blank rather than misleadingly guessed at.
+        result.source === 'interpolation' ? result.rangeSide : '',
         result.match.fullname,
       ]);
     } else {
