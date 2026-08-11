@@ -22,6 +22,21 @@ Express API that resolves a free-text address to coordinates using the
 4. The first candidate segment whose range actually contains the
    number is used for interpolation.
 
+Before any of the above, Maine addresses are checked against a real,
+surveyed E911 address point (`address_points`, keyed on street name +
+house number, narrowed by town) — see `matchAddressPoint()` in
+`src/geocode.js`. address_points has no ZIP column of its own, so a
+caller-supplied ZIP is cross-checked against `street_names`' ZIPs for
+that street *only when street_names actually has an opinion*: a street
+E911 covers but TIGER doesn't (no `street_names` row at all) is left
+unchecked, but a street TIGER does know under a completely different
+set of ZIPs is treated as a mismatch (not silently accepted), falling
+through to the range-interpolation path instead, which does check ZIP
+directly. State is checked directly against the point's own
+`state_abbr`. Each response reports which path was used
+(`"source": "address_point"` vs `"interpolation"`), so callers can tell
+a real point from an estimate.
+
 ## Worked examples
 
 **Odd → left.** Chestnut Rd's segment here covers the left-side range

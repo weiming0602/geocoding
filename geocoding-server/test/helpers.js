@@ -131,6 +131,17 @@ async function seedFixtureStreets(pool) {
      VALUES ('test-uid-1', 42, 'Test Point Lane', 'Testville', 'Test County', 'ME',
              ST_SetSRID(ST_MakePoint(-70.5, 43.5), 4326))`
   );
+  // A second address point sharing its street name with the "Pequawket
+  // Trl" streets/street_names rows below (real ZIP 04091), at a house
+  // number (500) outside every interpolation range those rows cover --
+  // so tests can prove a ZIP cross-check against street_names' real data
+  // for this street (unlike Test Point Lane, which has no street_names
+  // entry at all to check against).
+  await pool.query(
+    `INSERT INTO address_points (site_uid, address_number, street_fullname, town, county, state_abbr, geom)
+     VALUES ('test-uid-2', 500, 'Pequawket Trl', 'Standish', 'Cumberland County', 'ME',
+             ST_SetSRID(ST_MakePoint(-70.78, 43.83), 4326))`
+  );
 
   const rows = [
     {

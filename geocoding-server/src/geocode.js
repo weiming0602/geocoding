@@ -68,8 +68,23 @@ async function candidateStreets(db, streetName, zip, zipColumn, state) {
  * multiple same-named-street-and-number matches across different towns
  * can't be disambiguated safely, so an ambiguous no-town match is
  * treated as no match at all rather than guessing.
+ *
+ * A 2-letter state, when given, is checked directly against the
+ * matched point's own state_abbr. ZIP has no column on address_points
+ * to check directly -- instead it's cross-checked against street_names'
+ * zipl/zipr for this street name (the same TIGER data candidateStreets
+ * uses below), but only when TIGER actually has an opinion: if this
+ * street name has no street_names entry at all (real for streets E911
+ * covers that TIGER doesn't -- see the "Test Point Lane" fixture in
+ * test/helpers.js), there's nothing to contradict the caller's ZIP with,
+ * so it's left unchecked rather than rejecting a match TIGER simply
+ * has no data on. When street_names *does* have this street under a
+ * completely different set of ZIPs, that's real contradicting evidence
+ * (a typo, or the same street name in a different town) -- the match is
+ * treated as no match instead of accepted with full confidence, falling
+ * through to the interpolation path, which does validate ZIP directly.
  */
-async function matchAddressPoint(db, number, streetName, town) {
+async function matchAddressPoint(db, number, streetName, town, zip, state) {
   // TIGER-style input abbreviates suffixes ("Dr"); Maine's E911 data
   // spells them out ("Drive") -- try both so neither style is required.
   const expanded = expandStreetSuffix(streetName);
@@ -83,8 +98,27 @@ async function matchAddressPoint(db, number, streetName, town) {
     params
   );
 
-  if (rows.length === 1) return rows[0];
-  return null; // no match, or ambiguous across towns with no town given
+  if (rows.length !== 1) return null; // no match, or ambiguous across towns with no town given
+  const point = rows[0];
+
+  if (state && state.length === 2 && point.state_abbr && point.state_abbr.toUpperCase() !== state.toUpperCase()) {
+    return null;
+  }
+
+  if (zip) {
+    const { rows: zipCheckRows } = await db.query(
+      `SELECT
+         count(*) > 0 AS street_known,
+         count(*) FILTER (WHERE zipl = $3 OR zipr = $3) > 0 AS zip_matches
+       FROM street_names
+       WHERE UPPER(fullname) IN (UPPER($1), UPPER($2))`,
+      [streetName, expanded, zip]
+    );
+    const { street_known, zip_matches } = zipCheckRows[0];
+    if (street_known && !zip_matches) return null;
+  }
+
+  return point;
 }
 
 /**
@@ -97,7 +131,7 @@ async function matchAddressPoint(db, number, streetName, town) {
 async function geocode(db, addressInput, { offsetFeet = 20 } = {}) {
   const { number, streetName, zip, state, town } = parseAddress(addressInput);
 
-  const addressPoint = await matchAddressPoint(db, number, streetName, town);
+  const addressPoint = await matchAddressPoint(db, number, streetName, town, zip, state);
   if (addressPoint) {
     return {
       input: { number, streetName, zip, state, town },

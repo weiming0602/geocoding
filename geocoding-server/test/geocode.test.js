@@ -203,3 +203,51 @@ test('address_points matching is scoped by town, not ZIP', async () => {
   );
   await db.close();
 });
+
+test('an address_points match with no street_names entry to check is accepted regardless of ZIP', async () => {
+  const db = await makeDb();
+  // "Test Point Lane" has no street_names row at all (see helpers.js) --
+  // TIGER has no opinion on its ZIP one way or the other, so a made-up
+  // ZIP here must not block the otherwise-exact match.
+  const result = await geocode(db, '42 Test Point Lane, Testville, ME 00000');
+  assert.equal(result.source, 'address_point');
+  await db.close();
+});
+
+test('an address_points match under the real street ZIP is accepted', async () => {
+  const db = await makeDb();
+  // "Pequawket Trl" (id 12/14) is registered in street_names under ZIP
+  // 04091 -- the address_points row for it (house 500, "test-uid-2")
+  // shares that real ZIP, so it should match with full confidence.
+  const result = await geocode(db, '500 Pequawket Trl, Standish, ME 04091');
+  assert.equal(result.source, 'address_point');
+  assert.equal(result.match.siteUid, 'test-uid-2');
+  await db.close();
+});
+
+test('an address_points match under a ZIP street_names contradicts is rejected', async () => {
+  const db = await makeDb();
+  // Same street+number+town as the previous test, but a ZIP that
+  // street_names positively knows is wrong for "Pequawket Trl" (it's
+  // only ever registered under 04091) -- must not be accepted with full
+  // confidence just because the street+number+town lined up. Falls
+  // through to interpolation, which finds no candidate under this ZIP
+  // either (house 500 isn't a real address anyway), so it 404s instead
+  // of silently returning the Standish point under the wrong ZIP.
+  await assert.rejects(
+    () => geocode(db, '500 Pequawket Trl, Standish, ME 00001'),
+    NotFoundError
+  );
+  await db.close();
+});
+
+test('an address_points match under a state street_names/the point itself contradicts is rejected', async () => {
+  const db = await makeDb();
+  // "Test Point Lane"'s point is state_abbr='ME' -- a caller-supplied NH
+  // must not be silently accepted just because street+number+town matched.
+  await assert.rejects(
+    () => geocode(db, '42 Test Point Lane, Testville, NH 00000'),
+    NotFoundError
+  );
+  await db.close();
+});
