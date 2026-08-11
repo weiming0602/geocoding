@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # geocoding
 
 Custom address geocoding engine for Maine (+ NH) built on Census TIGER/Line
@@ -49,6 +53,12 @@ read-write).
   `ops/` for the systemd timer/service pair and a crontab alternative.
 - Mobile app: `cd ui/mobile && npm start`
 - Desktop app: `cd ui/desktop && npm run dev`
+- Desktop app tests: `cd ui/desktop && npm test` (vitest; `App.test.tsx` and
+  `src/pages/ImportAddresses.test.tsx`) — `ui/mobile` and `geocoding-server`'s
+  `package.json` have no equivalent real `npm test` (see above for
+  `geocoding-server`'s actual test command; `ui/mobile` has no test files at
+  all yet)
+- Desktop app build: `cd ui/desktop && npm run build` (`tsc -b && vite build`)
 
 # Code style
 - Odd/even house-number convention (odd → left range/offset left, even →
@@ -317,9 +327,6 @@ read-write).
   clearing the picked one) on mobile's Batch tab clears `forwardedIds`
   immediately (`handleChooseFile`/`handleClearPickedFile`), since a
   freshly picked file was never paired with that ID list.
-- `ui/desktop` is a scaffold only (Vite + React + react-router, routes
-  for every screen, `ui/shared`'s API client wired up and proven working
-  against a live `geocoding-server`) — no real screen UI implemented yet.
 - `ui/shared` holds API client/types/coordinate-parsing code used by both
   frontends. Deliberately excludes anything with maplibre-gl types (a
   separate install there is a nominally distinct type from each app's own
@@ -332,3 +339,22 @@ read-write).
   pool size of 10) instead of strictly sequential, for a real speedup on
   large batches without that risk. Not done yet — don't assume batch
   requests are parallelized.
+- `batchGeocode.js`'s `readAddressLines` only accepts a `filePath` that
+  resolves inside `ALLOWED_BATCH_DIR` (the OS temp dir by default,
+  `BATCH_FILE_BASE_DIR` to override) — checked both on the raw resolved
+  path (before the file is even looked up, so a path outside the
+  sandbox is rejected identically whether or not it exists) and again
+  on the symlink-resolved real path once the file is found (so a
+  symlink planted inside the allowed dir can't point back out). This
+  closes what used to be an unrestricted arbitrary-file-read: any
+  absolute path a client named — `.env`, a `geocoding_users` database
+  backup, an SSH key — got read straight off disk, and on
+  `/geocode/batch`/`/geocode/batch/download`/`/geocode/batch/email`
+  that read happens before quota/auth is checked (needed, since
+  `checkQuota` needs the address count), so an unauthenticated request
+  (or, before `checkQuota` runs, one with a nonexistent account) could
+  already trigger the read — the sandbox is what actually stops it,
+  not request ordering. `fileContent` (what both real UIs send) never
+  touches the filesystem at all and is unaffected by any of this;
+  `filePath` only exists for a same-host dev/test setup where the
+  client can't otherwise reach the server's filesystem.

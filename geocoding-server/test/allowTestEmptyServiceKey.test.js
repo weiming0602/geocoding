@@ -1,5 +1,6 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('path');
 
 const { upsertUser, getUser } = require('../src/users');
 const { withTestServer } = require('./helpers');
@@ -98,6 +99,26 @@ test('POST /geocode/batch with no email at all still rejects by default', () =>
       assert.match((await response.json()).error, /email/);
     },
     { seedStreets: false }
+  ));
+
+test('POST /geocode/batch with no email at all and a filePath outside the allowed directory is rejected, not read', () =>
+  withTestServer(
+    withFlagEnabled(async ({ port }) => {
+      // With no email/serviceKey at all and the flag set, this request
+      // reaches resolveAddresses() with zero authentication -- this is
+      // the exact shape of the arbitrary-file-read this repo's own
+      // .env (PayPal/AWS credentials) was reachable through before
+      // readAddressLines started restricting filePath to the OS temp dir.
+      const response = await fetch(`http://127.0.0.1:${port}/geocode/batch`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ filePath: path.join(__dirname, '..', '.env') }),
+      });
+
+      assert.equal(response.status, 400);
+      const body = await response.json();
+      assert.match(body.error, /filePath must be inside/);
+    })
   ));
 
 test('POST /geocode/batch with no email at all runs as a pure smoke test when the flag is set', () =>

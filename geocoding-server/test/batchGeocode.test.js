@@ -42,10 +42,29 @@ test('geocodes each line, mixing successes and failures', async () => {
 
 test('missing file throws NotFoundError', async () => {
   const db = await makeDb();
-  await assert.rejects(
-    () => geocodeBatch(db, 'C:\\definitely\\not\\a\\real\\path.txt'),
-    NotFoundError
-  );
+  const missingPath = path.join(os.tmpdir(), `batch-geocode-missing-${Date.now()}-${Math.random()}.txt`);
+  await assert.rejects(() => geocodeBatch(db, missingPath), NotFoundError);
+  await db.close();
+});
+
+test('filePath outside the allowed directory throws ValidationError, not NotFoundError', async () => {
+  const db = await makeDb();
+  // Mirrors the actual attack this restriction closes: an absolute path
+  // outside the OS temp dir must be rejected the same way whether or not
+  // it exists -- NotFoundError here would mean the response leaks
+  // whether arbitrary paths on the box exist.
+  await assert.rejects(() => geocodeBatch(db, 'C:\\definitely\\not\\a\\real\\path.txt'), ValidationError);
+  await assert.rejects(() => geocodeBatch(db, path.join(__dirname, '..', '.env')), ValidationError);
+  await assert.rejects(() => geocodeBatch(db, '/etc/hostname'), ValidationError);
+  await db.close();
+});
+
+test('a ".." traversal out of the allowed directory is still rejected', async () => {
+  const db = await makeDb();
+  // path.resolve collapses the ".." before the containment check runs,
+  // so this lands squarely outside the temp dir despite starting inside it.
+  const traversal = path.join(os.tmpdir(), '..', 'etc', 'hostname');
+  await assert.rejects(() => geocodeBatch(db, traversal), ValidationError);
   await db.close();
 });
 

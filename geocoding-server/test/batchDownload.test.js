@@ -59,13 +59,14 @@ test('POST /geocode/batch/download streams a ZIP with results.csv and errors.csv
 
 test('POST /geocode/batch/download with a missing file returns JSON 404', () =>
   withTestServer(async ({ port }) => {
+    const missingPath = path.join(os.tmpdir(), `batch-download-missing-${Date.now()}-${Math.random()}.txt`);
     const response = await fetch(`http://127.0.0.1:${port}/geocode/batch/download`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         email: 'alice@example.com',
         serviceKey: 'mk_whatever',
-        filePath: 'C:\\definitely\\not\\a\\real\\path.txt',
+        filePath: missingPath,
       }),
     });
 
@@ -73,6 +74,26 @@ test('POST /geocode/batch/download with a missing file returns JSON 404', () =>
     assert.equal(response.headers.get('content-type'), 'application/json; charset=utf-8');
     const body = await response.json();
     assert.match(body.error, /file not found/);
+  }));
+
+test('POST /geocode/batch/download rejects a filePath outside the allowed directory with JSON 400, not the file\'s content', () =>
+  withTestServer(async ({ port }) => {
+    // The actual vulnerability this closes: filePath used to be read
+    // straight off disk with no restriction, so an absolute path to a
+    // server secret (here, this repo's own .env) came back verbatim.
+    const response = await fetch(`http://127.0.0.1:${port}/geocode/batch/download`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: 'alice@example.com',
+        serviceKey: 'mk_whatever',
+        filePath: path.join(__dirname, '..', '.env'),
+      }),
+    });
+
+    assert.equal(response.status, 400);
+    const body = await response.json();
+    assert.match(body.error, /filePath must be inside/);
   }));
 
 test('POST /geocode/batch/download with a wrong service key returns JSON 401', () =>

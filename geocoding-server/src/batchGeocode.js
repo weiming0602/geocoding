@@ -1,4 +1,6 @@
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
 
 const { geocode } = require('./geocode');
 const { ValidationError, NotFoundError } = require('./errors');
@@ -11,12 +13,35 @@ function parseAddresses(content) {
     .filter(Boolean);
 }
 
+// `filePath` only makes sense when the client and server share a
+// filesystem (a same-host dev/test setup -- see server.js's own doc
+// comment on it); every legitimate caller, including every test in this
+// suite, already drops its file in the OS temp dir first. Without this
+// restriction, filePath was an unrestricted arbitrary-file-read: any
+// absolute path the client named (.env, a database backup, an SSH key)
+// got read and, once past quota/auth, echoed straight back as each
+// result's `address` field. BATCH_FILE_BASE_DIR lets a real deployment
+// point at a different shared directory instead, if the temp dir isn't
+// suitable there.
+const ALLOWED_BATCH_DIR = fs.realpathSync(process.env.BATCH_FILE_BASE_DIR || os.tmpdir());
+
+function isWithinAllowedDir(candidatePath) {
+  return candidatePath === ALLOWED_BATCH_DIR || candidatePath.startsWith(ALLOWED_BATCH_DIR + path.sep);
+}
+
 /** Reads and validates a plain-text file (one address per line) into a list of addresses. */
 function readAddressLines(filePath) {
   if (typeof filePath !== 'string' || !filePath.trim()) {
     throw new ValidationError('filePath must be a non-empty string');
   }
-  const resolvedPath = filePath.trim();
+  const resolvedPath = path.resolve(filePath.trim());
+  // Checked before the file is even looked up, on the resolved (not yet
+  // existence-checked) path -- a path outside the allowed directory is
+  // rejected the same way whether or not it happens to exist, so nothing
+  // outside this sandbox has its existence revealed either.
+  if (!isWithinAllowedDir(resolvedPath)) {
+    throw new ValidationError(`filePath must be inside ${ALLOWED_BATCH_DIR}`);
+  }
 
   let stat;
   try {
@@ -26,6 +51,12 @@ function readAddressLines(filePath) {
   }
   if (!stat.isFile()) {
     throw new ValidationError(`not a file: ${resolvedPath}`);
+  }
+  // Re-checked against the symlink-resolved real path -- a symlink
+  // planted inside the allowed directory could otherwise still point
+  // somewhere else entirely.
+  if (!isWithinAllowedDir(fs.realpathSync(resolvedPath))) {
+    throw new ValidationError(`filePath must be inside ${ALLOWED_BATCH_DIR}`);
   }
 
   const addresses = parseAddresses(fs.readFileSync(resolvedPath, 'utf8'));
