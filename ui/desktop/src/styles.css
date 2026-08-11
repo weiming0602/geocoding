@@ -227,13 +227,49 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
   display: flex; align-items: center; gap: var(--space-4);
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--color-divider);
+  position: relative;
 }
 .nav-brand {
   font-family: var(--font-heading); font-weight: var(--font-heading-weight);
   font-size: 20px; margin-right: auto;
 }
-.nav a { color: inherit; text-decoration: none; font-size: 15px; transition: color var(--transition-fast); }
+.nav-links { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
+.nav a { color: inherit; text-decoration: none; font-size: 15px; transition: color var(--transition-fast); white-space: nowrap; }
 .nav a:hover, .nav a[aria-current='page'] { color: var(--color-accent); }
+
+/* Hidden above the breakpoint -- .nav-links stays a plain always-visible
+   row there, same as before the toggle existed. */
+.nav-toggle {
+  display: none;
+  width: 36px; height: 36px; padding: 0;
+  align-items: center; justify-content: center;
+  background: transparent; border: 1px solid var(--color-divider);
+  border-radius: var(--radius-md); cursor: pointer; color: var(--color-text);
+}
+.nav-toggle:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
+
+@media (max-width: 720px) {
+  .nav-toggle { display: inline-flex; }
+  /* Collapsed into a dropdown panel instead of the plain row above --
+     10 links' worth of text has nowhere to go at phone widths, and
+     flex-wrap alone (without this) still overflowed the viewport since
+     wrapping happens per-item, not per-row. */
+  .nav-links {
+    display: none;
+    position: absolute; top: 100%; left: 0; right: 0; z-index: 20;
+    flex-direction: column; align-items: stretch; gap: 0;
+    background: var(--color-bg);
+    border-bottom: 1px solid var(--color-divider);
+    box-shadow: var(--shadow-md);
+    padding: var(--space-2) var(--space-4) var(--space-4);
+  }
+  .nav-links.nav-links-open { display: flex; }
+  .nav-links a {
+    padding: var(--space-3) 0;
+    border-bottom: 1px solid var(--color-divider);
+  }
+  .nav-links a:last-child { border-bottom: none; }
+}
 
 /* — install banner — */
 .install-banner {
