@@ -59,7 +59,7 @@ export default function Geocode() {
             <label>Address or place</label>
             <input
               className="input"
-              placeholder="1600 Amphitheatre Pkwy, Mountain View"
+              placeholder="e.g. 997 Pequawket Trl, Standish, ME 04091"
               value={address}
               onChange={(e) => setAddress(e.target.value)}
               onKeyDown={(e) => {
