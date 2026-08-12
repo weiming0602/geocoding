@@ -202,22 +202,31 @@ export default function Batch() {
 
           <div className="field">
             <label>Resource file (one address per line)</label>
-            <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
-              <input
-                className="input"
-                placeholder="C:\software\database\addresses.txt"
-                value={pickedFile ? pickedFile.name : filePath}
-                onChange={(e) => setFilePath(e.target.value)}
-                disabled={Boolean(pickedFile)}
-              />
-              <button
-                className="btn btn-secondary"
-                onClick={() => (pickedFile ? setPickedFile(null) : fileInputRef.current?.click())}
-              >
-                {pickedFile ? 'Clear' : 'Choose File'}
-              </button>
-              <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={handleChooseFile} />
-            </div>
+            <button
+              className="btn btn-primary btn-block"
+              onClick={() => (pickedFile ? setPickedFile(null) : fileInputRef.current?.click())}
+            >
+              {pickedFile ? `Clear "${pickedFile.name}"` : 'Choose File'}
+            </button>
+            <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={handleChooseFile} />
+
+            {/* De-emphasized on purpose -- this only works when the app and
+                geocoding-server share a filesystem (a same-host dev/test
+                setup), which is never true for a real hosted customer, so it
+                shouldn't compete visually with Choose File above. */}
+            <p className="text-muted" style={{ fontSize: 11, margin: 'var(--space-3) 0 4px' }}>
+              Advanced: if this app and geocoding-server share a filesystem, point at a
+              server-side path instead --
+            </p>
+            <input
+              className="input"
+              style={{ fontSize: 12 }}
+              placeholder="C:\software\database\addresses.txt"
+              value={pickedFile ? pickedFile.name : filePath}
+              onChange={(e) => setFilePath(e.target.value)}
+              disabled={Boolean(pickedFile)}
+            />
+
             <a
               href="/batch-address-template.txt"
               download

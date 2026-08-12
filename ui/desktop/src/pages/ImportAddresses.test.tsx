@@ -239,7 +239,8 @@ describe('ImportAddresses component (upload -> map -> preview -> filter)', () =>
     // Batch.tsx renders the picked file's name in place of the file-path input.
     const filePathInput = await screen.findByPlaceholderText('C:\\software\\database\\addresses.txt');
     expect(filePathInput).toHaveValue('imported-addresses.txt');
-    expect(screen.getByRole('button', { name: 'Clear' })).toBeInTheDocument(); // only shown when pickedFile is set
+    // only shown when pickedFile is set
+    expect(screen.getByRole('button', { name: 'Clear "imported-addresses.txt"' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: '← Back to Import Addresses' })).toBeInTheDocument();
   });
 
