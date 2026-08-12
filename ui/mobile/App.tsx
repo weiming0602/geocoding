@@ -6,7 +6,7 @@ import { Lora_400Regular, Lora_600SemiBold, useFonts as useLora } from '@expo-go
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useState } from 'react';
-import { SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import BatchGeocodeScreen from './screens/BatchGeocodeScreen';
 import FindPlacesScreen from './screens/FindPlacesScreen';
@@ -18,7 +18,7 @@ import ProgressScreen from './screens/ProgressScreen';
 import ReverseGeocodeScreen from './screens/ReverseGeocodeScreen';
 import SingleGeocodeScreen from './screens/SingleGeocodeScreen';
 import { INITIAL_IMPORT_STATE, type ImportWizardState } from './components/ImportAddressesForm';
-import { colors } from '../shared/theme';
+import { colors, space } from '../shared/theme';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -88,17 +88,26 @@ export default function App() {
   return (
     <SafeAreaView style={styles.container} onLayout={onLayout}>
       <View style={styles.tabBar}>
-        {TABS.map((tab) => (
-          <TouchableOpacity
-            key={tab.key}
-            style={[styles.tab, screen === tab.key && styles.tabActive]}
-            onPress={() => goToScreen(tab.key)}
-          >
-            <Text style={[styles.tabLabel, screen === tab.key && styles.tabLabelActive]}>
-              {tab.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.tabBarContent}
+        >
+          {TABS.map((tab) => (
+            <TouchableOpacity
+              key={tab.key}
+              style={[styles.tab, screen === tab.key && styles.tabActive]}
+              onPress={() => goToScreen(tab.key)}
+            >
+              <Text
+                style={[styles.tabLabel, screen === tab.key && styles.tabLabelActive]}
+                numberOfLines={1}
+              >
+                {tab.label}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
       </View>
 
       {screen === 'single' && <SingleGeocodeScreen />}
@@ -135,13 +144,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
   },
   tabBar: {
-    flexDirection: 'row',
     borderBottomWidth: 1,
     borderBottomColor: colors.divider,
   },
+  // Intrinsic-width tabs in a horizontally scrolling row -- flex:1 across
+  // all 9 tabs is what made longer labels ("Reverse Geocode", "Import
+  // Addresses") overlap their neighbors at real phone/tablet widths,
+  // since nothing clipped or wrapped the overflow.
+  tabBarContent: {
+    flexDirection: 'row',
+  },
   tab: {
-    flex: 1,
     paddingVertical: 14,
+    paddingHorizontal: space[3],
     alignItems: 'center',
     borderBottomWidth: 2,
     borderBottomColor: 'transparent',
