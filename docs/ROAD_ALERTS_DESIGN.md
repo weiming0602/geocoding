@@ -100,16 +100,49 @@ closure is "need to know" or "serious," same as a large traffic incident.
 
 | Tier | Delivery | Examples |
 | --- | --- | --- |
-| **Serious** | Interruptive (sound/vibration, possible reroute suggestion) | Major accident, road closed ahead, severe weather warning, state of emergency |
-| **Something need to know** | Normal notification, no urgency | Meaningful traffic delay, construction, weather advisory |
-| **Not serious, proximity-triggered** | Light heads-up only once near, no alarm | Speed camera, toll, school zone, sharp curve, low bridge |
-| **Fun to know** | Never interrupts, shown only if the user looks | Historical marker, local landmark — overlaps with existing Find Places data |
+| **Serious** | Spoken automatically + sound/vibration, possible reroute suggestion | Major accident, road closed ahead, severe weather warning, state of emergency |
+| **Something need to know** | Spoken automatically, no alarm | Meaningful traffic delay, construction, weather advisory |
+| **Not serious, proximity-triggered** | Spoken, brief, lower urgency in tone | Speed camera, toll, school zone, sharp curve, low bridge |
+| **Fun to know** | Never interrupts, never spoken automatically — visual only, or spoken on request | Historical marker, local landmark — overlaps with existing Find Places data |
 
 Default bias for uncertain cases (e.g. a driver *might* turn off before
 reaching a hazard): **alert anyway.** A missed real hazard costs more
 than an unnecessary one. Watch for alert fatigue once there's real usage
 data to tune against — not a reason to change the default now, just
 something to monitor once this ships.
+
+## Delivery channels
+
+**Voice is the primary channel, not visual text — on purpose.** The
+whole point of this feature is surfacing things a driver can't safely
+stop and read; a text notification just relocates that same problem
+onto a phone screen. `expo-speech` (on-device text-to-speech, works
+offline, no new backend dependency) speaks serious/need-to-know/
+proximity tiers automatically; screen content is a secondary, glanceable
+backup, not the primary delivery method. "Fun to know" stays visual-only
+by default, consistent with never interrupting — spoken only if the
+user actively asks for it.
+
+Three things to settle before this is real, not just conceptual:
+
+- **Queueing.** Two alerts landing close together need to speak in
+  order, not overlap.
+- **Ducking vs. interrupting.** If music or a podcast is already
+  playing, does the alert lower that audio and speak over it (more
+  polished, more work) or just interrupt outright (simpler)?
+- **A mute/visual-only toggle.** Voice should be the default, not the
+  only option — some users will still want it silent.
+
+**Email is a secondary, non-real-time channel, opt-in.** It doesn't fit
+serious/need-to-know alerts at all — by the time an email is read, the
+driver has already passed the point, so it would never replace voice
+for anything urgent. Where it does fit: an opt-in trip digest (what
+fired during a drive, useful as a record or for reviewing "fun to know"
+items at leisure rather than while driving), or a fallback log of what
+was surfaced. This reuses infrastructure that already exists rather
+than needing anything new — `geocoding-server/src/emailDelivery.js`'s
+AWS SES setup (currently used for the service-key purchase email) is
+the same mechanism this would ride on.
 
 ## Real-time matching
 
@@ -163,7 +196,12 @@ not a schema-level constraint.
 `id`, `type` (`traffic_hazard` / `weather` / `public_event` / ...),
 `severity` (`serious` / `need_to_know` / `proximity` / `fun_to_know`),
 `geometry`, `direction` (if relevant), `valid_from`, `valid_until`,
-`source`, `description`.
+`source`, `description` (kept short enough to speak aloud directly).
+
+Delivery preferences live on the existing account, not a new table —
+`geocoding_users.users` (see [DATA_MODEL.md](DATA_MODEL.md)) already
+carries `email`; this would just add per-user voice/mute and
+email-digest opt-in flags alongside it.
 
 ## Open questions (not yet resolved)
 
@@ -180,6 +218,11 @@ not a schema-level constraint.
   beyond "it's free, public, and exists."
 - The on-device route-learning/map-matching algorithm itself — described
   conceptually here, not designed in implementation detail.
+- Voice queueing and ducking-vs-interrupting behavior when alerts land
+  close together or other audio is already playing.
+- Email digest cadence and format (per trip, daily, weekly) — the
+  channel and its reuse of existing SES infrastructure are settled, the
+  actual schedule isn't.
 
 **Deliberately deferred, not urgent:** a concrete Maine/NH source for
 municipal event permits. The pattern (cities publishing permits as open
