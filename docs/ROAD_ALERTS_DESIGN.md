@@ -1,0 +1,188 @@
+# Road alerts — mobile-only design (proposal)
+
+> Unlike the other docs in this folder, this describes something **not yet
+> built** — a concept worked out in conversation, written up here so it
+> doesn't just live in chat history. Scoped to `ui/mobile` only: this is a
+> driving-context feature, relevant only while the app is being used on the
+> road, so it has no desktop counterpart in `ui/desktop`.
+
+## One paragraph
+
+While driving, the app quietly learns which streets a user actually
+travels on a regular basis — not their full trip history, and never their
+raw GPS trace — by keeping a small, weighted, per-user subset of the
+existing `streets` segments already in the geocoding database. In real
+time, it checks that routine set against live hazard, weather, and public
+event data, and gives the driver a heads-up before they reach something
+relevant — a couple of minutes ahead, direction-aware, so it's telling
+them about what's actually in front of them, not behind them or on a
+parallel road.
+
+## Why this fits here, not as a separate product
+
+The whole mechanism leans on infrastructure this project already has:
+the `streets` table's segment geometry and `tlid` identifiers (see
+[DATA_MODEL.md](DATA_MODEL.md)) become the vocabulary a personal route is
+described in, and the "fun to know" content type overlaps directly with
+the existing Find Places feature (nearby points of interest). Nothing
+about hazard/weather/event awareness needs a new street network — it
+needs a new *layer* on top of the one that's already there.
+
+## Privacy model
+
+The core design decision: **store which streets a user drives, not where
+they've been or when.**
+
+- No raw GPS trace is retained. Positions are map-matched to `streets`
+  segments (by `tlid`) as they're observed, and only the *aggregate*
+  (how often a segment is used) is kept — not the individual trip that
+  produced it.
+- A segment's weight is **recency-weighted, not a flat lifetime count** —
+  old driving patterns fade out (e.g. a former commute) rather than
+  staying "routine" forever just because it once was.
+- Only segments whose weight crosses a threshold are persisted at all;
+  everything else (a one-off trip, a detour, anywhere driven once) is
+  discarded outright, not just down-weighted.
+- **Recompute cadence: roughly every 3–4 months, not continuously.**
+  Individual trips don't need to trigger a live weight update — the
+  routine subgraph is batch-recomputed from recent trip data on that
+  cycle instead. This matches what the model is actually for (slow-
+  moving life patterns, not day-to-day variation), and keeps the update
+  itself cheap and infrequent rather than something running per-trip.
+- **Why segment-level storage isn't full anonymization on its own**,
+  worth remembering when this gets built: coarsening a trace to
+  street-level precision removes exact position-along-the-street, but a
+  person's *routine sequence* of segments (home segment → ... → work
+  segment) is still close to as re-identifying as raw coordinates would
+  be — the same reason a handful of GPS points is enough to fingerprint
+  most people in mobility research. The real privacy protection has to
+  come from **keeping the personal routine model itself access-controlled
+  — on-device by default** — not from the segment representation alone.
+  Segment-level storage is good data minimization on top of that, not a
+  substitute for it.
+- Outbound network calls for hazard data are **anonymous by construction**
+  — "what's in this bounding box right now" reveals nothing about a
+  specific user, since it's the same query shape regardless of who's
+  asking.
+
+### User-facing setting: how much routine is remembered
+
+Exposed as a single choice, not a raw "weight threshold" (users don't
+need to know the underlying mechanic):
+
+| Setting | Behavior |
+| --- | --- |
+| **Minimal** | Only streets driven almost every time are remembered. Fewest streets stored, strongest privacy — may miss alerts on routes driven less often. |
+| **Balanced** *(default)* | Streets driven regularly, not just constantly. |
+| **Most complete** | Includes streets driven only occasionally. Most complete alert coverage, at the cost of remembering more of the user's driving habits. |
+
+In-app copy already drafted for this (see the "How road alerts work"
+explainer + table from the design conversation) — reuse verbatim when
+this gets built rather than rewriting.
+
+## Content model: type × severity
+
+Two independent dimensions. **Type** is the data source; **severity** is
+how urgently it's delivered. Any type can appear at any severity — a
+public event is usually "fun to know," but a large one causing a road
+closure is "need to know" or "serious," same as a large traffic incident.
+
+### Types
+
+| Type | Source | Real-time or static? |
+| --- | --- | --- |
+| **Traffic hazard** | New England 511 (see below) | Real-time |
+| **Weather** | NOAA/National Weather Service public alerts API | Real-time |
+| **Public event** | Municipal event/assembly permits (parades, rallies, demonstrations) | Semi-static (dated, but not continuously updated like traffic) |
+| *(static road features)* | Not yet sourced — see Open questions | Static |
+
+### Severity tiers
+
+| Tier | Delivery | Examples |
+| --- | --- | --- |
+| **Serious** | Interruptive (sound/vibration, possible reroute suggestion) | Major accident, road closed ahead, severe weather warning, state of emergency |
+| **Something need to know** | Normal notification, no urgency | Meaningful traffic delay, construction, weather advisory |
+| **Not serious, proximity-triggered** | Light heads-up only once near, no alarm | Speed camera, toll, school zone, sharp curve, low bridge |
+| **Fun to know** | Never interrupts, shown only if the user looks | Historical marker, local landmark — overlaps with existing Find Places data |
+
+Default bias for uncertain cases (e.g. a driver *might* turn off before
+reaching a hazard): **alert anyway.** A missed real hazard costs more
+than an unnecessary one. Watch for alert fatigue once there's real usage
+data to tune against — not a reason to change the default now, just
+something to monitor once this ships.
+
+## Real-time matching
+
+1. Read live position **and heading** (`expo-location` already provides
+   both — same field noted when this conversation started, re: detecting
+   coordinates while driving).
+2. From the current position, do a short graph search **within the
+   user's stored routine segments only**, in the direction of travel —
+   "which of my usual streets are reachable in the next few minutes
+   going this way."
+3. Cross-reference that reachable set against live hazard/weather/event
+   data for anything on or near those segments.
+4. Alert according to the matched item's severity tier.
+
+This is why direction matters: `streets` segments are undirected in the
+data itself, so without heading, a hazard "on" a segment can't be told
+apart from being ahead of or behind the driver.
+
+## New England 511 — confirmed access
+
+Checked directly against the source, not assumed:
+
+- Portal: `nec-por.ne-compass.com/DeveloperPortal`. Covers Maine, New
+  Hampshire, and Vermont: incidents, traffic conditions, travel times,
+  lane closures, DMS messages, CCTV status, and Waze-sourced incident
+  data (via MaineDOT/NHDOT/VTrans's Waze for Cities partnership).
+- **No registration, login, or API key required** — data links sit
+  directly on the portal behind a click-through terms agreement.
+- **Commercial use is explicitly permitted** ("profitable projects are
+  acceptable," per their own stated principles).
+- Obligations: clearly attribute the data source, never claim ownership
+  of the data, never imply affiliation with the state agencies. Provided
+  as-is with no accuracy/uptime warranty — matters for anything used in a
+  safety-relevant alert. Expect the data/format to change without notice
+  (their own stated expectation, not a hypothetical).
+- The Waze-sourced portion specifically may carry its own separate
+  restrictions under Waze's Connected Citizens Program — worth a closer
+  read of the terms before depending on it, versus the DOT-native
+  incident data.
+
+## Data model sketch
+
+Informal, matching the existing convention of no DB-enforced foreign
+keys (see [DATA_MODEL.md](DATA_MODEL.md)) — matched by shared identifier,
+not a schema-level constraint.
+
+**`user_routine_segments`** — the per-user weighted subgraph.
+`user_id`, `tlid` (references `streets.tlid`), `weight`, `last_traveled_at`.
+
+**`road_signals`** — the hazard/weather/event content itself.
+`id`, `type` (`traffic_hazard` / `weather` / `public_event` / ...),
+`severity` (`serious` / `need_to_know` / `proximity` / `fun_to_know`),
+`geometry`, `direction` (if relevant), `valid_from`, `valid_until`,
+`source`, `description`.
+
+## Open questions (not yet resolved)
+
+- Exact weight *threshold* for "high enough to keep" — the recompute
+  **cadence** is settled (~every 3–4 months, see Privacy model above),
+  but the cutoff value itself (a minimum count, a percentile, a
+  fixed-window rule) is still undecided.
+- Where "static road features" (speed cameras, school zones, low
+  bridges) actually come from — a new curated dataset, OpenStreetMap/
+  Overpass tags (already integrated for Find Places), or something else.
+- New England 511's exact response format/schema per data type — access
+  is confirmed open, but the JSON/XML shape hasn't been reviewed yet.
+- NOAA weather alerts API integration specifics — not yet looked into
+  beyond "it's free, public, and exists."
+- The on-device route-learning/map-matching algorithm itself — described
+  conceptually here, not designed in implementation detail.
+
+**Deliberately deferred, not urgent:** a concrete Maine/NH source for
+municipal event permits. The pattern (cities publishing permits as open
+data) is real elsewhere, but no specific local source has been checked
+for this region yet — fine to leave for later, doesn't block anything
+else in this design.
