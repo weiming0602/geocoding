@@ -74,6 +74,14 @@ describe('guessRole', () => {
     expect(guessRole('Notes')).toBe('ignore');
   });
 
+  it('recognizes combined street-number-and-name header synonyms', () => {
+    expect(guessRole('Property Address')).toBe('streetFull');
+    expect(guessRole('Site Address')).toBe('streetFull');
+    expect(guessRole('Situs Address')).toBe('streetFull');
+    expect(guessRole('Mailing Address')).toBe('streetFull');
+    expect(guessRole('Addr')).toBe('streetFull');
+  });
+
   it('recognizes common ID/primary-key header spellings', () => {
     expect(guessRole('ID')).toBe('id');
     expect(guessRole('Record ID')).toBe('id');

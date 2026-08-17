@@ -27,7 +27,7 @@ export function guessRole(header: string): ColumnRole {
   const h = header.toLowerCase().trim();
   if (/^(id|record.?id|customer.?id|primary.?key|uu?id|ref(erence)?(.?(id|no\.?|num(ber)?))?)$/.test(h)) return 'id';
   if (/house\s*(no\.?|number)\b|street\s*(no\.?|number)\b|addr.*num|^(no|num|number)$/.test(h)) return 'streetNumber';
-  if (/full.*addr|^address$|^address ?1$|street.*addr/.test(h)) return 'streetFull';
+  if (/full.*addr|^address$|^address ?1$|street.*addr|property.*addr|site.*addr|situs.*addr|mailing.*addr|^addr\.?$/.test(h)) return 'streetFull';
   if (/street.*name|^street$|^road$/.test(h)) return 'streetName';
   if (/city|town/.test(h)) return 'city';
   if (/state|province/.test(h)) return 'state';
