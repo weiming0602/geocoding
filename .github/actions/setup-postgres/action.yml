@@ -16,14 +16,27 @@ description: >
 runs:
   using: composite
   steps:
+    # DEBIAN_FRONTEND/NEEDRESTART_MODE avoid a real failure mode, not a
+    # hypothetical one: needrestart (present by default on recent Ubuntu)
+    # can prompt interactively about restarting services when a package
+    # like postgresql installs one, and on a runner with no TTY that
+    # prompt just hangs forever instead of failing -- silently burning
+    # the job's whole time budget. `sudo -n` on every sudo call below is
+    # the same fail-fast instinct for a different prompt: GitHub-hosted
+    # runners' default user has passwordless sudo, so this should never
+    # actually block, but if that ever stopped being true, -n turns a
+    # hang into an immediate, legible failure instead.
     - name: Install Postgres and PostGIS
       shell: bash
+      env:
+        DEBIAN_FRONTEND: noninteractive
+        NEEDRESTART_MODE: a
       run: |
         set -euo pipefail
-        sudo apt-get update
-        sudo apt-get install -y postgresql postgresql-contrib
+        sudo -n apt-get update
+        sudo -n apt-get install -y postgresql postgresql-contrib
         PGV=$(pg_lsclusters | awk 'NR==2 {print $1}')
-        sudo apt-get install -y "postgresql-${PGV}-postgis-3"
+        sudo -n apt-get install -y "postgresql-${PGV}-postgis-3"
         echo "PGV=$PGV" >> "$GITHUB_ENV"
 
     # Installing the postgresql package doesn't start the cluster on this
@@ -37,20 +50,20 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        sudo pg_ctlcluster "$PGV" main start
+        sudo -n pg_ctlcluster "$PGV" main start
         for i in $(seq 1 30); do
           [ -S /var/run/postgresql/.s.PGSQL.5432 ] && exit 0
           sleep 1
         done
         echo "Postgres did not come up within 30s" >&2
-        sudo pg_lsclusters
+        sudo -n pg_lsclusters
         exit 1
 
     - name: Switch local auth to trust and create the my_ai superuser role
       shell: bash
       run: |
         set -euo pipefail
-        HBA_FILE=$(sudo -u postgres psql -tAc "SHOW hba_file;")
-        sudo sed -i -E 's/(peer|md5|scram-sha-256)$/trust/' "$HBA_FILE"
-        sudo pg_ctlcluster "$PGV" main restart
-        sudo -u postgres createuser -s my_ai
+        HBA_FILE=$(sudo -n -u postgres psql -tAc "SHOW hba_file;")
+        sudo -n sed -i -E 's/(peer|md5|scram-sha-256)$/trust/' "$HBA_FILE"
+        sudo -n pg_ctlcluster "$PGV" main restart
+        sudo -n -u postgres createuser -s my_ai
