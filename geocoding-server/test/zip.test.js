@@ -24,7 +24,7 @@ test('buildZip round-trips entries (self-parsed)', () => {
   assert.equal(entries[1].content, 'address,error\r\n');
 });
 
-test('buildZip produces an archive Windows can actually extract', () => {
+test('buildZip produces an archive Windows can actually extract', { skip: process.platform !== 'win32' && 'requires powershell.exe (Windows only)' }, () => {
   const zipBuffer = buildZip([
     { name: 'results.csv', content: 'address,latitude\r\n1 Main St,43.5\r\n' },
     { name: 'errors.csv', content: 'address,error\r\n"a, b",oops\r\n' },

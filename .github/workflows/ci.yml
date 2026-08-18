@@ -1,0 +1,61 @@
+name: CI
+
+# Runs on every PR into master (required by branch protection -- see
+# AGENTS.md's "Branching, pull requests, and code review") and on
+# master itself, so a check exists to require before that protection
+# rule can even be configured. ui/mobile has no test files yet (see
+# AGENTS.md's "Known gaps"), so there's no job for it.
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+jobs:
+  python-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-postgres
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -e ".[dev]"
+      - run: pytest
+
+  server-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup-postgres
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+        working-directory: geocoding-server
+      - run: node --test
+        working-directory: geocoding-server
+
+  shared-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+        working-directory: ui/shared
+      - run: npm test
+        working-directory: ui/shared
+
+  desktop-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci
+        working-directory: ui/desktop
+      - run: npm test
+        working-directory: ui/desktop

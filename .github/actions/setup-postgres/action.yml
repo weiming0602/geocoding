@@ -1,0 +1,35 @@
+name: Set up Postgres + PostGIS for the my_ai role
+description: >
+  Installs Postgres and PostGIS on the runner and creates a superuser
+  role named my_ai with no password, matching every DSN hardcoded
+  throughout this repo's test suites (test/helpers.js's ADMIN_DSN,
+  tests/conftest.py's ADMIN_DSN) -- both assume a local Unix-socket
+  connection as a role called exactly "my_ai", peer-authenticated on the
+  dev machine this repo was built on. Peer auth checks the connecting
+  OS user's name against the requested role name, which wouldn't match
+  on a GitHub-hosted runner (whose default user is "runner", not
+  "my_ai") -- rather than creating a matching Linux user or an ident
+  map, this just switches local auth to "trust" for every role. That's
+  fine here because the runner is a fresh, single-job, throwaway VM with
+  no other tenants -- the same shortcut would be a real problem on a
+  shared or long-lived box.
+runs:
+  using: composite
+  steps:
+    - name: Install Postgres and PostGIS
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo apt-get update
+        sudo apt-get install -y postgresql postgresql-contrib
+        PGV=$(pg_lsclusters | awk 'NR==2 {print $1}')
+        sudo apt-get install -y "postgresql-${PGV}-postgis-3"
+
+    - name: Switch local auth to trust and create the my_ai superuser role
+      shell: bash
+      run: |
+        set -euo pipefail
+        HBA_FILE=$(sudo -u postgres psql -tAc "SHOW hba_file;")
+        sudo sed -i -E 's/(peer|md5|scram-sha-256)$/trust/' "$HBA_FILE"
+        sudo systemctl restart postgresql
+        sudo -u postgres createuser -s my_ai
