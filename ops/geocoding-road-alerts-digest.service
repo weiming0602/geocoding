@@ -1,0 +1,28 @@
+# systemd service for geocoding-server/scripts/road-alerts-digest.js --
+# emails each opted-in Road Alerts account a digest of alerts they
+# explicitly saved (voice "save"/"keep"/"email" command) since the last
+# digest, then clears what was sent. Triggered by
+# geocoding-road-alerts-digest.timer, not meant to be started directly
+# (though `systemctl start` works fine for a manual test run).
+#
+# Install (on the Lightsail instance, adjust paths/DSN for that box):
+#   sudo cp ops/geocoding-road-alerts-digest.service ops/geocoding-road-alerts-digest.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now geocoding-road-alerts-digest.timer
+#
+# Check status / logs:
+#   systemctl status geocoding-road-alerts-digest.timer
+#   journalctl -u geocoding-road-alerts-digest.service
+
+[Unit]
+Description=Email each opted-in Road Alerts account its daily digest
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/my_ai/projects/geocoding/geocoding-server
+# USERS_DSN should point at the Lightsail Database's network endpoint in
+# production, not the local Unix socket used in dev -- see CLAUDE.md's
+# "Environment / data layout".
+Environment=USERS_DSN=postgresql://my_ai@%2Fvar%2Frun%2Fpostgresql/geocoding_users
+# Adjust this path to wherever `which node` resolves on the actual box.
+ExecStart=/home/my_ai/.local/node/bin/node scripts/road-alerts-digest.js

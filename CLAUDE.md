@@ -51,6 +51,11 @@ read-write).
 - Feedback cleanup (deletes comments older than N days, default 90):
   `cd geocoding-server && node scripts/cleanup-feedback.js [days]` -- see
   `ops/` for the systemd timer/service pair and a crontab alternative.
+- Road Alerts digest (emails each opted-in account the alerts they
+  explicitly saved -- voice "save"/"keep"/"email" command -- since the
+  last digest, then clears what was sent):
+  `cd geocoding-server && node scripts/road-alerts-digest.js` -- see
+  `ops/` for the systemd timer/service pair and a crontab alternative.
 - Mobile app: `cd ui/mobile && npm start`
 - Desktop app: `cd ui/desktop && npm run dev`
 - Desktop app tests: `cd ui/desktop && npm test` (vitest; `App.test.tsx` and

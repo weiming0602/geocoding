@@ -134,3 +134,96 @@ export type PlaceSearchResponse = {
   // to reflect where the search actually landed.
   center?: { latitude: number; longitude: number };
 };
+
+// GET /road-signals -- live traffic-hazard incidents near a point,
+// sourced from New England 511 (Maine/NH/Vermont, see roadSignals.js and
+// docs/ROAD_ALERTS_DESIGN.md). This is slice 1 of the Road Alerts design:
+// traffic_hazard only, no weather/public_event types yet.
+export type RoadSignalSeverity = 'serious' | 'need_to_know' | 'proximity' | 'fun_to_know';
+
+export type RoadSignal = {
+  id: string;
+  type: 'traffic_hazard';
+  source: string;
+  network: string;
+  status: string | null;
+  roadway: string | null;
+  direction: string | null;
+  crossStreet: string | null;
+  mileMarker: number | string | null;
+  county: string | null;
+  city: string | null;
+  latitude: number | null;
+  longitude: number | null;
+  affectedLanes: string | null;
+  affectedLanesDetail: string | null;
+  weightRestriction: string | null;
+  description: string | null;
+  verifiedBy: string | null;
+  createdAt: string | null;
+  lastUpdatedAt: string | null;
+  raw511Severity: string | null;
+  raw511EventType: string | null;
+  severity: RoadSignalSeverity;
+  speech: { brief: string; average: string; deep: string };
+};
+
+export type RoadSignalsResponse = {
+  signals: RoadSignal[];
+  networks: string[];
+  partial: boolean;
+  failedNetworks: string[];
+  generatedAt: string;
+};
+
+// POST /road-alerts/register -- idempotent: an already-registered email
+// gets its existing service key back unchanged (alreadyRegistered: true),
+// never a new key. Free for every registered account right now, no trial
+// clock -- see geocoding-server/src/roadAlertsAccounts.js's
+// registerAccount for why.
+export type RoadAlertsRegisterResponse = {
+  email: string;
+  serviceKey: string;
+  registeredAt: string;
+  alreadyRegistered: boolean;
+  serviceKeyEmailed: boolean;
+  digestOptIn: boolean;
+};
+
+// GET/POST /road-alerts/preferences -- the account's opt-in flag for the
+// daily email digest (see geocoding-server/src/roadAlertsDigest.js).
+// Default false; only alerts explicitly saved via the voice
+// "save"/"keep"/"email" command are ever included, never every alert
+// spoken automatically.
+export type RoadAlertsPreferencesResponse = {
+  digestOptIn: boolean;
+};
+
+// /road-alerts/test/weighted-points -- fake, developer-seeded stand-ins
+// for docs/ROAD_ALERTS_DESIGN.md's real (on-device, never server-side)
+// routine subgraph, gated server-side behind ALLOW_TEST_WEIGHTED_POINTS
+// and off by default. See geocoding-server/src/testWeightedPoints.js.
+export type TestWeightedPoint = {
+  id: number;
+  email: string;
+  latitude: number;
+  longitude: number;
+  weight: number;
+  tlid: string | null;
+  label: string | null;
+  created_at: string;
+};
+
+export type TestWeightedPointsResponse = {
+  weightedPoints: TestWeightedPoint[];
+};
+
+// POST /road-alerts/email-alert -- always sends to the authenticated
+// account's own registered email (never an address the client names);
+// `emailed: false, stubbed: true` when the server has no SES configured
+// (see geocoding-server/src/emailDelivery.js's isSesConfigured), same as
+// the service-key emails.
+export type EmailRoadAlertResponse = {
+  emailed: boolean;
+  stubbed: boolean;
+};

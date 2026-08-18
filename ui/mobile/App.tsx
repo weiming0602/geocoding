@@ -16,19 +16,31 @@ import PlanQuotaScreen from './screens/PlanQuotaScreen';
 import PricingScreen from './screens/PricingScreen';
 import ProgressScreen from './screens/ProgressScreen';
 import ReverseGeocodeScreen from './screens/ReverseGeocodeScreen';
+import RoadAlertsScreen from './screens/RoadAlertsScreen';
 import SingleGeocodeScreen from './screens/SingleGeocodeScreen';
 import { INITIAL_IMPORT_STATE, type ImportWizardState } from './components/ImportAddressesForm';
 import { colors, space } from '../shared/theme';
 
 SplashScreen.preventAutoHideAsync();
 
-type Screen = 'single' | 'batch' | 'reverse' | 'findPlaces' | 'import' | 'quota' | 'pricing' | 'progress' | 'help';
+type Screen =
+  | 'single'
+  | 'batch'
+  | 'reverse'
+  | 'findPlaces'
+  | 'roadAlerts'
+  | 'import'
+  | 'quota'
+  | 'pricing'
+  | 'progress'
+  | 'help';
 
 const TABS: { key: Screen; label: string }[] = [
   { key: 'single', label: 'Single Address' },
   { key: 'batch', label: 'Batch Geocode' },
   { key: 'reverse', label: 'Reverse Geocode' },
   { key: 'findPlaces', label: 'Find Places' },
+  { key: 'roadAlerts', label: 'Road Alerts' },
   { key: 'import', label: 'Import Addresses' },
   { key: 'quota', label: 'Plan & Quota' },
   { key: 'pricing', label: 'Pricing' },
@@ -125,6 +137,7 @@ export default function App() {
       )}
       {screen === 'reverse' && <ReverseGeocodeScreen />}
       {screen === 'findPlaces' && <FindPlacesScreen />}
+      {screen === 'roadAlerts' && <RoadAlertsScreen />}
       {screen === 'import' && (
         <ImportAddressesScreen state={importState} onChange={updateImportState} onSendToBatch={handleSendToBatch} />
       )}

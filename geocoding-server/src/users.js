@@ -118,6 +118,7 @@ async function addToTier(db, email, amount) {
 module.exports = {
   openUsersDb,
   currentPeriodStart,
+  generateServiceKey,
   getUser,
   upsertUser,
   verifyServiceKey,

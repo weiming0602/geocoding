@@ -3,7 +3,11 @@
   "version": "1.0.0",
   "private": true,
   "description": "Code shared between ui/mobile and ui/desktop, consumed via relative source imports (no build step) -- see ui/mobile's metro.config.js and ui/desktop's vite.config.ts for how each bundler is told to watch/resolve this folder. Deliberately has no dependency on maplibre-gl or any other package with class-based types: a separate copy here would be a structurally-identical but nominally-distinct type from each app's own copy, which TypeScript treats as incompatible (confirmed the hard way -- see git history). Map integration code stays duplicated per-app for that reason.",
+  "scripts": {
+    "test": "vitest run"
+  },
   "devDependencies": {
-    "typescript": "~6.0.3"
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.10"
   }
 }

@@ -196,4 +196,4 @@ async function reverseGeocode(db, latitude, longitude) {
   };
 }
 
-module.exports = { reverseGeocode, closestPointOnLine, closestPointOnSegment, roundToSideParity };
+module.exports = { reverseGeocode, closestPointOnLine, closestPointOnSegment, roundToSideParity, findCandidates };

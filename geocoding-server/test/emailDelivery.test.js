@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { SESClient } = require('@aws-sdk/client-ses');
-const { sendServiceKeyEmail, sendFeedbackNotification } = require('../src/emailDelivery');
+const { sendServiceKeyEmail, sendRoadAlertEmail, sendFeedbackNotification } = require('../src/emailDelivery');
 
 // sendServiceKeyEmail only calls real SES when all three env vars are
 // set; each test sets/restores them directly (there's no shared
@@ -103,6 +103,61 @@ test(
     assert.equal(result.stubbed, false);
     assert.match(result.error, /SES rejected the request/);
   })
+);
+
+const SAMPLE_SIGNAL = {
+  id: 'ME26-002841',
+  roadway: 'I-95',
+  severity: 'proximity',
+  latitude: 43.168363,
+  longitude: -70.653171,
+  source: 'New England 511',
+  network: 'Maine',
+  speech: { brief: 'Traffic on I-95.', average: 'Slow traffic on I-95 south.', deep: 'Slow traffic on I-95 southbound near York.' },
+};
+
+test(
+  'sendRoadAlertEmail sends the signal to the account\'s own email when configured',
+  withSesConfigured({}, async (t) => {
+    const sendMock = t.mock.method(SESClient.prototype, 'send', async () => ({}));
+
+    const result = await sendRoadAlertEmail('alice@example.com', SAMPLE_SIGNAL);
+
+    assert.deepEqual(result, { delivered: true, stubbed: false });
+    assert.equal(sendMock.mock.callCount(), 1);
+
+    const command = sendMock.mock.calls[0].arguments[0];
+    assert.deepEqual(command.input.Destination.ToAddresses, ['alice@example.com']);
+    assert.match(command.input.Message.Subject.Data, /I-95/);
+    assert.match(command.input.Message.Body.Text.Data, /Slow traffic on I-95 southbound near York/);
+    assert.match(command.input.Message.Body.Text.Data, /43\.168363/);
+  })
+);
+
+test(
+  'sendRoadAlertEmail falls back to the stub when SES env vars are missing',
+  async (t) => {
+    const saved = {
+      AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
+      AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
+      SES_FROM_EMAIL: process.env.SES_FROM_EMAIL,
+    };
+    delete process.env.AWS_ACCESS_KEY_ID;
+    delete process.env.AWS_SECRET_ACCESS_KEY;
+    delete process.env.SES_FROM_EMAIL;
+    const sendMock = t.mock.method(SESClient.prototype, 'send', async () => ({}));
+
+    try {
+      const result = await sendRoadAlertEmail('alice@example.com', SAMPLE_SIGNAL);
+      assert.deepEqual(result, { delivered: false, stubbed: true });
+      assert.equal(sendMock.mock.callCount(), 0);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  }
 );
 
 test(

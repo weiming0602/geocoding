@@ -133,6 +133,26 @@ Three things to settle before this is real, not just conceptual:
 - **A mute/visual-only toggle.** Voice should be the default, not the
   only option — some users will still want it silent.
 
+### User-facing setting: how much detail is spoken
+
+A separate axis from severity — severity decides *whether* something is
+spoken at all; this decides *how much* gets said once it is. Same
+three-level pattern as the privacy setting above, for consistency:
+
+| Setting | Behavior |
+| --- | --- |
+| **Brief** | A short phrase — what and roughly where. "Accident ahead on Main." Fastest to listen to, least detail. |
+| **Average** *(default)* | A sentence or two — adds distance/lane/expected delay where the source data has it. "Accident ahead on Main, right lane blocked, expect delays." |
+| **Deep** | Full available detail, spoken as a short paragraph — everything the source data carries (cause, all affected lanes, alternate-route suggestion, timing). Takes longest to listen to; best suited to "serious" tier where the extra detail is worth the time, less so for brief proximity alerts. |
+
+This applies per-utterance, not per-tier — the same setting governs how
+verbose a "serious" alert and a "fun to know" item are, so a driver who
+wants brevity gets it everywhere, not just on the urgent ones. Content
+length is naturally capped by what the source data actually contains —
+`road_signals.description` (see Data model sketch below) would need to
+carry both a short and a long form, not just one string, for this to
+work without re-summarizing at speak-time.
+
 **Email is a secondary, non-real-time channel, opt-in.** It doesn't fit
 serious/need-to-know alerts at all — by the time an email is read, the
 driver has already passed the point, so it would never replace voice

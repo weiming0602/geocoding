@@ -17,3 +17,8 @@
 # at 2am (before the feedback cleanup and TIGER update run, so a backup
 # always reflects state from before either mutates anything that day).
 0 2 * * * /home/my_ai/projects/geocoding/ops/backup-databases.sh >> /home/my_ai/backups/geocoding/backup.log 2>&1
+
+# Alternative to geocoding-road-alerts-digest.timer -- emails each
+# opted-in Road Alerts account a digest of alerts they explicitly saved
+# since the last digest. Runs daily at 7am.
+0 7 * * * cd /home/my_ai/projects/geocoding/geocoding-server && node scripts/road-alerts-digest.js >> /home/my_ai/projects/geocoding/geocoding-server/road-alerts-digest.log 2>&1

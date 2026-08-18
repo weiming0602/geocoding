@@ -318,6 +318,11 @@ async function withTestServer(callback, { seedStreets = true } = {}) {
   // default" tests pass for the wrong reason.
   const savedAllowTestEmptyServiceKey = process.env.ALLOW_TEST_EMPTY_SERVICE_KEY;
   delete process.env.ALLOW_TEST_EMPTY_SERVICE_KEY;
+  // Same rationale as ALLOW_TEST_EMPTY_SERVICE_KEY just above -- a real
+  // .env's ALLOW_TEST_WEIGHTED_POINTS should never make the "disabled by
+  // default" tests pass for the wrong reason (see testWeightedPoints.js).
+  const savedAllowTestWeightedPoints = process.env.ALLOW_TEST_WEIGHTED_POINTS;
+  delete process.env.ALLOW_TEST_WEIGHTED_POINTS;
 
   try {
     return await callback({ port: httpServer.address().port, db: server.db, usersDb });
@@ -337,6 +342,8 @@ async function withTestServer(callback, { seedStreets = true } = {}) {
     if (savedSesFromEmail !== undefined) process.env.SES_FROM_EMAIL = savedSesFromEmail;
     if (savedAllowTestEmptyServiceKey !== undefined)
       process.env.ALLOW_TEST_EMPTY_SERVICE_KEY = savedAllowTestEmptyServiceKey;
+    if (savedAllowTestWeightedPoints !== undefined)
+      process.env.ALLOW_TEST_WEIGHTED_POINTS = savedAllowTestWeightedPoints;
   }
 }
 

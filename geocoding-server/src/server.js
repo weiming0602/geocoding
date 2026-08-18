@@ -15,10 +15,34 @@ const { resultsToCsv } = require('./resultsCsv');
 const { buildZip } = require('./zip');
 const { reverseGeocode } = require('./reverseGeocode');
 const { searchPlaces } = require('./placesSearch');
+const { getRoadSignals } = require('./roadSignals');
+const { findNextCrossStreet } = require('./nextCrossStreet');
+const {
+  ensureRoadAlertsAccountsTable,
+  registerAccount,
+  checkAccess: checkRoadAlertsAccess,
+  updateDigestOptIn,
+} = require('./roadAlertsAccounts');
+const {
+  ensureRoadAlertsSurfacedLogTable,
+  insertSurfacedAlert,
+} = require('./roadAlertsSurfacedLog');
+const {
+  ensureTestWeightedPointsTable,
+  addTestWeightedPoint,
+  getTestWeightedPoints,
+  clearTestWeightedPoints,
+} = require('./testWeightedPoints');
 const { openUsersDb, getUser, ensureCurrentPeriod, addToTier } = require('./users');
 const { ensureFeedbackTable, submitFeedback } = require('./feedback');
 const { checkQuota, useQuota } = require('./quota');
-const { sendResultsEmail, sendServiceKeyEmail, sendFeedbackNotification } = require('./emailDelivery');
+const {
+  sendResultsEmail,
+  sendServiceKeyEmail,
+  sendRoadAlertsWelcomeEmail,
+  sendRoadAlertEmail,
+  sendFeedbackNotification,
+} = require('./emailDelivery');
 const { findTier } = require('./pricing');
 const { captureOrder } = require('./billing');
 const {
@@ -56,6 +80,18 @@ function allowsTestEmptyServiceKey() {
   return process.env.ALLOW_TEST_EMPTY_SERVICE_KEY === 'true';
 }
 
+// Gates the /road-alerts/test/weighted-points routes (see
+// testWeightedPoints.js) -- off by default, same read-at-request-time
+// spirit as allowsTestEmptyServiceKey() just above, for the same reason
+// (can be flipped without a restart, and a real .env's setting is never
+// picked up mid-test -- see helpers.js's withTestServer). Never enable
+// this anywhere the "weighted points" wording could be mistaken for a
+// real per-user routine store; it isn't one -- see the comment atop
+// testWeightedPoints.js.
+function allowsTestWeightedPoints() {
+  return process.env.ALLOW_TEST_WEIGHTED_POINTS === 'true';
+}
+
 // A client with no server-reachable filesystem path (e.g. a phone) sends the
 // picked file's contents directly instead; fileContent takes priority when
 // both are present since the client only sets one or the other.
@@ -70,6 +106,9 @@ function resolveAddresses(body) {
 const db = createReadOnlyPool(GEOCODING_DSN);
 const usersDbPromise = openUsersDb(USERS_DSN).then(async (pool) => {
   await ensureFeedbackTable(pool);
+  await ensureRoadAlertsAccountsTable(pool);
+  await ensureRoadAlertsSurfacedLogTable(pool);
+  await ensureTestWeightedPointsTable(pool);
   return pool;
 });
 
@@ -425,6 +464,327 @@ app.post('/places/search', async (req, res) => {
   }
 });
 
+// Registers (or re-registers) a Road Alerts account -- email only, no
+// password, matching this app's existing loose account model (see
+// roadAlertsAccounts.js). Idempotent: an already-registered email gets
+// its existing service key back unchanged, re-emailed -- this is
+// deliberately this feature's only "forgot my key" recovery path, since
+// there's no separate recovery flow anywhere in this app. Free for every
+// registered account right now, no trial clock -- see
+// roadAlertsAccounts.js's registerAccount for why.
+app.post('/road-alerts/register', async (req, res) => {
+  const { email } = req.body || {};
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    const usersDb = await usersDbPromise;
+    const account = await registerAccount(usersDb, email);
+
+    const emailResult = await sendRoadAlertsWelcomeEmail(email, {
+      serviceKey: account.service_key,
+      alreadyRegistered: !account.created,
+    });
+
+    res.json({
+      email: account.email,
+      serviceKey: account.service_key,
+      registeredAt: account.registered_at,
+      alreadyRegistered: !account.created,
+      serviceKeyEmailed: emailResult.delivered,
+      digestOptIn: account.digest_opt_in,
+    });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Reads/writes an account's opt-in flag for the daily email digest (see
+// roadAlertsDigest.js) -- separate from /road-alerts/register since the
+// app loads a stored account straight from device storage on launch
+// (see roadAlertsStorage.ts), with no other way to learn the current
+// server-side value after a restart. GET only returns what
+// checkRoadAlertsAccess already fetched; POST updates it. Default is
+// false for every account -- the digest is opt-in, never automatic.
+app.get('/road-alerts/preferences', async (req, res) => {
+  const { email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    res.json({ digestOptIn: account.digest_opt_in });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+app.post('/road-alerts/preferences', async (req, res) => {
+  const { email, serviceKey, digestOptIn } = req.body || {};
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+    if (typeof digestOptIn !== 'boolean') {
+      throw new ValidationError('digestOptIn must be a boolean');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+    const account = await updateDigestOptIn(usersDb, email, digestOptIn);
+
+    res.json({ digestOptIn: account.digest_opt_in });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Live traffic-hazard incidents near a point, sourced from New England 511
+// (Maine/NH/Vermont DOTs -- see roadSignals.js and docs/ROAD_ALERTS_DESIGN.md).
+// GET, not POST, since it's polled repeatedly with no free-text body to
+// send, same convention as GET /quota. Requires a registered Road Alerts
+// account (email+serviceKey, see roadAlertsAccounts.js) -- checked before
+// the upstream 511 fetch, so a bad request never burns an upstream call.
+app.get('/road-signals', async (req, res) => {
+  const { latitude, longitude, radiusMeters, email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const result = await getRoadSignals({
+      latitude: latitude !== undefined ? Number(latitude) : undefined,
+      longitude: longitude !== undefined ? Number(longitude) : undefined,
+      radiusMeters: radiusMeters !== undefined ? Number(radiusMeters) : 8000,
+    });
+
+    res.json(result);
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    if (err instanceof UpstreamError) return res.status(502).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// "Which street should I turn onto to get off this road before reaching
+// the hazard ahead" -- a proximity approximation using the existing
+// `streets` table (see nextCrossStreet.js), not real routing. On-demand
+// only (the mobile client calls this once per alert the driver taps,
+// never auto-polled) -- gated by the same registered-account check as
+// /road-signals since it's part of the same product. The hazard's own
+// latitude/longitude/roadway are passed in by the client from the
+// RoadSignal it already has; this route never re-fetches 511 itself.
+app.get('/road-signals/cross-street', async (req, res) => {
+  const { driverLatitude, driverLongitude, hazardLatitude, hazardLongitude, hazardRoadway, email, serviceKey } =
+    req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const result = await findNextCrossStreet(db, {
+      driverLatitude: driverLatitude !== undefined ? Number(driverLatitude) : undefined,
+      driverLongitude: driverLongitude !== undefined ? Number(driverLongitude) : undefined,
+      hazardLatitude: hazardLatitude !== undefined ? Number(hazardLatitude) : undefined,
+      hazardLongitude: hazardLongitude !== undefined ? Number(hazardLongitude) : undefined,
+      hazardRoadway: typeof hazardRoadway === 'string' ? hazardRoadway : null,
+    });
+
+    res.json(result);
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    if (err instanceof OutOfRangeError) return res.status(422).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Emails one road alert to the account's own registered email, on
+// request -- the "save this" voice command in RoadAlertsForm.tsx, or any
+// other on-demand save. The `signal` is passed in by the client from the
+// RoadSignal it already has (same reasoning as /road-signals/cross-street
+// just above: this route never re-fetches 511 itself). Always sends to
+// the authenticated account's own email (from checkRoadAlertsAccess, tied
+// to the email+serviceKey pair) -- never an arbitrary address the client
+// names, so there's no open-relay/spam surface here beyond a user
+// emailing themselves.
+app.post('/road-alerts/email-alert', async (req, res) => {
+  const { email, serviceKey, signal } = req.body || {};
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+    if (!signal || typeof signal !== 'object' || typeof signal.id !== 'string') {
+      throw new ValidationError('signal must be a road signal object with an id');
+    }
+    if (!signal.speech || typeof signal.speech.deep !== 'string') {
+      throw new ValidationError('signal.speech.deep must be a string');
+    }
+
+    const usersDb = await usersDbPromise;
+    const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const emailResult = await sendRoadAlertEmail(email, signal);
+
+    // Logging into the digest is purely additive to the immediate send
+    // above, and only for accounts opted in -- see roadAlertsSurfacedLog.js.
+    // A logging failure shouldn't fail a request the user is already
+    // mid-voice-command for, so it's caught and reported here rather than
+    // thrown.
+    if (account.digest_opt_in) {
+      try {
+        await insertSurfacedAlert(usersDb, email, signal);
+      } catch (logErr) {
+        console.error('failed to log surfaced alert for digest:', logErr);
+      }
+    }
+
+    res.json({ emailed: emailResult.delivered, stubbed: Boolean(emailResult.stubbed) });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Test-only fake weighted points (see testWeightedPoints.js) -- off by
+// default (allowsTestWeightedPoints(), checked first so a disabled
+// deployment never even touches the database for these). Gated by the
+// same registered-account check as /road-signals otherwise. Lets a real
+// device's live GPS and real 511 data be run through
+// roadAlertsMatching.js's "hazard between the user and a routine point"
+// logic without needing the on-device trip-learning system that would
+// eventually produce real weighted points -- never a substitute for that
+// real, on-device-only data.
+app.post('/road-alerts/test/weighted-points', async (req, res) => {
+  if (!allowsTestWeightedPoints()) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  const { email, serviceKey, latitude, longitude, weight, tlid, label } = req.body || {};
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const point = await addTestWeightedPoint(usersDb, email, {
+      latitude: typeof latitude === 'number' ? latitude : Number(latitude),
+      longitude: typeof longitude === 'number' ? longitude : Number(longitude),
+      weight: typeof weight === 'number' ? weight : Number(weight),
+      tlid: typeof tlid === 'string' ? tlid : null,
+      label: typeof label === 'string' ? label : null,
+    });
+
+    res.json(point);
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+app.get('/road-alerts/test/weighted-points', async (req, res) => {
+  if (!allowsTestWeightedPoints()) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  const { email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const weightedPoints = await getTestWeightedPoints(usersDb, email);
+    res.json({ weightedPoints });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+app.delete('/road-alerts/test/weighted-points', async (req, res) => {
+  if (!allowsTestWeightedPoints()) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  const { email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const deleted = await clearTestWeightedPoints(usersDb, email);
+    res.json({ deleted });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`geocoding-server listening on http://localhost:${PORT}`);
@@ -434,6 +794,13 @@ if (require.main === module) {
         '⚠ ALLOW_TEST_EMPTY_SERVICE_KEY is set -- batch geocoding accepts an empty ' +
           'service key for ANY known email. Never enable this where real customers’ ' +
           'quota is at stake.'
+      );
+    }
+    if (allowsTestWeightedPoints()) {
+      console.warn(
+        '⚠ ALLOW_TEST_WEIGHTED_POINTS is set -- /road-alerts/test/weighted-points is ' +
+          'live. These are fake, developer-seeded routine points for testing only, ' +
+          'never a real per-user routine store.'
       );
     }
   });

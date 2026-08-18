@@ -1,0 +1,16 @@
+# Fires geocoding-road-alerts-digest.service daily -- alerts a user
+# saves while driving should reach their inbox the same day, not pile up
+# for a week.
+#
+# Persistent=true means a run missed while the box was off gets caught
+# up at next boot instead of silently skipped.
+
+[Unit]
+Description=Run geocoding-road-alerts-digest.service daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

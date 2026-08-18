@@ -69,6 +69,106 @@ async function sendServiceKeyEmail(email, { serviceKey, tier, purchased, priceCe
 }
 
 /**
+ * Emails a Road Alerts service key -- either just-issued or re-sent
+ * (someone registering again with an email that already has an account,
+ * see roadAlertsAccounts.js's registerAccount -- this is this feature's
+ * only "forgot my key" recovery path). Same SES-vs-stub pattern as
+ * sendServiceKeyEmail, but its own function rather than a reuse of that
+ * one: the copy here is Road-Alerts-specific, not purchase/tier-specific.
+ * Road Alerts is free for every registered account right now (no trial
+ * clock, no charge) -- watching real usage before deciding on billing,
+ * not building trial-abuse defenses against a monetization scheme that
+ * doesn't exist yet. See docs/ROAD_ALERTS_DESIGN.md.
+ */
+async function sendRoadAlertsWelcomeEmail(email, { serviceKey, alreadyRegistered }) {
+  const text =
+    (alreadyRegistered ? `Welcome back to Road Alerts.\n\n` : `Welcome to Road Alerts.\n\n`) +
+    `Service key: ${serviceKey}\n\n` +
+    `Present this key together with your account email (${email}) every time the app checks ` +
+    `for road alerts -- there's no separate recovery flow if you lose it, so keep this email ` +
+    `(registering again with the same email re-sends this same key).\n\n` +
+    `Road Alerts is free while we're testing it -- no payment required, and we'll email you ` +
+    `before that ever changes.\n`;
+
+  if (!isSesConfigured()) {
+    console.log(`[emailDelivery stub] would email Road Alerts service key to ${email}`, {
+      alreadyRegistered,
+    });
+    return { delivered: false, stubbed: true };
+  }
+
+  return sendPlainTextEmail({ to: email, subject: 'Your Road Alerts service key', text });
+}
+
+/**
+ * Emails one road alert (a RoadSignal the client already has -- see
+ * roadSignals.js) to the account's own registered email, on request --
+ * the "save this / email it" voice command in RoadAlertsForm.tsx, or any
+ * other on-demand save. Same SES-vs-stub pattern as the sends above.
+ * Uses the signal's own `speech.deep` text (already the fullest human
+ * -readable account of it, see roadSignals.js's buildSpeech) rather than
+ * re-deriving a summary here.
+ */
+async function sendRoadAlertEmail(email, signal) {
+  const text =
+    `${signal.speech.deep}\n\n` +
+    `Road: ${signal.roadway ?? 'unknown'}\n` +
+    `Severity: ${signal.severity}\n` +
+    (typeof signal.latitude === 'number' && typeof signal.longitude === 'number'
+      ? `Location: ${signal.latitude}, ${signal.longitude}\n`
+      : '') +
+    `Source: ${signal.source} (${signal.network})\n`;
+
+  if (!isSesConfigured()) {
+    console.log(`[emailDelivery stub] would email road alert ${signal.id} to ${email}`);
+    return { delivered: false, stubbed: true };
+  }
+
+  return sendPlainTextEmail({
+    to: email,
+    subject: `Road alert saved: ${signal.roadway ?? 'traffic hazard'}`,
+    text,
+  });
+}
+
+/**
+ * Emails an account's daily Road Alerts digest -- everything they saved
+ * via the voice "save"/"keep"/"email" command since the last digest
+ * (see roadAlertsSurfacedLog.js), for an opted-in account to review off
+ * the road. `alerts` is a non-empty array of road_alerts_surfaced_log
+ * rows; the caller (roadAlertsDigest.js) never calls this for an
+ * account with nothing pending. Same SES-vs-stub pattern as the sends
+ * above.
+ */
+async function sendRoadAlertsDigestEmail(email, alerts) {
+  const text =
+    `Alerts you saved in the last day:\n\n` +
+    alerts
+      .map((alert) => {
+        const when = new Date(alert.surfaced_at).toLocaleString('en-US', { timeZone: 'UTC' });
+        return (
+          `- ${alert.roadway ?? 'Unknown road'} (${alert.severity})\n` +
+          (alert.description ? `  ${alert.description}\n` : '') +
+          `  Saved: ${when} UTC\n`
+        );
+      })
+      .join('\n') +
+    `\nThis digest only includes alerts you explicitly saved while driving -- not everything ` +
+    `spoken aloud along the way.\n`;
+
+  if (!isSesConfigured()) {
+    console.log(`[emailDelivery stub] would email a Road Alerts digest (${alerts.length} alert(s)) to ${email}`);
+    return { delivered: false, stubbed: true };
+  }
+
+  return sendPlainTextEmail({
+    to: email,
+    subject: `Your Road Alerts digest -- ${alerts.length} alert${alerts.length === 1 ? '' : 's'}`,
+    text,
+  });
+}
+
+/**
  * Notifies the site owner (FEEDBACK_NOTIFY_EMAIL) that a comment/question
  * came in, via AWS SES -- falls back to a stub when SES isn't configured
  * or FEEDBACK_NOTIFY_EMAIL isn't set. The feedback row is already saved
@@ -95,4 +195,11 @@ async function sendFeedbackNotification({ name, email, message }) {
   });
 }
 
-module.exports = { sendResultsEmail, sendServiceKeyEmail, sendFeedbackNotification };
+module.exports = {
+  sendResultsEmail,
+  sendServiceKeyEmail,
+  sendRoadAlertsWelcomeEmail,
+  sendRoadAlertEmail,
+  sendRoadAlertsDigestEmail,
+  sendFeedbackNotification,
+};
