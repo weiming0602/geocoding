@@ -24,6 +24,27 @@ runs:
         sudo apt-get install -y postgresql postgresql-contrib
         PGV=$(pg_lsclusters | awk 'NR==2 {print $1}')
         sudo apt-get install -y "postgresql-${PGV}-postgis-3"
+        echo "PGV=$PGV" >> "$GITHUB_ENV"
+
+    # Installing the postgresql package doesn't start the cluster on this
+    # runner image (unlike a normal Debian/Ubuntu box, where the postinst
+    # script starts it automatically) -- pg_ctlcluster is the same tool
+    # postgresql-common's own postinst would have used, so this is just
+    # doing explicitly what didn't happen implicitly. Polls for the socket
+    # rather than trusting pg_ctlcluster's own exit code, since a "started"
+    # result doesn't guarantee the socket is accepting connections yet.
+    - name: Start Postgres
+      shell: bash
+      run: |
+        set -euo pipefail
+        sudo pg_ctlcluster "$PGV" main start
+        for i in $(seq 1 30); do
+          [ -S /var/run/postgresql/.s.PGSQL.5432 ] && exit 0
+          sleep 1
+        done
+        echo "Postgres did not come up within 30s" >&2
+        sudo pg_lsclusters
+        exit 1
 
     - name: Switch local auth to trust and create the my_ai superuser role
       shell: bash
@@ -31,5 +52,5 @@ runs:
         set -euo pipefail
         HBA_FILE=$(sudo -u postgres psql -tAc "SHOW hba_file;")
         sudo sed -i -E 's/(peer|md5|scram-sha-256)$/trust/' "$HBA_FILE"
-        sudo systemctl restart postgresql
+        sudo pg_ctlcluster "$PGV" main restart
         sudo -u postgres createuser -s my_ai
