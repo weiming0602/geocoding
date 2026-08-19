@@ -208,6 +208,49 @@ export type RoadAlertsUsernameResponse = {
   username: string | null;
 };
 
+// A comment on a road topic (see roadAlertsStatements.js). A reply's
+// own `replies` is always [] -- statements are capped at one level of
+// nesting server-side, never a reply to a reply.
+export type RoadAlertsStatement = {
+  id: number;
+  username: string;
+  body: string;
+  createdAt: string;
+  replies: RoadAlertsStatement[];
+};
+
+// A topic anchored to a persistent road location (a street segment,
+// see roadAlertsTopicAnchor.js) rather than to a specific 511 signal --
+// it outlives whichever alert prompted someone to start commenting.
+export type RoadAlertsTopic = {
+  id: number;
+  tlid: string | null;
+  latitude: number;
+  longitude: number;
+  roadway: string | null;
+  createdAt: string;
+};
+
+// GET /road-alerts/topic -- topic is null when nobody's posted here
+// yet (viewing never creates one, only posting does).
+export type RoadAlertsTopicResponse = {
+  topic: RoadAlertsTopic | null;
+  statements: RoadAlertsStatement[];
+};
+
+// POST /road-alerts/statements
+export type PostRoadAlertsStatementResponse = {
+  statement: {
+    id: number;
+    topicId: number;
+    parentStatementId: number | null;
+    username: string;
+    body: string;
+    createdAt: string;
+  };
+  topicId: number;
+};
+
 // /road-alerts/test/weighted-points -- fake, developer-seeded stand-ins
 // for docs/ROAD_ALERTS_DESIGN.md's real (on-device, never server-side)
 // routine subgraph, gated server-side behind ALLOW_TEST_WEIGHTED_POINTS

@@ -8,8 +8,10 @@ import type {
   QuotaStatus,
   ReverseGeocodeResult,
   EmailRoadAlertResponse,
+  PostRoadAlertsStatementResponse,
   RoadAlertsPreferencesResponse,
   RoadAlertsRegisterResponse,
+  RoadAlertsTopicResponse,
   RoadAlertsUsernameResponse,
   RoadSignal,
   RoadSignalsResponse,
@@ -187,6 +189,41 @@ export function updateRoadAlertsUsername(
   baseUrl = DEFAULT_API_BASE_URL
 ): Promise<RoadAlertsUsernameResponse> {
   return postJson<RoadAlertsUsernameResponse>(baseUrl, '/road-alerts/username', params);
+}
+
+// The topic (if any) anchored to a road location, and everything
+// posted to it. Viewing never creates a topic -- `topic` is null when
+// nobody's commented near this location yet.
+export function getRoadAlertsTopic(
+  params: { latitude: number; longitude: number; email: string; serviceKey: string },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<RoadAlertsTopicResponse> {
+  const qs = new URLSearchParams({
+    latitude: String(params.latitude),
+    longitude: String(params.longitude),
+    email: params.email,
+    serviceKey: params.serviceKey,
+  });
+  return getJson<RoadAlertsTopicResponse>(baseUrl, `/road-alerts/topic?${qs.toString()}`);
+}
+
+// Posts a top-level statement (pass latitude/longitude, the location
+// the topic is anchored to) or a reply (pass parentStatementId instead
+// -- the reply always lands on the same topic as its parent, latitude/
+// longitude are ignored server-side in that case).
+export function postRoadAlertsStatement(
+  params: {
+    email: string;
+    serviceKey: string;
+    body: string;
+    latitude?: number;
+    longitude?: number;
+    roadway?: string;
+    parentStatementId?: number;
+  },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<PostRoadAlertsStatementResponse> {
+  return postJson<PostRoadAlertsStatementResponse>(baseUrl, '/road-alerts/statements', params);
 }
 
 // Test-only (see geocoding-server/src/testWeightedPoints.js) -- these
