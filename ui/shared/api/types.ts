@@ -251,6 +251,17 @@ export type PostRoadAlertsStatementResponse = {
   topicId: number;
 };
 
+// GET/POST /road-alerts/notifications -- how many replies to this
+// account's own statements are unseen. Scoped to replies only, not a
+// general "new alerts" count -- see AGENTS.md's Road Alerts section.
+export type RoadAlertsNotificationsResponse = {
+  replyCount: number;
+};
+
+export type RoadAlertsNotificationsViewedResponse = {
+  viewedAt: string;
+};
+
 // /road-alerts/test/weighted-points -- fake, developer-seeded stand-ins
 // for docs/ROAD_ALERTS_DESIGN.md's real (on-device, never server-side)
 // routine subgraph, gated server-side behind ALLOW_TEST_WEIGHTED_POINTS

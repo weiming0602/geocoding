@@ -5,9 +5,10 @@ import {
 import { Lora_400Regular, Lora_600SemiBold, useFonts as useLora } from '@expo-google-fonts/lora';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
+import { getStoredAccount } from './components/roadAlertsStorage';
 import BatchGeocodeScreen from './screens/BatchGeocodeScreen';
 import FindPlacesScreen from './screens/FindPlacesScreen';
 import HelpScreen from './screens/HelpScreen';
@@ -19,6 +20,7 @@ import ReverseGeocodeScreen from './screens/ReverseGeocodeScreen';
 import RoadAlertsScreen from './screens/RoadAlertsScreen';
 import SingleGeocodeScreen from './screens/SingleGeocodeScreen';
 import { INITIAL_IMPORT_STATE, type ImportWizardState } from './components/ImportAddressesForm';
+import { getRoadAlertsNotifications } from '../shared/api/client';
 import { colors, space } from '../shared/theme';
 
 SplashScreen.preventAutoHideAsync();
@@ -75,10 +77,38 @@ export default function App() {
   const [pendingBatchIds, setPendingBatchIds] = useState<string[] | null>(null);
   const [arrivedFromImport, setArrivedFromImport] = useState(false);
 
-  const goToScreen = useCallback((key: Screen) => {
-    setArrivedFromImport(false);
-    setScreen(key);
+  // Unseen-reply count for the Road Alerts tab label (e.g. "Road Alerts
+  // · 2") -- there's no dedicated home screen or global notification
+  // state in this app, so this lives only on the tab itself. Best-effort:
+  // no stored account, or any fetch failure, just leaves the count at 0
+  // rather than surfacing an error for a badge this minor.
+  const [roadAlertsReplyCount, setRoadAlertsReplyCount] = useState(0);
+  const fetchRoadAlertsReplyCount = useCallback(async () => {
+    const account = await getStoredAccount();
+    if (!account) {
+      setRoadAlertsReplyCount(0);
+      return;
+    }
+    try {
+      const response = await getRoadAlertsNotifications({ email: account.email, serviceKey: account.serviceKey });
+      setRoadAlertsReplyCount(response.replyCount);
+    } catch {
+      setRoadAlertsReplyCount(0);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchRoadAlertsReplyCount();
+  }, [fetchRoadAlertsReplyCount]);
+
+  const goToScreen = useCallback(
+    (key: Screen) => {
+      setArrivedFromImport(false);
+      setScreen(key);
+      if (key === 'roadAlerts') fetchRoadAlertsReplyCount();
+    },
+    [fetchRoadAlertsReplyCount]
+  );
 
   const handleSendToBatch = useCallback((file: { name: string; content: string }, ids?: string[]) => {
     setPendingBatchFile(file);
@@ -115,7 +145,9 @@ export default function App() {
                 style={[styles.tabLabel, screen === tab.key && styles.tabLabelActive]}
                 numberOfLines={1}
               >
-                {tab.label}
+                {tab.key === 'roadAlerts' && roadAlertsReplyCount > 0
+                  ? `${tab.label} · ${roadAlertsReplyCount}`
+                  : tab.label}
               </Text>
             </TouchableOpacity>
           ))}
@@ -137,7 +169,9 @@ export default function App() {
       )}
       {screen === 'reverse' && <ReverseGeocodeScreen />}
       {screen === 'findPlaces' && <FindPlacesScreen />}
-      {screen === 'roadAlerts' && <RoadAlertsScreen />}
+      {screen === 'roadAlerts' && (
+        <RoadAlertsScreen onNotificationsViewed={() => setRoadAlertsReplyCount(0)} />
+      )}
       {screen === 'import' && (
         <ImportAddressesScreen state={importState} onChange={updateImportState} onSendToBatch={handleSendToBatch} />
       )}

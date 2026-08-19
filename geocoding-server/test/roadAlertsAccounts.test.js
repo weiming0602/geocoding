@@ -7,6 +7,7 @@ const {
   checkAccess,
   updateDigestOptIn,
   updateUsername,
+  markNotificationsViewed,
 } = require('../src/roadAlertsAccounts');
 const { NotFoundError, UnauthorizedError } = require('../src/errors');
 const { makeUsersDb } = require('./helpers');
@@ -22,6 +23,19 @@ test('registerAccount creates a fresh row with a real service key on first call'
   assert.ok(account.registered_at);
   assert.equal(account.digest_opt_in, false);
   assert.equal(account.username, null);
+  assert.equal(account.notifications_viewed_at, null);
+
+  await db.close();
+});
+
+test('markNotificationsViewed sets notifications_viewed_at to now', async () => {
+  const db = await makeUsersDb();
+  await ensureRoadAlertsAccountsTable(db);
+  await registerAccount(db, 'alice@example.com');
+
+  const before = new Date();
+  const updated = await markNotificationsViewed(db, 'alice@example.com');
+  assert.ok(new Date(updated.notifications_viewed_at) >= before);
 
   await db.close();
 });

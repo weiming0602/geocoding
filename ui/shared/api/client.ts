@@ -9,6 +9,8 @@ import type {
   ReverseGeocodeResult,
   EmailRoadAlertResponse,
   PostRoadAlertsStatementResponse,
+  RoadAlertsNotificationsResponse,
+  RoadAlertsNotificationsViewedResponse,
   RoadAlertsPreferencesResponse,
   RoadAlertsRegisterResponse,
   RoadAlertsTopicResponse,
@@ -224,6 +226,24 @@ export function postRoadAlertsStatement(
   baseUrl = DEFAULT_API_BASE_URL
 ): Promise<PostRoadAlertsStatementResponse> {
   return postJson<PostRoadAlertsStatementResponse>(baseUrl, '/road-alerts/statements', params);
+}
+
+// How many replies to this account's own statements are unseen --
+// fetched on account load (same fetch-fresh reasoning as everywhere
+// else in this file) and re-fetched after marking viewed.
+export function getRoadAlertsNotifications(
+  params: { email: string; serviceKey: string },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<RoadAlertsNotificationsResponse> {
+  const qs = new URLSearchParams({ email: params.email, serviceKey: params.serviceKey });
+  return getJson<RoadAlertsNotificationsResponse>(baseUrl, `/road-alerts/notifications?${qs.toString()}`);
+}
+
+export function markRoadAlertsNotificationsViewed(
+  params: { email: string; serviceKey: string },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<RoadAlertsNotificationsViewedResponse> {
+  return postJson<RoadAlertsNotificationsViewedResponse>(baseUrl, '/road-alerts/notifications/viewed', params);
 }
 
 // Test-only (see geocoding-server/src/testWeightedPoints.js) -- these

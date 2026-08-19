@@ -87,9 +87,28 @@ async function getStatementsForTopic(pool, topicId) {
   }));
 }
 
+/**
+ * How many replies to this account's own statements are unseen -- a
+ * reply (s) whose parent (p) this account authored, posted by someone
+ * else, since `sinceDate` (the account's notifications_viewed_at, or
+ * registered_at if never viewed -- the caller resolves which). A
+ * self-reply to your own statement never counts, so replying to
+ * yourself can't inflate the badge.
+ */
+async function getUnseenReplyCount(pool, email, sinceDate) {
+  const { rows } = await pool.query(
+    `SELECT count(*) FROM road_alerts_statements s
+     JOIN road_alerts_statements p ON s.parent_statement_id = p.id
+     WHERE p.email = $1 AND s.email != $1 AND s.created_at > $2`,
+    [email, sinceDate]
+  );
+  return Number(rows[0].count);
+}
+
 module.exports = {
   ensureRoadAlertsStatementsTable,
   getStatement,
   insertStatement,
   getStatementsForTopic,
+  getUnseenReplyCount,
 };

@@ -30,11 +30,20 @@ const ADD_USERNAME_COLUMN_SQL = `
 ALTER TABLE road_alerts_accounts ADD COLUMN IF NOT EXISTS username TEXT;
 `;
 
+// Nullable -- a never-viewed account treats every existing reply as
+// unseen (see roadAlertsStatements.js's getUnseenReplyCount, which
+// falls back to registered_at when this is null). Set whenever the
+// driver actually opens/expands their notifications, not on every poll.
+const ADD_NOTIFICATIONS_VIEWED_AT_COLUMN_SQL = `
+ALTER TABLE road_alerts_accounts ADD COLUMN IF NOT EXISTS notifications_viewed_at TIMESTAMPTZ;
+`;
+
 /** Creates the road_alerts_accounts table if it doesn't already exist. */
 async function ensureRoadAlertsAccountsTable(pool) {
   await pool.query(CREATE_ROAD_ALERTS_ACCOUNTS_TABLE_SQL);
   await pool.query(ADD_DIGEST_OPT_IN_COLUMN_SQL);
   await pool.query(ADD_USERNAME_COLUMN_SQL);
+  await pool.query(ADD_NOTIFICATIONS_VIEWED_AT_COLUMN_SQL);
 }
 
 async function getAccount(pool, email) {
@@ -113,6 +122,15 @@ async function updateUsername(pool, email, username) {
   return rows[0];
 }
 
+/** Marks everything up to now as seen, resetting the reply-notification count to 0. */
+async function markNotificationsViewed(pool, email) {
+  const { rows } = await pool.query(
+    `UPDATE road_alerts_accounts SET notifications_viewed_at = now() WHERE email = $1 RETURNING *`,
+    [email]
+  );
+  return rows[0];
+}
+
 module.exports = {
   ensureRoadAlertsAccountsTable,
   getAccount,
@@ -120,4 +138,5 @@ module.exports = {
   checkAccess,
   updateDigestOptIn,
   updateUsername,
+  markNotificationsViewed,
 };
