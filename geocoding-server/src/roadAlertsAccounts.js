@@ -20,10 +20,21 @@ const ADD_DIGEST_OPT_IN_COLUMN_SQL = `
 ALTER TABLE road_alerts_accounts ADD COLUMN IF NOT EXISTS digest_opt_in BOOLEAN NOT NULL DEFAULT false;
 `;
 
+// Nullable -- existing accounts have none yet, and there's no
+// uniqueness constraint: v1 has no identity-verification posture for
+// Road Alerts, so a duplicate display name is an acceptable
+// simplification rather than something worth a real username-registry
+// system for. Shown alongside a statement (see roadAlertsStatements.js)
+// instead of the account's email.
+const ADD_USERNAME_COLUMN_SQL = `
+ALTER TABLE road_alerts_accounts ADD COLUMN IF NOT EXISTS username TEXT;
+`;
+
 /** Creates the road_alerts_accounts table if it doesn't already exist. */
 async function ensureRoadAlertsAccountsTable(pool) {
   await pool.query(CREATE_ROAD_ALERTS_ACCOUNTS_TABLE_SQL);
   await pool.query(ADD_DIGEST_OPT_IN_COLUMN_SQL);
+  await pool.query(ADD_USERNAME_COLUMN_SQL);
 }
 
 async function getAccount(pool, email) {
@@ -93,10 +104,20 @@ async function updateDigestOptIn(pool, email, digestOptIn) {
   return rows[0];
 }
 
+/** Updates an account's display name, shown alongside anything they post. */
+async function updateUsername(pool, email, username) {
+  const { rows } = await pool.query(
+    `UPDATE road_alerts_accounts SET username = $1 WHERE email = $2 RETURNING *`,
+    [username, email]
+  );
+  return rows[0];
+}
+
 module.exports = {
   ensureRoadAlertsAccountsTable,
   getAccount,
   registerAccount,
   checkAccess,
   updateDigestOptIn,
+  updateUsername,
 };

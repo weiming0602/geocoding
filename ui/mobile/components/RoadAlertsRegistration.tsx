@@ -4,10 +4,10 @@ import { StyleSheet, Text, TextInput, View } from 'react-native';
 import { registerRoadAlerts } from '../../shared/api/client';
 import { colors, radius, space } from '../../shared/theme';
 import ThemedButton from './ThemedButton';
-import { setStoredAccount } from './roadAlertsStorage';
+import { setStoredAccount, type StoredRoadAlertsAccount } from './roadAlertsStorage';
 
 type Props = {
-  onRegistered: (account: { email: string; serviceKey: string }) => void;
+  onRegistered: (account: StoredRoadAlertsAccount) => void;
   // Shown after a stale/invalid stored account was cleared -- distinct
   // from a plain first-time registration, so the copy can say why the
   // user is seeing this form again instead of the app just working.

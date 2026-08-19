@@ -22,6 +22,7 @@ const {
   registerAccount,
   checkAccess: checkRoadAlertsAccess,
   updateDigestOptIn,
+  updateUsername,
 } = require('./roadAlertsAccounts');
 const {
   ensureRoadAlertsSurfacedLogTable,
@@ -549,6 +550,65 @@ app.post('/road-alerts/preferences', async (req, res) => {
     const account = await updateDigestOptIn(usersDb, email, digestOptIn);
 
     res.json({ digestOptIn: account.digest_opt_in });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// A display name shown alongside anything an account posts (see
+// roadAlertsStatements.js) -- kept separate from /road-alerts/register
+// (that route's contract is specifically email-only account creation/
+// key-recovery, already asserted by its own tests) and from
+// /road-alerts/preferences (specifically the digest boolean). Same
+// reasoning as preferences for being its own GET/POST pair: a stored
+// account on-device carries no profile data of its own (see
+// roadAlertsStorage.ts), so the current value is always fetched fresh.
+app.get('/road-alerts/username', async (req, res) => {
+  const { email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    res.json({ username: account.username });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+app.post('/road-alerts/username', async (req, res) => {
+  const { email, serviceKey, username } = req.body || {};
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+    const trimmedUsername = typeof username === 'string' ? username.trim() : '';
+    if (!trimmedUsername || trimmedUsername.length > 40) {
+      throw new ValidationError('username must be 1-40 characters');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+    const account = await updateUsername(usersDb, email, trimmedUsername);
+
+    res.json({ username: account.username });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
