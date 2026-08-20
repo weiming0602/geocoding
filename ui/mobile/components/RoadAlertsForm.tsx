@@ -895,25 +895,24 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
               : null;
 
           return (
-            <View key={signal.id} style={styles.resultRow}>
+            <View key={signal.id} style={styles.resultCard}>
               <View style={styles.resultHeader}>
+                <Text style={styles.cardKicker}>
+                  {distance !== null ? `${metersLabel(distance)} away` : 'distance unknown'}
+                  {onRoute ? ' · on your route' : !ahead ? ' · behind you' : ''}
+                </Text>
                 <View style={[styles.severityTag, { borderColor: SEVERITY_COLORS[signal.severity] }]}>
                   <Text style={[styles.severityTagText, { color: SEVERITY_COLORS[signal.severity] }]}>
                     {SEVERITY_LABELS[signal.severity]}
                   </Text>
                 </View>
-                {onRoute && <Text style={styles.cardMeta}>on your route</Text>}
-                {!onRoute && !ahead && <Text style={styles.cardMeta}>behind you</Text>}
               </View>
               <Text style={styles.resultAddress}>
                 {signal.roadway ?? 'Unknown road'}
                 {signal.direction ? ` (${signal.direction})` : ''}
               </Text>
-              <Text style={styles.cardMeta}>
-                {distance !== null ? `${metersLabel(distance)} away` : 'distance unknown'}
-              </Text>
               <Text style={styles.bodyText}>{signal.speech[detailLevel]}</Text>
-              <View style={[styles.spacingSmall, styles.optionRow]}>
+              <View style={[styles.buttonRowWide, styles.optionRow]}>
                 <ThemedButton title="Speak" onPress={() => speakSignal(signal)} variant="ghost" />
                 {speechRecognitionAvailable && (
                   <ThemedButton
@@ -1140,17 +1139,25 @@ const styles = StyleSheet.create({
     color: colors.text,
     opacity: 0.65,
   },
-  resultRow: {
-    marginTop: space[2],
-    paddingBottom: space[3],
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
+  resultCard: {
+    marginTop: space[3],
+    borderWidth: 1,
+    borderColor: colors.divider,
+    borderRadius: radius.md,
+    padding: space[3],
   },
   resultHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 4,
+  },
+  cardKicker: {
+    fontFamily: 'Lora_400Regular',
+    fontSize: 10,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+    color: colors.accent,
   },
   severityTag: {
     borderWidth: 1,
@@ -1160,14 +1167,18 @@ const styles = StyleSheet.create({
     alignSelf: 'flex-start',
   },
   severityTagText: {
-    fontFamily: 'Lora_400Regular',
-    fontSize: 11,
-    fontWeight: '600',
+    fontFamily: 'CormorantGaramond_600SemiBold',
+    fontSize: 13,
   },
   resultAddress: {
-    fontFamily: 'Lora_400Regular',
-    fontWeight: '600',
+    fontFamily: 'CormorantGaramond_600SemiBold',
+    fontSize: 17,
     color: colors.text,
+    marginBottom: space[2],
+  },
+  buttonRowWide: {
+    marginTop: space[4],
+    alignItems: 'flex-start',
   },
   bodyText: {
     fontFamily: 'Lora_400Regular',
