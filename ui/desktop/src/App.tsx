@@ -13,6 +13,7 @@ import PlanQuota from './pages/PlanQuota';
 import Pricing from './pages/Pricing';
 import Progress from './pages/Progress';
 import ReverseGeocode from './pages/ReverseGeocode';
+import RoadAlerts from './pages/RoadAlerts';
 import { ImportAddressesStateProvider } from './state/ImportAddressesState';
 import { RecentLookupsProvider } from './state/RecentLookups';
 
@@ -28,6 +29,7 @@ export default function App() {
               <Route path="/geocode" element={<Geocode />} />
               <Route path="/reverse-geocode" element={<ReverseGeocode />} />
               <Route path="/find-places" element={<FindPlaces />} />
+              <Route path="/road-alerts" element={<RoadAlerts />} />
               <Route path="/import-addresses" element={<ImportAddresses />} />
               <Route path="/batch" element={<Batch />} />
               <Route path="/plan-quota" element={<PlanQuota />} />
