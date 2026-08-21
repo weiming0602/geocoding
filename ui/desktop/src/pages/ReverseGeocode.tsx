@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react';
 import { reverseGeocode } from '../../../shared/api/client';
 import { parseCoordinateInput } from '../../../shared/parseCoordinateInput';
 import MapView from '../components/MapView';
+import PageHeader from '../components/PageHeader';
 import { useRecentLookups } from '../state/RecentLookups';
 import type { RecentLookup } from '../state/RecentLookups';
 
@@ -71,7 +72,7 @@ export default function ReverseGeocode() {
 
   return (
     <div>
-      <h1>Reverse geocode</h1>
+      <PageHeader icon="reverseGeocode">Reverse geocode</PageHeader>
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         Click a point on the map, or type coordinates directly, to get the nearest address —
         matches /reverse-geocode.

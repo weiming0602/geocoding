@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 
 import { getQuota } from '../../../shared/api/client';
 import type { QuotaStatus } from '../../../shared/api/types';
+import PageHeader from '../components/PageHeader';
 
 export default function PlanQuota() {
   const [email, setEmail] = useState('');
@@ -31,7 +32,7 @@ export default function PlanQuota() {
 
   return (
     <div>
-      <h1>Plan &amp; quota</h1>
+      <PageHeader icon="planQuota">Plan &amp; quota</PageHeader>
       <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
         Usage resets on the 1st of each calendar month, per account email.
       </p>

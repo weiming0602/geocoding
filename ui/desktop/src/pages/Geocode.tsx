@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react';
 
 import { geocode } from '../../../shared/api/client';
 import MapView from '../components/MapView';
+import PageHeader from '../components/PageHeader';
 import { useRecentLookups } from '../state/RecentLookups';
 import type { RecentLookup } from '../state/RecentLookups';
 
@@ -48,7 +49,7 @@ export default function Geocode() {
 
   return (
     <div>
-      <h1>Geocode</h1>
+      <PageHeader icon="geocode">Geocode</PageHeader>
       <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
         Convert a street address to coordinates — matches /geocode.
       </p>

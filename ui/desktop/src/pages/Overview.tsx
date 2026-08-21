@@ -1,13 +1,15 @@
 import { Link } from 'react-router';
 
 import { PRICING_TIERS, formatUsd, perAddressRate } from '../../../shared/pricing';
+import { Icon, type IconName } from '../components/icons';
 
-const TASKS = [
+const TASKS: { title: string; body: string; to: string; cta: string; icon: IconName; primary?: boolean }[] = [
   {
     title: 'Geocode an address',
     body: 'Convert a street address to coordinates.',
     to: '/geocode',
     cta: 'Open geocode',
+    icon: 'geocode',
     primary: true,
   },
   {
@@ -15,24 +17,28 @@ const TASKS = [
     body: 'Upload or point at an address file and get a ZIP back.',
     to: '/batch',
     cta: 'Open batch',
+    icon: 'batch',
   },
   {
     title: 'Import a messy export',
     body: 'CSV or Excel with columns to sort out first -- turn it into a clean address list.',
     to: '/import-addresses',
     cta: 'Import addresses',
+    icon: 'importAddresses',
   },
   {
     title: 'Reverse geocode a point',
     body: 'Click a location on the map to get its address.',
     to: '/reverse-geocode',
     cta: 'Open reverse geocode',
+    icon: 'reverseGeocode',
   },
   {
     title: 'Find places near an address',
     body: 'Search for a kind of place nearby and export the matches.',
     to: '/find-places',
     cta: 'Open find places',
+    icon: 'findPlaces',
   },
 ];
 
@@ -133,7 +139,12 @@ export default function Overview() {
       >
         {TASKS.map((task) => (
           <div key={task.to} className="card elev-sm">
-            <div className="card-title">{task.title}</div>
+            <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
+              <span className="task-icon-tile">
+                <Icon name={task.icon} size={19} />
+              </span>
+              {task.title}
+            </div>
             <p className="card-body">{task.body}</p>
             <Link
               className={`btn btn-block ${task.primary ? 'btn-primary' : 'btn-secondary'}`}

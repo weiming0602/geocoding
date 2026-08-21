@@ -1,11 +1,12 @@
 import { Link } from 'react-router';
 
 import { PRICING_TIERS, formatUsd, perAddressRate } from '../../../shared/pricing';
+import PageHeader from '../components/PageHeader';
 
 export default function Pricing() {
   return (
     <div>
-      <h1>Bulk geocoding pricing</h1>
+      <PageHeader icon="pricing">Bulk geocoding pricing</PageHeader>
       <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
         One-time packs of additional monthly quota — applies to Batch geocoding. Single-address
         Geocode and Reverse geocode always stay free.
