@@ -11,6 +11,7 @@ import {
   getRoadAlertsUsername,
   getRoadSignals,
   getTestWeightedPoints,
+  markRoadAlertsNotificationsViewed,
   postRoadAlertsStatement,
   updateRoadAlertsPreferences,
   updateRoadAlertsUsername,
@@ -73,9 +74,14 @@ type Props = {
   // anything ahead within radius) unchanged for every real caller until a
   // real source exists.
   weightedPoints?: WeightedPoint[];
+  // Called once this screen has marked reply notifications as viewed
+  // (see the mount effect below) -- App.tsx uses this to zero out the
+  // Road Alerts tab's badge immediately, rather than waiting for its
+  // own next poll.
+  onNotificationsViewed?: () => void;
 };
 
-export default function RoadAlertsForm({ weightedPoints = [] }: Props) {
+export default function RoadAlertsForm({ weightedPoints = [], onNotificationsViewed }: Props) {
   // undefined = still checking stored credentials; null = none found (or
   // cleared) -- show registration; set = ready to use.
   const [account, setAccount] = useState<StoredRoadAlertsAccount | null | undefined>(undefined);
@@ -259,6 +265,26 @@ export default function RoadAlertsForm({ weightedPoints = [] }: Props) {
       cancelled = true;
     };
   }, [account]);
+
+  // Marks reply notifications as viewed once this screen (and an
+  // account) has actually loaded -- best-effort, same reasoning as
+  // above: a failure here just means the tab badge doesn't clear yet,
+  // not something worth surfacing to the driver.
+  useEffect(() => {
+    if (!account) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        await markRoadAlertsNotificationsViewed({ email: account.email, serviceKey: account.serviceKey });
+        if (!cancelled) onNotificationsViewed?.();
+      } catch {
+        // best-effort -- see above
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [account, onNotificationsViewed]);
 
   const speakSignal = useCallback((signal: RoadSignal) => {
     if (!voiceEnabledRef.current) return;

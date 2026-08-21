@@ -3,10 +3,14 @@ import { ScrollView, StyleSheet } from 'react-native';
 
 import RoadAlertsForm from '../components/RoadAlertsForm';
 
-export default function RoadAlertsScreen() {
+type Props = {
+  onNotificationsViewed?: () => void;
+};
+
+export default function RoadAlertsScreen({ onNotificationsViewed }: Props) {
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <RoadAlertsForm />
+      <RoadAlertsForm onNotificationsViewed={onNotificationsViewed} />
     </ScrollView>
   );
 }

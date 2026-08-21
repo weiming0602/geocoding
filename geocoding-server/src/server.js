@@ -23,6 +23,7 @@ const {
   checkAccess: checkRoadAlertsAccess,
   updateDigestOptIn,
   updateUsername,
+  markNotificationsViewed,
 } = require('./roadAlertsAccounts');
 const {
   ensureRoadAlertsSurfacedLogTable,
@@ -35,6 +36,7 @@ const {
   getStatement,
   insertStatement,
   getStatementsForTopic,
+  getUnseenReplyCount,
 } = require('./roadAlertsStatements');
 const {
   ensureTestWeightedPointsTable,
@@ -764,6 +766,67 @@ app.post('/road-alerts/statements', async (req, res) => {
       },
       topicId,
     });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// How many replies to this account's own statements are unseen -- see
+// roadAlertsStatements.js's getUnseenReplyCount for the "only counts a
+// reply from someone else, never a self-reply" rule. This is
+// deliberately scoped to replies only, not a general "new alerts" count
+// -- see AGENTS.md's Road Alerts section for why: that would need
+// tracking every alert *surfaced* to a user (a passive-exposure event),
+// which cuts against this project's explicit-action-only logging
+// principle for Road Alerts, established while building the digest
+// feature.
+app.get('/road-alerts/notifications', async (req, res) => {
+  const { email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const sinceDate = account.notifications_viewed_at ?? account.registered_at;
+    const replyCount = await getUnseenReplyCount(usersDb, email, sinceDate);
+
+    res.json({ replyCount });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Resets the reply count above to 0 -- called when the driver actually
+// opens/expands their notifications, not on every poll.
+app.post('/road-alerts/notifications/viewed', async (req, res) => {
+  const { email, serviceKey } = req.body || {};
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+    const account = await markNotificationsViewed(usersDb, email);
+
+    res.json({ viewedAt: account.notifications_viewed_at });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });

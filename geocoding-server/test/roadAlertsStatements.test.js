@@ -1,7 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { ensureRoadAlertsStatementsTable, insertStatement, getStatementsForTopic } = require('../src/roadAlertsStatements');
+const {
+  ensureRoadAlertsStatementsTable,
+  insertStatement,
+  getStatementsForTopic,
+  getUnseenReplyCount,
+} = require('../src/roadAlertsStatements');
 const { ValidationError } = require('../src/errors');
 const { makeUsersDb } = require('./helpers');
 
@@ -142,6 +147,66 @@ test('getStatementsForTopic returns top-level statements with their own flat rep
   assert.equal(statements[0].replies[0].body, 'Reply to the first.');
   assert.equal(statements[1].id, second.id);
   assert.equal(statements[1].replies.length, 0);
+
+  await db.close();
+});
+
+test('getUnseenReplyCount counts a reply from someone else, not a self-reply', async () => {
+  const db = await makeUsersDb();
+  await ensureRoadAlertsStatementsTable(db);
+
+  const mine = await insertStatement(db, {
+    topicId: 1,
+    parentStatementId: null,
+    email: 'alice@example.com',
+    username: 'Alice R',
+    body: 'My statement.',
+  });
+  await insertStatement(db, {
+    topicId: 1,
+    parentStatementId: mine.id,
+    email: 'bob@example.com',
+    username: 'Bob T',
+    body: 'A reply from someone else.',
+  });
+  await insertStatement(db, {
+    topicId: 1,
+    parentStatementId: mine.id,
+    email: 'alice@example.com',
+    username: 'Alice R',
+    body: 'A reply from myself.',
+  });
+
+  const count = await getUnseenReplyCount(db, 'alice@example.com', new Date(0));
+  assert.equal(count, 1);
+
+  await db.close();
+});
+
+test('getUnseenReplyCount only counts replies after the given date', async () => {
+  const db = await makeUsersDb();
+  await ensureRoadAlertsStatementsTable(db);
+
+  const mine = await insertStatement(db, {
+    topicId: 1,
+    parentStatementId: null,
+    email: 'alice@example.com',
+    username: 'Alice R',
+    body: 'My statement.',
+  });
+  await insertStatement(db, {
+    topicId: 1,
+    parentStatementId: mine.id,
+    email: 'bob@example.com',
+    username: 'Bob T',
+    body: 'An old reply.',
+  });
+
+  const countBefore = await getUnseenReplyCount(db, 'alice@example.com', new Date(0));
+  assert.equal(countBefore, 1);
+
+  const countAfterViewing = await getUnseenReplyCount(db, 'alice@example.com', new Date());
+  assert.equal(countAfterViewing, 0);
 
   await db.close();
 });
