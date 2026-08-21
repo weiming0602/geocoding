@@ -17,6 +17,7 @@ const { reverseGeocode } = require('./reverseGeocode');
 const { searchPlaces } = require('./placesSearch');
 const { getRoadSignals } = require('./roadSignals');
 const { findNextCrossStreet } = require('./nextCrossStreet');
+const { getRoadReroute } = require('./roadReroute');
 const {
   ensureRoadAlertsAccountsTable,
   registerAccount,
@@ -908,6 +909,46 @@ app.get('/road-signals/cross-street', async (req, res) => {
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
     if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
     if (err instanceof OutOfRangeError) return res.status(422).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// 1-2 alternate driving routes past the hazard, avoiding a buffer around
+// it -- see roadReroute.js for the rejoin-point estimate and why an
+// external routing service (OpenRouteService) is used instead of the
+// `streets` table (no real topology/routing exists there, same
+// limitation nextCrossStreet.js works around differently). Same
+// client-resends-the-hazard's-own-coordinates reasoning as
+// /road-signals/cross-street above.
+app.get('/road-signals/reroute', async (req, res) => {
+  const { driverLatitude, driverLongitude, driverHeading, hazardLatitude, hazardLongitude, email, serviceKey } =
+    req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const result = await getRoadReroute({
+      driverLatitude: driverLatitude !== undefined ? Number(driverLatitude) : undefined,
+      driverLongitude: driverLongitude !== undefined ? Number(driverLongitude) : undefined,
+      driverHeading: driverHeading !== undefined ? Number(driverHeading) : undefined,
+      hazardLatitude: hazardLatitude !== undefined ? Number(hazardLatitude) : undefined,
+      hazardLongitude: hazardLongitude !== undefined ? Number(hazardLongitude) : undefined,
+    });
+
+    res.json(result);
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    if (err instanceof UpstreamError) return res.status(502).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: 'internal error' });
   }

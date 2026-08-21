@@ -7,6 +7,7 @@ import type {
   PlaceSearchResponse,
   QuotaStatus,
   ReverseGeocodeResult,
+  CrossStreetResponse,
   EmailRoadAlertResponse,
   PostRoadAlertsStatementResponse,
   RoadAlertsNotificationsResponse,
@@ -15,6 +16,7 @@ import type {
   RoadAlertsRegisterResponse,
   RoadAlertsTopicResponse,
   RoadAlertsUsernameResponse,
+  RoadRerouteResponse,
   RoadSignal,
   RoadSignalsResponse,
   TestWeightedPoint,
@@ -137,6 +139,59 @@ export function getRoadSignals(
     serviceKey: params.serviceKey,
   });
   return getJson<RoadSignalsResponse>(baseUrl, `/road-signals?${qs.toString()}`);
+}
+
+export function getRoadAlertsCrossStreet(
+  params: {
+    driverLatitude: number;
+    driverLongitude: number;
+    hazardLatitude: number;
+    hazardLongitude: number;
+    hazardRoadway?: string;
+    email: string;
+    serviceKey: string;
+  },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<CrossStreetResponse> {
+  const qs = new URLSearchParams({
+    driverLatitude: String(params.driverLatitude),
+    driverLongitude: String(params.driverLongitude),
+    hazardLatitude: String(params.hazardLatitude),
+    hazardLongitude: String(params.hazardLongitude),
+    email: params.email,
+    serviceKey: params.serviceKey,
+  });
+  if (params.hazardRoadway) qs.set('hazardRoadway', params.hazardRoadway);
+  return getJson<CrossStreetResponse>(baseUrl, `/road-signals/cross-street?${qs.toString()}`);
+}
+
+// GET /road-signals/reroute -- driverHeading is optional (a browser on a
+// desktop rarely reports one; the server treats a missing heading as
+// "assume ahead," same as everywhere else heading is used).
+export function getRoadReroute(
+  params: {
+    driverLatitude: number;
+    driverLongitude: number;
+    driverHeading?: number | null;
+    hazardLatitude: number;
+    hazardLongitude: number;
+    hazardRoadway?: string;
+    email: string;
+    serviceKey: string;
+  },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<RoadRerouteResponse> {
+  const qs = new URLSearchParams({
+    driverLatitude: String(params.driverLatitude),
+    driverLongitude: String(params.driverLongitude),
+    hazardLatitude: String(params.hazardLatitude),
+    hazardLongitude: String(params.hazardLongitude),
+    email: params.email,
+    serviceKey: params.serviceKey,
+  });
+  if (params.driverHeading != null) qs.set('driverHeading', String(params.driverHeading));
+  if (params.hazardRoadway) qs.set('hazardRoadway', params.hazardRoadway);
+  return getJson<RoadRerouteResponse>(baseUrl, `/road-signals/reroute?${qs.toString()}`);
 }
 
 export function registerRoadAlerts(

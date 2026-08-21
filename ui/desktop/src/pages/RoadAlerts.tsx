@@ -3,19 +3,28 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ApiError,
   emailRoadAlert,
+  getRoadAlertsCrossStreet,
   getRoadAlertsPreferences,
   getRoadAlertsTopic,
   getRoadAlertsUsername,
+  getRoadReroute,
   getRoadSignals,
   markRoadAlertsNotificationsViewed,
   postRoadAlertsStatement,
   updateRoadAlertsPreferences,
   updateRoadAlertsUsername,
 } from '../../../shared/api/client';
-import type { RoadAlertsTopicResponse, RoadSignal, RoadSignalSeverity } from '../../../shared/api/types';
+import type {
+  CrossStreetResponse,
+  RoadAlertsTopicResponse,
+  RoadRerouteResponse,
+  RoadSignal,
+  RoadSignalSeverity,
+} from '../../../shared/api/types';
 import { bearingDegrees, haversineDistanceMeters, isAhead } from '../../../shared/geo';
 import PageHeader from '../components/PageHeader';
 import RoadAlertsRegistration from '../components/RoadAlertsRegistration';
+import RoadRerouteMap from '../components/RoadRerouteMap';
 import { clearStoredAccount, getStoredAccount, type StoredRoadAlertsAccount } from '../roadAlertsStorage';
 import { isSpeechRecognitionAvailable, listenOnce, matchesSaveCommand } from '../webSpeechRecognition';
 
@@ -101,6 +110,25 @@ export default function RoadAlerts() {
   const [postingSignalId, setPostingSignalId] = useState<string | null>(null);
   const [voiceListeningStatementSignalId, setVoiceListeningStatementSignalId] = useState<string | null>(null);
   const [voiceStatementStatusBySignalId, setVoiceStatementStatusBySignalId] = useState<Record<string, string>>({});
+
+  // Auto-fetched, no button -- a cheap (existing `streets` table, no
+  // external API) hint of the nearest street to turn onto right now,
+  // shown for any signal that's ahead once a position is known. 'none'
+  // means fetched but nothing qualified (a 404/422 from the server, e.g.
+  // no candidate street nearby) -- distinct from not-yet-fetched
+  // (absent from the map) so it isn't retried every render.
+  const [crossStreetBySignalId, setCrossStreetBySignalId] = useState<
+    Record<string, CrossStreetResponse | 'loading' | 'none'>
+  >({});
+  const crossStreetFetchedRef = useRef<Set<string>>(new Set());
+
+  // The fuller, on-demand detour: 1-2 routed alternatives past the
+  // hazard from an external routing service. One panel open at a time,
+  // same as the comments panel above.
+  const [expandedRerouteSignalId, setExpandedRerouteSignalId] = useState<string | null>(null);
+  const [rerouteBySignalId, setRerouteBySignalId] = useState<
+    Record<string, RoadRerouteResponse | 'loading' | 'error'>
+  >({});
 
   // Typed coordinates in place of real GPS -- a desktop has no real
   // location to drive around, so this is the primary way to actually see
@@ -542,6 +570,72 @@ export default function RoadAlerts() {
     [voiceListeningSignalId, voiceListeningStatementSignalId]
   );
 
+  // Auto-fetch the cheap cross-street hint for any signal that's ahead,
+  // once a position exists -- best-effort (a 404/422 just means nothing
+  // qualified) and fetched at most once per signal id via the ref, not
+  // re-triggered by crossStreetBySignalId's own updates.
+  useEffect(() => {
+    const current = accountRef.current;
+    if (!current || !position) return;
+    for (const signal of signals) {
+      if (typeof signal.latitude !== 'number' || typeof signal.longitude !== 'number') continue;
+      if (crossStreetFetchedRef.current.has(signal.id)) continue;
+      const bearing = bearingDegrees(
+        { latitude: position.latitude, longitude: position.longitude },
+        { latitude: signal.latitude, longitude: signal.longitude }
+      );
+      if (!isAhead(position.heading, bearing)) continue;
+
+      crossStreetFetchedRef.current.add(signal.id);
+      setCrossStreetBySignalId((prev) => ({ ...prev, [signal.id]: 'loading' }));
+      getRoadAlertsCrossStreet({
+        driverLatitude: position.latitude,
+        driverLongitude: position.longitude,
+        hazardLatitude: signal.latitude,
+        hazardLongitude: signal.longitude,
+        hazardRoadway: signal.roadway ?? undefined,
+        email: current.email,
+        serviceKey: current.serviceKey,
+      })
+        .then((result) => setCrossStreetBySignalId((prev) => ({ ...prev, [signal.id]: result })))
+        .catch(() => setCrossStreetBySignalId((prev) => ({ ...prev, [signal.id]: 'none' })));
+    }
+  }, [signals, position]);
+
+  const handleToggleReroute = useCallback(
+    async (signal: RoadSignal) => {
+      if (expandedRerouteSignalId === signal.id) {
+        setExpandedRerouteSignalId(null);
+        return;
+      }
+      setExpandedRerouteSignalId(signal.id);
+      if (rerouteBySignalId[signal.id]) return; // already fetched once this session
+
+      const current = accountRef.current;
+      if (!current || !position || typeof signal.latitude !== 'number' || typeof signal.longitude !== 'number') {
+        return;
+      }
+
+      setRerouteBySignalId((prev) => ({ ...prev, [signal.id]: 'loading' }));
+      try {
+        const response = await getRoadReroute({
+          driverLatitude: position.latitude,
+          driverLongitude: position.longitude,
+          driverHeading: position.heading ?? undefined,
+          hazardLatitude: signal.latitude,
+          hazardLongitude: signal.longitude,
+          hazardRoadway: signal.roadway ?? undefined,
+          email: current.email,
+          serviceKey: current.serviceKey,
+        });
+        setRerouteBySignalId((prev) => ({ ...prev, [signal.id]: response }));
+      } catch {
+        setRerouteBySignalId((prev) => ({ ...prev, [signal.id]: 'error' }));
+      }
+    },
+    [expandedRerouteSignalId, rerouteBySignalId, position]
+  );
+
   // Alerting only runs while this page is mounted -- navigating away
   // without pressing Stop would otherwise leak a location watch.
   useEffect(() => {
@@ -778,6 +872,16 @@ export default function RoadAlerts() {
                 {signal.direction ? ` (${signal.direction})` : ''}
               </div>
               <p className="card-body">{signal.speech[detailLevel]}</p>
+              {(() => {
+                const crossStreet = crossStreetBySignalId[signal.id];
+                if (!crossStreet || crossStreet === 'loading' || crossStreet === 'none') return null;
+                return (
+                  <p className="card-meta" style={{ margin: '0 0 var(--space-2)' }}>
+                    Nearest turn-off: <strong>{crossStreet.fullname}</strong>,{' '}
+                    {metersLabel(crossStreet.distanceFromDriverMeters)} ahead
+                  </p>
+                );
+              })()}
               <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', marginTop: 'var(--space-2)' }}>
                 <button className="btn btn-ghost" onClick={() => speakSignal(signal)}>
                   Speak
@@ -794,12 +898,73 @@ export default function RoadAlerts() {
                 <button className="btn btn-ghost" onClick={() => handleToggleComments(signal)}>
                   {expandedSignalId === signal.id ? 'Hide comments' : 'Comments'}
                 </button>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => handleToggleReroute(signal)}
+                  disabled={!position}
+                  title={position ? undefined : 'Start watching or check a location first'}
+                >
+                  {expandedRerouteSignalId === signal.id ? 'Hide route options' : 'Show a way around this'}
+                </button>
               </div>
               {voiceStatusBySignalId[signal.id] && (
                 <p className="card-meta" style={{ marginTop: 'var(--space-1)' }}>
                   {voiceStatusBySignalId[signal.id]}
                 </p>
               )}
+
+              {expandedRerouteSignalId === signal.id &&
+                (() => {
+                  const rerouteState = rerouteBySignalId[signal.id];
+                  return (
+                    <div
+                      style={{
+                        marginTop: 'var(--space-3)',
+                        paddingTop: 'var(--space-3)',
+                        borderTop: '1px solid var(--color-divider)',
+                      }}
+                    >
+                      {rerouteState === 'loading' && <p className="card-meta">Finding a way around…</p>}
+                      {rerouteState === 'error' && (
+                        <p className="card-meta">Could not find a detour right now.</p>
+                      )}
+                      {rerouteState && rerouteState !== 'loading' && rerouteState !== 'error' && position && (
+                        <>
+                          {rerouteState.options.length === 0 ? (
+                            <p className="card-meta">No alternate route found around this hazard.</p>
+                          ) : (
+                            <>
+                              <RoadRerouteMap
+                                driverPosition={{ latitude: position.latitude, longitude: position.longitude }}
+                                hazardPosition={{
+                                  latitude: signal.latitude as number,
+                                  longitude: signal.longitude as number,
+                                }}
+                                rejoinPoint={rerouteState.rejoinPoint}
+                                options={rerouteState.options}
+                              />
+                              <div style={{ marginTop: 'var(--space-2)' }}>
+                                {rerouteState.options.map((option, index) => (
+                                  <p key={index} className="card-meta" style={{ margin: '2px 0' }}>
+                                    Option {index + 1}:{' '}
+                                    {option.distanceMeters !== null ? metersLabel(option.distanceMeters) : '?'}
+                                    {option.durationSeconds !== null
+                                      ? `, ~${Math.round(option.durationSeconds / 60)} min`
+                                      : ''}
+                                  </p>
+                                ))}
+                              </div>
+                              <p className="card-meta" style={{ marginTop: 'var(--space-2)' }}>
+                                Rejoin point is estimated ~1 mi past the hazard, not exact -- 511 data doesn't give
+                                the hazard's full extent.
+                              </p>
+                            </>
+                          )}
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
 
               {expandedSignalId === signal.id && (
                 <div
