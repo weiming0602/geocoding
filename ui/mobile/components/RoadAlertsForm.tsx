@@ -7,9 +7,11 @@ import {
   ApiError,
   emailRoadAlert,
   getRoadAlertsPreferences,
+  getRoadAlertsUsername,
   getRoadSignals,
   getTestWeightedPoints,
   updateRoadAlertsPreferences,
+  updateRoadAlertsUsername,
 } from '../../shared/api/client';
 import type { RoadSignal, RoadSignalSeverity } from '../../shared/api/types';
 import { bearingDegrees, haversineDistanceMeters, isAhead } from '../../shared/geo';
@@ -17,11 +19,10 @@ import { findAlertsForWeightedPoints, type WeightedPoint } from '../../shared/ro
 import { colors, radius, space } from '../../shared/theme';
 import RoadAlertsRegistration from './RoadAlertsRegistration';
 import ThemedButton from './ThemedButton';
-import { clearStoredAccount, getStoredAccount } from './roadAlertsStorage';
+import { clearStoredAccount, getStoredAccount, type StoredRoadAlertsAccount } from './roadAlertsStorage';
 import { isSpeechRecognitionAvailable, listenOnce, matchesSaveCommand } from './webSpeechRecognition';
 
 type DetailLevel = 'brief' | 'average' | 'deep';
-type Account = { email: string; serviceKey: string };
 
 const DETAIL_OPTIONS: { label: string; value: DetailLevel }[] = [
   { label: 'Brief', value: 'brief' },
@@ -75,7 +76,7 @@ type Props = {
 export default function RoadAlertsForm({ weightedPoints = [] }: Props) {
   // undefined = still checking stored credentials; null = none found (or
   // cleared) -- show registration; set = ready to use.
-  const [account, setAccount] = useState<Account | null | undefined>(undefined);
+  const [account, setAccount] = useState<StoredRoadAlertsAccount | null | undefined>(undefined);
   const [registrationReason, setRegistrationReason] = useState<string | null>(null);
 
   const [watching, setWatching] = useState(false);
@@ -104,6 +105,14 @@ export default function RoadAlertsForm({ weightedPoints = [] }: Props) {
   // email/serviceKey, not preferences).
   const [digestOptIn, setDigestOptIn] = useState(false);
   const [digestOptInSaving, setDigestOptInSaving] = useState(false);
+  // Display name shown alongside anything the account posts (see
+  // roadAlertsStorage.ts's comment on digestOptIn -- same reasoning:
+  // fetched fresh, not persisted alongside the stored account
+  // credentials, since it can change server-side independent of the
+  // device). null = fetched, not set yet; undefined = not fetched yet.
+  const [username, setUsername] = useState<string | null | undefined>(undefined);
+  const [usernameDraft, setUsernameDraft] = useState('');
+  const [usernameSaving, setUsernameSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [partial, setPartial] = useState(false);
 
@@ -204,6 +213,26 @@ export default function RoadAlertsForm({ weightedPoints = [] }: Props) {
         if (!cancelled) setDigestOptIn(response.digestOptIn);
       } catch {
         if (!cancelled) setDigestOptIn(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [account]);
+
+  // Same best-effort, fetch-fresh pattern as digestOptIn above.
+  useEffect(() => {
+    if (!account) {
+      setUsername(undefined);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const response = await getRoadAlertsUsername({ email: account.email, serviceKey: account.serviceKey });
+        if (!cancelled) setUsername(response.username);
+      } catch {
+        if (!cancelled) setUsername(null);
       }
     })();
     return () => {
@@ -419,6 +448,27 @@ export default function RoadAlertsForm({ weightedPoints = [] }: Props) {
     }
   }, [digestOptIn, digestOptInSaving]);
 
+  const handleSaveUsername = useCallback(async () => {
+    const current = accountRef.current;
+    const trimmed = usernameDraft.trim();
+    if (!current || usernameSaving || !trimmed) return;
+    setUsernameSaving(true);
+    try {
+      const response = await updateRoadAlertsUsername({
+        email: current.email,
+        serviceKey: current.serviceKey,
+        username: trimmed,
+      });
+      setUsername(response.username);
+      setUsernameDraft('');
+    } catch {
+      // Leave the draft in place on failure so the driver doesn't lose
+      // what they typed and can just press the button again.
+    } finally {
+      setUsernameSaving(false);
+    }
+  }, [usernameDraft, usernameSaving]);
+
   // Alerting only runs while this screen is mounted -- App.tsx's tab bar
   // fully unmounts every screen on tab switch (no router, no background
   // task), so stopping here on unmount is both necessary (leaking a
@@ -475,6 +525,35 @@ export default function RoadAlertsForm({ weightedPoints = [] }: Props) {
             loading={digestOptInSaving}
           />
         </View>
+        {username ? (
+          <Text style={[styles.noteText, styles.spacingSmall]}>Posting as {username}.</Text>
+        ) : (
+          username !== undefined && (
+            <View style={styles.spacingSmall}>
+              <Text style={styles.noteText}>
+                Set a display name before posting a comment on a road alert -- shown instead of your
+                email address.
+              </Text>
+              <View style={[styles.spacingSmall, styles.optionRow]}>
+                <TextInput
+                  style={styles.textInput}
+                  placeholder="Display name"
+                  placeholderTextColor={colors.text}
+                  value={usernameDraft}
+                  onChangeText={setUsernameDraft}
+                  autoCapitalize="words"
+                  maxLength={40}
+                />
+                <ThemedButton
+                  title="Save"
+                  onPress={handleSaveUsername}
+                  variant="secondary"
+                  loading={usernameSaving}
+                />
+              </View>
+            </View>
+          )
+        )}
         <View style={styles.spacingSmall}>
           <ThemedButton title="Not you? Use a different email" onPress={handleUseDifferentEmail} variant="ghost" />
         </View>

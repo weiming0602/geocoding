@@ -10,6 +10,7 @@ import type {
   EmailRoadAlertResponse,
   RoadAlertsPreferencesResponse,
   RoadAlertsRegisterResponse,
+  RoadAlertsUsernameResponse,
   RoadSignal,
   RoadSignalsResponse,
   TestWeightedPoint,
@@ -168,6 +169,24 @@ export function updateRoadAlertsPreferences(
   baseUrl = DEFAULT_API_BASE_URL
 ): Promise<RoadAlertsPreferencesResponse> {
   return postJson<RoadAlertsPreferencesResponse>(baseUrl, '/road-alerts/preferences', params);
+}
+
+// The account's current display name -- same fetch-fresh reasoning as
+// preferences above (a stored account carries no profile data of its
+// own). Null until the account has set one.
+export function getRoadAlertsUsername(
+  params: { email: string; serviceKey: string },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<RoadAlertsUsernameResponse> {
+  const qs = new URLSearchParams({ email: params.email, serviceKey: params.serviceKey });
+  return getJson<RoadAlertsUsernameResponse>(baseUrl, `/road-alerts/username?${qs.toString()}`);
+}
+
+export function updateRoadAlertsUsername(
+  params: { email: string; serviceKey: string; username: string },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<RoadAlertsUsernameResponse> {
+  return postJson<RoadAlertsUsernameResponse>(baseUrl, '/road-alerts/username', params);
 }
 
 // Test-only (see geocoding-server/src/testWeightedPoints.js) -- these

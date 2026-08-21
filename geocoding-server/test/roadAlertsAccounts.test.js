@@ -6,6 +6,7 @@ const {
   registerAccount,
   checkAccess,
   updateDigestOptIn,
+  updateUsername,
 } = require('../src/roadAlertsAccounts');
 const { NotFoundError, UnauthorizedError } = require('../src/errors');
 const { makeUsersDb } = require('./helpers');
@@ -20,6 +21,18 @@ test('registerAccount creates a fresh row with a real service key on first call'
   assert.equal(account.created, true);
   assert.ok(account.registered_at);
   assert.equal(account.digest_opt_in, false);
+  assert.equal(account.username, null);
+
+  await db.close();
+});
+
+test('updateUsername sets an account\'s display name', async () => {
+  const db = await makeUsersDb();
+  await ensureRoadAlertsAccountsTable(db);
+  await registerAccount(db, 'alice@example.com');
+
+  const updated = await updateUsername(db, 'alice@example.com', 'Alice R');
+  assert.equal(updated.username, 'Alice R');
 
   await db.close();
 });

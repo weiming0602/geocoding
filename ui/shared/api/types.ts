@@ -199,6 +199,15 @@ export type RoadAlertsPreferencesResponse = {
   digestOptIn: boolean;
 };
 
+// GET/POST /road-alerts/username -- the display name shown alongside
+// anything an account posts (see roadAlertsStatements.js), instead of
+// their email. Null until set; no uniqueness constraint -- v1 has no
+// identity-verification posture, a duplicate name is an acceptable
+// simplification.
+export type RoadAlertsUsernameResponse = {
+  username: string | null;
+};
+
 // /road-alerts/test/weighted-points -- fake, developer-seeded stand-ins
 // for docs/ROAD_ALERTS_DESIGN.md's real (on-device, never server-side)
 // routine subgraph, gated server-side behind ALLOW_TEST_WEIGHTED_POINTS
