@@ -28,6 +28,14 @@ const {
   ensureRoadAlertsSurfacedLogTable,
   insertSurfacedAlert,
 } = require('./roadAlertsSurfacedLog');
+const { ensureRoadAlertsTopicsTable, findTopic, findOrCreateTopic } = require('./roadAlertsTopics');
+const { resolveTlid } = require('./roadAlertsTopicAnchor');
+const {
+  ensureRoadAlertsStatementsTable,
+  getStatement,
+  insertStatement,
+  getStatementsForTopic,
+} = require('./roadAlertsStatements');
 const {
   ensureTestWeightedPointsTable,
   addTestWeightedPoint,
@@ -109,6 +117,8 @@ const usersDbPromise = openUsersDb(USERS_DSN).then(async (pool) => {
   await ensureFeedbackTable(pool);
   await ensureRoadAlertsAccountsTable(pool);
   await ensureRoadAlertsSurfacedLogTable(pool);
+  await ensureRoadAlertsTopicsTable(pool);
+  await ensureRoadAlertsStatementsTable(pool);
   await ensureTestWeightedPointsTable(pool);
   return pool;
 });
@@ -609,6 +619,151 @@ app.post('/road-alerts/username', async (req, res) => {
     const account = await updateUsername(usersDb, email, trimmedUsername);
 
     res.json({ username: account.username });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// The topic (if any) anchored to a road location, and everything
+// posted to it -- see roadAlertsTopics.js for why a topic is anchored
+// to a persistent street segment (tlid) rather than to a volatile 511
+// signal.id. Read-only: uses findTopic, never findOrCreateTopic, so
+// merely viewing an alert never creates a topic nobody's actually
+// commented on. `db` (read-only, the `geocoding` streets database) is
+// used only to resolve the tlid; the topic/statement lookup itself
+// runs against `usersDb` (`geocoding_users`, writable).
+app.get('/road-alerts/topic', async (req, res) => {
+  const { latitude, longitude, email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+    const lat = Number(latitude);
+    const lon = Number(longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+      throw new ValidationError('latitude and longitude must be numbers');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const tlid = await resolveTlid(db, lat, lon);
+    const topic = await findTopic(usersDb, { tlid, latitude: lat, longitude: lon });
+    if (!topic) {
+      return res.json({ topic: null, statements: [] });
+    }
+
+    const statements = await getStatementsForTopic(usersDb, topic.id);
+    res.json({
+      topic: {
+        id: topic.id,
+        tlid: topic.tlid,
+        latitude: topic.latitude,
+        longitude: topic.longitude,
+        roadway: topic.roadway,
+        createdAt: topic.created_at,
+      },
+      statements: statements.map((statement) => ({
+        id: statement.id,
+        username: statement.username,
+        body: statement.body,
+        createdAt: statement.created_at,
+        replies: statement.replies.map((reply) => ({
+          id: reply.id,
+          username: reply.username,
+          body: reply.body,
+          createdAt: reply.created_at,
+          replies: [],
+        })),
+      })),
+    });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Posts a top-level statement on the topic anchored to a location (the
+// only write path that can create a topic -- see roadAlertsTopics.js),
+// or a reply to an existing statement when parentStatementId is given.
+// The one-level-cap enforcement itself lives in insertStatement
+// (roadAlertsStatements.js), not here -- this route only decides
+// whether a topic needs resolving/creating first.
+app.post('/road-alerts/statements', async (req, res) => {
+  const { email, serviceKey, body, latitude, longitude, roadway, parentStatementId } = req.body || {};
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+    const trimmedBody = typeof body === 'string' ? body.trim() : '';
+    if (!trimmedBody || trimmedBody.length > 500) {
+      throw new ValidationError('body must be 1-500 characters');
+    }
+
+    const usersDb = await usersDbPromise;
+    const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
+    if (!account.username) {
+      throw new ValidationError('set a display name before posting a comment');
+    }
+
+    let topicId;
+    if (parentStatementId != null) {
+      // A reply's topic comes from its parent, never from the client --
+      // latitude/longitude are ignored here, so a reply always lands on
+      // the same topic as the statement it's replying to.
+      const parent = await getStatement(usersDb, parentStatementId);
+      if (!parent) {
+        throw new NotFoundError(`no statement found with id ${parentStatementId}`);
+      }
+      topicId = parent.topic_id;
+    } else {
+      const lat = Number(latitude);
+      const lon = Number(longitude);
+      if (!Number.isFinite(lat) || !Number.isFinite(lon)) {
+        throw new ValidationError('latitude and longitude must be numbers for a new statement');
+      }
+      const tlid = await resolveTlid(db, lat, lon);
+      const topic = await findOrCreateTopic(usersDb, {
+        tlid,
+        latitude: lat,
+        longitude: lon,
+        roadway: typeof roadway === 'string' ? roadway : null,
+      });
+      topicId = topic.id;
+    }
+
+    const statement = await insertStatement(usersDb, {
+      topicId,
+      parentStatementId: parentStatementId ?? null,
+      email: account.email,
+      username: account.username,
+      body: trimmedBody,
+    });
+
+    res.json({
+      statement: {
+        id: statement.id,
+        topicId: statement.topic_id,
+        parentStatementId: statement.parent_statement_id,
+        username: statement.username,
+        body: statement.body,
+        createdAt: statement.created_at,
+      },
+      topicId,
+    });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });

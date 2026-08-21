@@ -7,13 +7,15 @@ import {
   ApiError,
   emailRoadAlert,
   getRoadAlertsPreferences,
+  getRoadAlertsTopic,
   getRoadAlertsUsername,
   getRoadSignals,
   getTestWeightedPoints,
+  postRoadAlertsStatement,
   updateRoadAlertsPreferences,
   updateRoadAlertsUsername,
 } from '../../shared/api/client';
-import type { RoadSignal, RoadSignalSeverity } from '../../shared/api/types';
+import type { RoadAlertsTopicResponse, RoadSignal, RoadSignalSeverity } from '../../shared/api/types';
 import { bearingDegrees, haversineDistanceMeters, isAhead } from '../../shared/geo';
 import { findAlertsForWeightedPoints, type WeightedPoint } from '../../shared/roadAlertsMatching';
 import { colors, radius, space } from '../../shared/theme';
@@ -123,6 +125,24 @@ export default function RoadAlertsForm({ weightedPoints = [] }: Props) {
   const [voiceListeningSignalId, setVoiceListeningSignalId] = useState<string | null>(null);
   const [voiceStatusBySignalId, setVoiceStatusBySignalId] = useState<Record<string, string>>({});
   const speechRecognitionAvailable = useMemo(() => isSpeechRecognitionAvailable(), []);
+
+  // Comments on a road topic -- one panel open at a time (expandedSignalId),
+  // matching the existing one-mic-session-at-a-time philosophy above.
+  // topicBySignalId holds either the fetched topic/statements, 'loading'
+  // while the fetch is in flight, or 'error' if it failed.
+  const [expandedSignalId, setExpandedSignalId] = useState<string | null>(null);
+  const [topicBySignalId, setTopicBySignalId] = useState<Record<string, RoadAlertsTopicResponse | 'loading' | 'error'>>(
+    {}
+  );
+  const [draftStatementBySignalId, setDraftStatementBySignalId] = useState<Record<string, string>>({});
+  const [replyingToStatementId, setReplyingToStatementId] = useState<number | null>(null);
+  const [draftReplyText, setDraftReplyText] = useState('');
+  const [postingSignalId, setPostingSignalId] = useState<string | null>(null);
+  // Separate from voiceListeningSignalId (the save-command mic) on
+  // purpose -- lower risk of regressing that already-working feature by
+  // overloading its state with a second, differently-shaped use case.
+  const [voiceListeningStatementSignalId, setVoiceListeningStatementSignalId] = useState<string | null>(null);
+  const [voiceStatementStatusBySignalId, setVoiceStatementStatusBySignalId] = useState<Record<string, string>>({});
 
   // Manual testing input -- typed coordinates (+ optional heading) in
   // place of a real GPS fix, so a specific "approaching a hazard" scenario
@@ -469,6 +489,177 @@ export default function RoadAlertsForm({ weightedPoints = [] }: Props) {
     }
   }, [usernameDraft, usernameSaving]);
 
+  const handleToggleComments = useCallback(
+    async (signal: RoadSignal) => {
+      if (expandedSignalId === signal.id) {
+        setExpandedSignalId(null);
+        return;
+      }
+      setExpandedSignalId(signal.id);
+      setReplyingToStatementId(null);
+      if (topicBySignalId[signal.id]) return; // already fetched once this session
+
+      const current = accountRef.current;
+      if (!current || typeof signal.latitude !== 'number' || typeof signal.longitude !== 'number') return;
+
+      setTopicBySignalId((prev) => ({ ...prev, [signal.id]: 'loading' }));
+      try {
+        const response = await getRoadAlertsTopic({
+          latitude: signal.latitude,
+          longitude: signal.longitude,
+          email: current.email,
+          serviceKey: current.serviceKey,
+        });
+        setTopicBySignalId((prev) => ({ ...prev, [signal.id]: response }));
+      } catch {
+        setTopicBySignalId((prev) => ({ ...prev, [signal.id]: 'error' }));
+      }
+    },
+    [expandedSignalId, topicBySignalId]
+  );
+
+  const handlePostStatement = useCallback(
+    async (signal: RoadSignal) => {
+      const current = accountRef.current;
+      const body = (draftStatementBySignalId[signal.id] ?? '').trim();
+      if (!current || !body || postingSignalId) return;
+      if (typeof signal.latitude !== 'number' || typeof signal.longitude !== 'number') return;
+
+      setPostingSignalId(signal.id);
+      try {
+        const response = await postRoadAlertsStatement({
+          email: current.email,
+          serviceKey: current.serviceKey,
+          body,
+          latitude: signal.latitude,
+          longitude: signal.longitude,
+          roadway: signal.roadway ?? undefined,
+        });
+        setTopicBySignalId((prev) => {
+          const existing = prev[signal.id];
+          const topic =
+            existing && existing !== 'loading' && existing !== 'error' && existing.topic
+              ? existing.topic
+              : {
+                  id: response.topicId,
+                  tlid: null,
+                  latitude: signal.latitude as number,
+                  longitude: signal.longitude as number,
+                  roadway: signal.roadway ?? null,
+                  createdAt: response.statement.createdAt,
+                };
+          const priorStatements =
+            existing && existing !== 'loading' && existing !== 'error' ? existing.statements : [];
+          return {
+            ...prev,
+            [signal.id]: {
+              topic,
+              statements: [
+                ...priorStatements,
+                {
+                  id: response.statement.id,
+                  username: response.statement.username,
+                  body: response.statement.body,
+                  createdAt: response.statement.createdAt,
+                  replies: [],
+                },
+              ],
+            },
+          };
+        });
+        setDraftStatementBySignalId((prev) => ({ ...prev, [signal.id]: '' }));
+      } catch {
+        // Leave the draft in place on failure so the driver doesn't lose
+        // what they typed/dictated and can just press Post again.
+      } finally {
+        setPostingSignalId(null);
+      }
+    },
+    [draftStatementBySignalId, postingSignalId]
+  );
+
+  const handlePostReply = useCallback(
+    async (signal: RoadSignal, parentStatementId: number) => {
+      const current = accountRef.current;
+      const body = draftReplyText.trim();
+      if (!current || !body || postingSignalId) return;
+
+      setPostingSignalId(signal.id);
+      try {
+        const response = await postRoadAlertsStatement({
+          email: current.email,
+          serviceKey: current.serviceKey,
+          body,
+          parentStatementId,
+        });
+        setTopicBySignalId((prev) => {
+          const existing = prev[signal.id];
+          if (!existing || existing === 'loading' || existing === 'error') return prev;
+          return {
+            ...prev,
+            [signal.id]: {
+              ...existing,
+              statements: existing.statements.map((statement) =>
+                statement.id === parentStatementId
+                  ? {
+                      ...statement,
+                      replies: [
+                        ...statement.replies,
+                        {
+                          id: response.statement.id,
+                          username: response.statement.username,
+                          body: response.statement.body,
+                          createdAt: response.statement.createdAt,
+                          replies: [],
+                        },
+                      ],
+                    }
+                  : statement
+              ),
+            },
+          };
+        });
+        setDraftReplyText('');
+        setReplyingToStatementId(null);
+      } catch {
+        // Leave the draft in place on failure, same reasoning as
+        // handlePostStatement above.
+      } finally {
+        setPostingSignalId(null);
+      }
+    },
+    [draftReplyText, postingSignalId]
+  );
+
+  // Shared voice-capture for both the top-level composer and a reply
+  // composer -- takes the raw transcript directly as the draft text (no
+  // trigger-phrase matching, unlike the save command above: this is
+  // freeform dictation, not a fixed command), populating the draft for
+  // the driver to review before pressing Post rather than auto-posting
+  // public content the way "save" auto-emails.
+  const handleListenForComment = useCallback(
+    async (signal: RoadSignal, onTranscript: (transcript: string) => void) => {
+      if (voiceListeningSignalId || voiceListeningStatementSignalId) return;
+
+      setVoiceListeningStatementSignalId(signal.id);
+      setVoiceStatementStatusBySignalId((prev) => ({ ...prev, [signal.id]: 'Listening…' }));
+      try {
+        const transcript = await listenOnce();
+        if (!transcript) {
+          setVoiceStatementStatusBySignalId((prev) => ({ ...prev, [signal.id]: "Didn't catch anything." }));
+          return;
+        }
+        onTranscript(transcript);
+        setVoiceStatementStatusBySignalId((prev) => ({ ...prev, [signal.id]: '' }));
+      } catch {
+        setVoiceStatementStatusBySignalId((prev) => ({ ...prev, [signal.id]: 'Could not check the microphone.' }));
+      } finally {
+        setVoiceListeningStatementSignalId(null);
+      }
+    },
+    [voiceListeningSignalId, voiceListeningStatementSignalId]
+  );
+
   // Alerting only runs while this screen is mounted -- App.tsx's tab bar
   // fully unmounts every screen on tab switch (no router, no background
   // task), so stopping here on unmount is both necessary (leaking a
@@ -705,9 +896,130 @@ export default function RoadAlertsForm({ weightedPoints = [] }: Props) {
                     variant="ghost"
                   />
                 )}
+                <ThemedButton
+                  title={expandedSignalId === signal.id ? 'Hide comments' : 'Comments'}
+                  onPress={() => handleToggleComments(signal)}
+                  variant="ghost"
+                />
               </View>
               {voiceStatusBySignalId[signal.id] && (
                 <Text style={styles.cardMeta}>{voiceStatusBySignalId[signal.id]}</Text>
+              )}
+              {expandedSignalId === signal.id && (
+                <View style={styles.commentsPanel}>
+                  {(() => {
+                    const topicState = topicBySignalId[signal.id];
+                    if (topicState === 'loading') {
+                      return <Text style={styles.cardMeta}>Loading comments…</Text>;
+                    }
+                    if (topicState === 'error') {
+                      return <Text style={styles.cardMeta}>Could not load comments.</Text>;
+                    }
+                    const statements = topicState?.statements ?? [];
+                    return (
+                      <>
+                        {statements.length === 0 && (
+                          <Text style={styles.cardMeta}>No comments here yet.</Text>
+                        )}
+                        {statements.map((statement) => (
+                          <View key={statement.id} style={styles.spacingSmall}>
+                            <Text style={styles.cardMeta}>
+                              {statement.username} · {new Date(statement.createdAt).toLocaleString()}
+                            </Text>
+                            <Text style={styles.bodyText}>{statement.body}</Text>
+                            {statement.replies.map((reply) => (
+                              <View key={reply.id} style={styles.replyIndent}>
+                                <Text style={styles.cardMeta}>
+                                  {reply.username} · {new Date(reply.createdAt).toLocaleString()}
+                                </Text>
+                                <Text style={styles.bodyText}>{reply.body}</Text>
+                              </View>
+                            ))}
+                            {username &&
+                              (replyingToStatementId === statement.id ? (
+                                <View style={styles.spacingSmall}>
+                                  <View style={styles.optionRow}>
+                                    <TextInput
+                                      style={styles.textInput}
+                                      placeholder="Reply"
+                                      placeholderTextColor={colors.text}
+                                      value={draftReplyText}
+                                      onChangeText={setDraftReplyText}
+                                    />
+                                    {speechRecognitionAvailable && (
+                                      <ThemedButton
+                                        title={
+                                          voiceListeningStatementSignalId === signal.id ? 'Listening…' : '🎤'
+                                        }
+                                        onPress={() => handleListenForComment(signal, setDraftReplyText)}
+                                        variant="ghost"
+                                      />
+                                    )}
+                                  </View>
+                                  <View style={styles.optionRow}>
+                                    <ThemedButton
+                                      title="Post reply"
+                                      onPress={() => handlePostReply(signal, statement.id)}
+                                      variant="primary"
+                                      loading={postingSignalId === signal.id}
+                                    />
+                                    <ThemedButton
+                                      title="Cancel"
+                                      onPress={() => setReplyingToStatementId(null)}
+                                      variant="ghost"
+                                    />
+                                  </View>
+                                </View>
+                              ) : (
+                                <ThemedButton
+                                  title="Reply"
+                                  onPress={() => setReplyingToStatementId(statement.id)}
+                                  variant="ghost"
+                                />
+                              ))}
+                          </View>
+                        ))}
+                        {username ? (
+                          <View style={styles.spacingSmall}>
+                            <View style={styles.optionRow}>
+                              <TextInput
+                                style={styles.textInput}
+                                placeholder="Add a comment"
+                                placeholderTextColor={colors.text}
+                                value={draftStatementBySignalId[signal.id] ?? ''}
+                                onChangeText={(text) =>
+                                  setDraftStatementBySignalId((prev) => ({ ...prev, [signal.id]: text }))
+                                }
+                              />
+                              {speechRecognitionAvailable && (
+                                <ThemedButton
+                                  title={voiceListeningStatementSignalId === signal.id ? 'Listening…' : '🎤'}
+                                  onPress={() =>
+                                    handleListenForComment(signal, (transcript) =>
+                                      setDraftStatementBySignalId((prev) => ({ ...prev, [signal.id]: transcript }))
+                                    )
+                                  }
+                                  variant="ghost"
+                                />
+                              )}
+                            </View>
+                            <ThemedButton
+                              title="Post"
+                              onPress={() => handlePostStatement(signal)}
+                              variant="primary"
+                              loading={postingSignalId === signal.id}
+                            />
+                            {voiceStatementStatusBySignalId[signal.id] && (
+                              <Text style={styles.cardMeta}>{voiceStatementStatusBySignalId[signal.id]}</Text>
+                            )}
+                          </View>
+                        ) : (
+                          <Text style={styles.cardMeta}>Set a display name above to post a comment.</Text>
+                        )}
+                      </>
+                    );
+                  })()}
+                </View>
               )}
             </View>
           );
@@ -840,5 +1152,15 @@ const styles = StyleSheet.create({
   errorText: {
     fontFamily: 'Lora_400Regular',
     color: colors.errorText,
+  },
+  commentsPanel: {
+    marginTop: space[3],
+    paddingTop: space[3],
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+  },
+  replyIndent: {
+    marginLeft: space[3],
+    marginTop: space[1],
   },
 });
