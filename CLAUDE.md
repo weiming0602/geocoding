@@ -198,6 +198,22 @@ read-write).
   download/export matched addresses as a plain address list ready to
   feed straight into Batch geocode / Import Addresses -- this search
   itself does not use Meridian's own geocoding.
+- `GET /road-signals/reroute` (`geocoding-server/src/roadReroute.js`,
+  `ui/desktop`'s Road Alerts page's "Show a way around this" button) asks
+  OpenRouteService for 1-2 alternate driving routes from the driver's
+  current position to a point past a hazard, avoiding a small buffer
+  circle around the hazard itself. `ORS_API_KEY` (unset by default) is
+  required -- without it the route returns a 400 rather than ever
+  calling out. `ORS_BASE_URL` (default
+  `https://api.openrouteservice.org`) can point at a different ORS
+  instance. Since the underlying 511 feed only gives a single point per
+  hazard (no end-of-span data anywhere in `roadSignals.js`), the
+  "rejoin point" the route targets is a flat-plane projection a fixed
+  distance past the hazard along the driver's heading (or the
+  driver-to-hazard bearing if no heading is known) -- an estimate,
+  labeled as such in the response and the UI, not real hazard-extent
+  data. Any ORS failure/timeout/non-2xx throws `UpstreamError` (502),
+  same convention as `/places/search`.
 - `FEEDBACK_NOTIFY_EMAIL` (optional -- unset = stub) is where `POST
   /feedback` emails you when a comment/question comes in; uses the same
   SES credentials above. The comment is saved in `geocoding_users`'
