@@ -61,6 +61,18 @@
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 18px;
+  --radius-xl: 22px;
+
+  /* Icon-nav system (Layout.tsx, PageHeader.tsx): a single calm color for
+     every icon, with amber reserved for whichever page is currently open --
+     deliberately more saturated than --color-accent's muted gold, since the
+     old ramp read as too flat for icon tiles at this size. The tint/text
+     pair for the active pill reuses --color-accent-100/800 exactly (same
+     values), so it stays visually part of the existing accent family. */
+  --color-icon-default: #2fd1ac;
+  --color-icon-active: #f2a52d;
+  --color-icon-active-tint: var(--color-accent-100);
+  --color-icon-active-tint-text: var(--color-accent-800);
 
   --transition-fast: 150ms ease;
 
@@ -230,12 +242,34 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
   position: relative;
 }
 .nav-brand {
+  display: flex; align-items: center; gap: var(--space-2);
   font-family: var(--font-heading); font-weight: var(--font-heading-weight);
   font-size: 20px; margin-right: auto;
 }
-.nav-links { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
-.nav a { color: inherit; text-decoration: none; font-size: 15px; transition: color var(--transition-fast); white-space: nowrap; }
-.nav a:hover, .nav a[aria-current='page'] { color: var(--color-accent); }
+.nav-brand svg { color: var(--color-icon-active); }
+.nav-links { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.nav-item {
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px 12px 6px 6px; border-radius: 999px;
+  color: inherit; text-decoration: none; font-size: 14px; white-space: nowrap;
+  transition: background var(--transition-fast), color var(--transition-fast);
+}
+.nav-item:hover:not(.active) { background: color-mix(in srgb, var(--color-text) 6%, transparent); }
+.nav-item-tile {
+  width: 28px; height: 28px; border-radius: 9px; flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--color-icon-default); color: #fff;
+}
+.nav-item.active { font-weight: 600; background: var(--color-icon-active-tint); color: var(--color-icon-active-tint-text); }
+.nav-item.active .nav-item-tile { background: var(--color-icon-active); }
+
+/* Overview's task cards link to other pages, so their tiles stay the
+   default teal -- amber is reserved for wherever you already are. */
+.task-icon-tile {
+  width: 36px; height: 36px; border-radius: var(--radius-md); flex: none;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--color-icon-default); color: #fff;
+}
 
 /* Hidden above the breakpoint -- .nav-links stays a plain always-visible
    row there, same as before the toggle existed. */
@@ -264,11 +298,12 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
     padding: var(--space-2) var(--space-4) var(--space-4);
   }
   .nav-links.nav-links-open { display: flex; }
-  .nav-links a {
+  .nav-links .nav-item {
     padding: var(--space-3) 0;
     border-bottom: 1px solid var(--color-divider);
+    border-radius: 0;
   }
-  .nav-links a:last-child { border-bottom: none; }
+  .nav-links .nav-item:last-child { border-bottom: none; }
 }
 
 /* — install banner — */

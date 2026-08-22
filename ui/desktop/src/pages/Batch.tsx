@@ -4,6 +4,7 @@ import { Link, useLocation } from 'react-router';
 import { batchGeocode, batchGeocodeDownload } from '../../../shared/api/client';
 import type { BatchResult, BatchSource } from '../../../shared/api/types';
 import BatchMapView from '../components/BatchMapView';
+import PageHeader from '../components/PageHeader';
 
 type ForwardedFile = { fileContent: string; fileName?: string; ids?: string[] };
 
@@ -159,7 +160,7 @@ export default function Batch() {
 
   return (
     <div>
-      <h1>Batch geocoding</h1>
+      <PageHeader icon="batch">Batch geocoding</PageHeader>
       <p className="text-muted" style={{ marginBottom: arrivedFromImport ? 'var(--space-3)' : 'var(--space-6)' }}>
         Matches /geocode/batch — one address per line, checked against your account's monthly quota.
         Upload a file, or (if this app and geocoding-server share a filesystem) point at a

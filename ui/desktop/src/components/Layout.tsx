@@ -3,20 +3,21 @@ import { NavLink } from 'react-router';
 import type { ReactNode } from 'react';
 
 import { isMobileDevice } from '../deviceDetection';
+import { BrandMark, Icon, type IconName } from './icons';
 import InstallAppBanner from './InstallAppBanner';
 import MobileRedirectBanner, { MOBILE_APP_URL } from './MobileRedirectBanner';
 
-const NAV_LINKS = [
-  { to: '/', label: 'Overview', end: true },
-  { to: '/geocode', label: 'Geocode' },
-  { to: '/reverse-geocode', label: 'Reverse geocode' },
-  { to: '/find-places', label: 'Find places' },
-  { to: '/import-addresses', label: 'Import addresses' },
-  { to: '/batch', label: 'Batch' },
-  { to: '/plan-quota', label: 'Plan & quota' },
-  { to: '/pricing', label: 'Pricing' },
-  { to: '/progress', label: 'Progress' },
-  { to: '/help', label: 'Help' },
+const NAV_LINKS: { to: string; label: string; icon: IconName; end?: boolean }[] = [
+  { to: '/', label: 'Overview', icon: 'overview', end: true },
+  { to: '/geocode', label: 'Geocode', icon: 'geocode' },
+  { to: '/reverse-geocode', label: 'Reverse geocode', icon: 'reverseGeocode' },
+  { to: '/find-places', label: 'Find places', icon: 'findPlaces' },
+  { to: '/import-addresses', label: 'Import addresses', icon: 'importAddresses' },
+  { to: '/batch', label: 'Batch', icon: 'batch' },
+  { to: '/plan-quota', label: 'Plan & quota', icon: 'planQuota' },
+  { to: '/pricing', label: 'Pricing', icon: 'pricing' },
+  { to: '/progress', label: 'Progress', icon: 'progress' },
+  { to: '/help', label: 'Help', icon: 'help' },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
@@ -45,7 +46,10 @@ export default function Layout({ children }: { children: ReactNode }) {
     >
       {showMobileRedirect ? <MobileRedirectBanner /> : <InstallAppBanner />}
       <nav className="nav">
-        <div className="nav-brand">Meridian</div>
+        <div className="nav-brand">
+          <BrandMark size={26} />
+          Meridian
+        </div>
         <button
           type="button"
           className="nav-toggle"
@@ -79,8 +83,11 @@ export default function Layout({ children }: { children: ReactNode }) {
               to={link.to}
               end={link.end}
               onClick={() => setMenuOpen(false)}
-              style={({ isActive }) => (isActive ? { color: 'var(--color-accent)' } : undefined)}
+              className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
             >
+              <span className="nav-item-tile">
+                <Icon name={link.icon} size={16} />
+              </span>
               {link.label}
             </NavLink>
           ))}

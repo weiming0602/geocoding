@@ -3,6 +3,7 @@ import { useCallback, useState } from 'react';
 import { searchPlaces } from '../../../shared/api/client';
 import type { PlaceResult } from '../../../shared/api/types';
 import MapView from '../components/MapView';
+import PageHeader from '../components/PageHeader';
 
 const RADIUS_OPTIONS = [
   { label: '1 km', meters: 1000 },
@@ -74,7 +75,7 @@ export default function FindPlaces() {
 
   return (
     <div>
-      <h1>Find places</h1>
+      <PageHeader icon="findPlaces">Find places</PageHeader>
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         Search for a kind of place (via OpenStreetMap) near a point you click on the map -- or
         just type where, e.g. "barber shop near Brunswick, Maine" -- then download the results as

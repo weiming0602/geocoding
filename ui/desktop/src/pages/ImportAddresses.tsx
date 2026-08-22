@@ -10,6 +10,7 @@ import {
   isGeocodableAddressLine,
   type ColumnRole,
 } from '../../../shared/importAddresses';
+import PageHeader from '../components/PageHeader';
 import { ALL_FILTER_VALUE, useImportAddressesState, type StatusFilter } from '../state/ImportAddressesState';
 
 export type { ColumnRole } from '../../../shared/importAddresses';
@@ -201,7 +202,7 @@ export default function ImportAddresses() {
 
   return (
     <div>
-      <h1>Import addresses</h1>
+      <PageHeader icon="importAddresses">Import addresses</PageHeader>
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         Upload a CSV or Excel export -- even one with street number, street name, city, and state
         or ZIP split across separate columns -- map which column is which, and download a clean
