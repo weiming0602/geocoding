@@ -12,6 +12,7 @@ const NAV_LINKS: { to: string; label: string; icon: IconName; end?: boolean }[] 
   { to: '/geocode', label: 'Geocode', icon: 'geocode' },
   { to: '/reverse-geocode', label: 'Reverse geocode', icon: 'reverseGeocode' },
   { to: '/find-places', label: 'Find places', icon: 'findPlaces' },
+  { to: '/road-alerts', label: 'Road Alerts', icon: 'roadAlerts' },
   { to: '/import-addresses', label: 'Import addresses', icon: 'importAddresses' },
   { to: '/batch', label: 'Batch', icon: 'batch' },
   { to: '/plan-quota', label: 'Plan & quota', icon: 'planQuota' },
