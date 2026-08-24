@@ -1,186 +1,121 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { ValidationError, UpstreamError } = require('../src/errors');
+const { OutOfRangeError, NotFoundError } = require('../src/errors');
+const { getRoadReroute, buildPathGeometry, MAX_HAZARD_DISTANCE_METERS } = require('../src/roadReroute');
+const { createTestDatabase } = require('./helpers');
+const { seedRoadRerouteFixture, DRIVER, HAZARD, REJOIN } = require('./roadRerouteFixture');
 
-// getRoadReroute reads process.env.ORS_API_KEY live (not captured once at
-// module load, see roadReroute.js) and calls the global fetch -- each
-// test below sets/restores both, matching placesSearch.test.js's
-// withFetch pattern for the fetch half.
-// `apiKey: null` means "delete it" -- distinct from omitting the option
-// entirely, since `{ apiKey: undefined }` would otherwise silently fall
-// through to the 'test-key' default (a destructuring default applies to
-// an explicit `undefined` value, not just a missing key) and defeat the
-// "not configured" test below.
-function withOrs({ apiKey = 'test-key', fakeFetch } = {}, fn) {
-  return async () => {
-    const savedKey = process.env.ORS_API_KEY;
-    const savedFetch = global.fetch;
-    if (apiKey === null) delete process.env.ORS_API_KEY;
-    else process.env.ORS_API_KEY = apiKey;
-    if (fakeFetch) global.fetch = fakeFetch;
-    try {
-      await fn();
-    } finally {
-      if (savedKey === undefined) delete process.env.ORS_API_KEY;
-      else process.env.ORS_API_KEY = savedKey;
-      global.fetch = savedFetch;
-    }
-  };
+// buildPathGeometry is pure/synchronous -- no database needed to exercise
+// its forward/backward-edge and shared-endpoint-dedup logic directly.
+test('buildPathGeometry uses an edge as-is when the path departs from its source', () => {
+  const edgesById = new Map([[1, { source: 10, target: 20, coordinates: [[0, 0], [1, 1]] }]]);
+  const geometry = buildPathGeometry(
+    [
+      { node: 10, edge: 1 },
+      { node: 20, edge: -1 },
+    ],
+    edgesById
+  );
+  assert.deepEqual(geometry, [[0, 0], [1, 1]]);
+});
+
+test('buildPathGeometry reverses an edge when the path departs from its target', () => {
+  const edgesById = new Map([[1, { source: 10, target: 20, coordinates: [[0, 0], [1, 1]] }]]);
+  const geometry = buildPathGeometry(
+    [
+      { node: 20, edge: 1 },
+      { node: 10, edge: -1 },
+    ],
+    edgesById
+  );
+  assert.deepEqual(geometry, [[1, 1], [0, 0]]);
+});
+
+test('buildPathGeometry drops the duplicate point shared between two consecutive edges', () => {
+  const edgesById = new Map([
+    [1, { source: 10, target: 20, coordinates: [[0, 0], [1, 1]] }],
+    [2, { source: 20, target: 30, coordinates: [[1, 1], [2, 2]] }],
+  ]);
+  const geometry = buildPathGeometry(
+    [
+      { node: 10, edge: 1 },
+      { node: 20, edge: 2 },
+      { node: 30, edge: -1 },
+    ],
+    edgesById
+  );
+  assert.deepEqual(geometry, [[0, 0], [1, 1], [2, 2]]);
+});
+
+async function makeFixtureDb() {
+  const { pool, drop } = await createTestDatabase({ postgis: true, pgrouting: true });
+  await seedRoadRerouteFixture(pool);
+  pool.close = drop;
+  return pool;
 }
 
-test('circlePolygon returns a closed ring of the requested point count around the center', () => {
-  const { circlePolygon } = require('../src/roadReroute');
-  const ring = circlePolygon(43.66, -70.26, 150, 8);
-  assert.equal(ring.length, 9); // 8 points + closing point back to the first
-  assert.deepEqual(ring[0], ring[8]);
-  // Every point should be roughly 150m from the center -- loosely check
-  // the ring isn't degenerate (all points identical) or wildly too big.
-  const [lon0, lat0] = ring[0];
-  assert.notEqual(lon0, -70.26);
-  assert.ok(Math.abs(lat0 - 43.66) < 0.01); // well within 150m in degrees
-});
+test('getRoadReroute returns 2 distinct detours around the hazard, neither using the blocked direct path', async () => {
+  const db = await makeFixtureDb();
+  const result = await getRoadReroute(db, {
+    driverLatitude: DRIVER.latitude,
+    driverLongitude: DRIVER.longitude,
+    hazardLatitude: HAZARD.latitude,
+    hazardLongitude: HAZARD.longitude,
+  });
 
-test('isOrsConfigured reflects ORS_API_KEY live, not a value captured at require time', () => {
-  const { isOrsConfigured } = require('../src/roadReroute');
-  const saved = process.env.ORS_API_KEY;
-  try {
-    delete process.env.ORS_API_KEY;
-    assert.equal(isOrsConfigured(), false);
-    process.env.ORS_API_KEY = 'some-key';
-    assert.equal(isOrsConfigured(), true);
-  } finally {
-    if (saved === undefined) delete process.env.ORS_API_KEY;
-    else process.env.ORS_API_KEY = saved;
+  assert.equal(result.options.length, 2);
+  for (const option of result.options) {
+    assert.equal(option.geometry.type, 'LineString');
+    assert.equal(option.durationSeconds, null);
+    // The direct (blocked) path is exactly 2000m (500m to the hazard +
+    // 1500m rejoin); either detour is ~2445m (two ~222m north/south legs
+    // plus the ~2000m crossing) -- comfortably above 2000m proves this
+    // option took a detour, not the excluded direct edges.
+    assert.ok(option.distanceMeters > 2200 && option.distanceMeters < 2600, option.distanceMeters);
+
+    const coords = option.geometry.coordinates;
+    assert.ok(Math.abs(coords[0][0] - DRIVER.longitude) < 0.0001 && Math.abs(coords[0][1] - DRIVER.latitude) < 0.0001);
+    const last = coords[coords.length - 1];
+    assert.ok(Math.abs(last[0] - REJOIN.longitude) < 0.0001 && Math.abs(last[1] - REJOIN.latitude) < 0.0001);
   }
+
+  assert.ok(Math.abs(result.rejoinPoint.latitude - REJOIN.latitude) < 1e-9);
+  assert.ok(Math.abs(result.rejoinPoint.longitude - REJOIN.longitude) < 1e-9);
+
+  await db.close();
 });
 
-test(
-  'getRoadReroute throws ValidationError when ORS_API_KEY is not set',
-  withOrs(
-    {
-      apiKey: null,
-      // Safety net: if the "not configured" guard didn't fire first, this
-      // would throw instead of silently making a real network call.
-      fakeFetch: async () => {
-        throw new Error('fetch should not be called when ORS_API_KEY is unset');
-      },
-    },
-    async () => {
-      const { getRoadReroute } = require('../src/roadReroute');
-      await assert.rejects(
-        () =>
-          getRoadReroute({
-            driverLatitude: 43.66,
-            driverLongitude: -70.26,
-            hazardLatitude: 43.665,
-            hazardLongitude: -70.255,
-          }),
-        ValidationError
-      );
-    }
-  )
-);
+test('getRoadReroute throws OutOfRangeError when the hazard is farther than the max range', async () => {
+  const db = await makeFixtureDb();
+  await assert.rejects(
+    () =>
+      getRoadReroute(db, {
+        driverLatitude: DRIVER.latitude,
+        driverLongitude: DRIVER.longitude,
+        hazardLatitude: DRIVER.latitude + 1, // ~111km north -- well beyond the max
+        hazardLongitude: DRIVER.longitude,
+      }),
+    OutOfRangeError
+  );
+  assert.ok(MAX_HAZARD_DISTANCE_METERS > 0);
+  await db.close();
+});
 
-test(
-  'getRoadReroute throws ValidationError when the hazard is farther than the max range',
-  withOrs({}, async () => {
-    const { getRoadReroute, MAX_HAZARD_DISTANCE_METERS } = require('../src/roadReroute');
-    await assert.rejects(
-      () =>
-        getRoadReroute({
-          driverLatitude: 43.66,
-          driverLongitude: -70.26,
-          hazardLatitude: 45.0, // far north of Portland, well beyond the max
-          hazardLongitude: -70.26,
-        }),
-      ValidationError
-    );
-    assert.ok(MAX_HAZARD_DISTANCE_METERS > 0);
-  })
-);
-
-test(
-  'getRoadReroute maps an ORS GeoJSON response into { options, rejoinPoint }',
-  withOrs(
-    {
-      fakeFetch: async (url, opts) => {
-        const body = JSON.parse(opts.body);
-        assert.equal(opts.headers.Authorization, 'test-key');
-        assert.ok(Array.isArray(body.coordinates) && body.coordinates.length === 2);
-        assert.equal(body.options.avoid_polygons.type, 'Polygon');
-        return {
-          ok: true,
-          json: async () => ({
-            features: [
-              {
-                geometry: { type: 'LineString', coordinates: [[-70.26, 43.66], [-70.24, 43.674]] },
-                properties: { summary: { distance: 1600, duration: 120 } },
-              },
-              {
-                geometry: { type: 'LineString', coordinates: [[-70.26, 43.66], [-70.242, 43.673]] },
-                properties: { summary: { distance: 1750, duration: 140 } },
-              },
-            ],
-          }),
-        };
-      },
-    },
-    async () => {
-      const { getRoadReroute } = require('../src/roadReroute');
-      const result = await getRoadReroute({
-        driverLatitude: 43.66,
-        driverLongitude: -70.26,
-        driverHeading: 45,
-        hazardLatitude: 43.665,
-        hazardLongitude: -70.255,
-      });
-      assert.equal(result.options.length, 2);
-      assert.equal(result.options[0].distanceMeters, 1600);
-      assert.equal(result.options[1].durationSeconds, 140);
-      assert.equal(typeof result.rejoinPoint.latitude, 'number');
-      assert.equal(typeof result.rejoinPoint.longitude, 'number');
-    }
-  )
-);
-
-test(
-  'getRoadReroute throws UpstreamError when ORS itself fails',
-  withOrs({ fakeFetch: async () => ({ ok: false, status: 503 }) }, async () => {
-    const { getRoadReroute } = require('../src/roadReroute');
-    await assert.rejects(
-      () =>
-        getRoadReroute({
-          driverLatitude: 43.66,
-          driverLongitude: -70.26,
-          hazardLatitude: 43.665,
-          hazardLongitude: -70.255,
-        }),
-      UpstreamError
-    );
-  })
-);
-
-test(
-  'getRoadReroute throws UpstreamError when the request itself fails/times out',
-  withOrs(
-    {
-      fakeFetch: async () => {
-        throw new Error('timeout');
-      },
-    },
-    async () => {
-      const { getRoadReroute } = require('../src/roadReroute');
-      await assert.rejects(
-        () =>
-          getRoadReroute({
-            driverLatitude: 43.66,
-            driverLongitude: -70.26,
-            hazardLatitude: 43.665,
-            hazardLongitude: -70.255,
-          }),
-        UpstreamError
-      );
-    }
-  )
-);
+test('getRoadReroute throws NotFoundError when the driver is not near any routable street data', async () => {
+  const db = await makeFixtureDb();
+  // ~4000m south of the hazard -- within MAX_HAZARD_DISTANCE_METERS of it
+  // (so the distance guard doesn't fire first), but nowhere near any of
+  // the fixture's seeded nodes (all within ~2000m of the origin band).
+  await assert.rejects(
+    () =>
+      getRoadReroute(db, {
+        driverLatitude: HAZARD.latitude - 4000 / 111320,
+        driverLongitude: HAZARD.longitude,
+        hazardLatitude: HAZARD.latitude,
+        hazardLongitude: HAZARD.longitude,
+      }),
+    NotFoundError
+  );
+  await db.close();
+});

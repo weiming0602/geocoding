@@ -915,10 +915,10 @@ app.get('/road-signals/cross-street', async (req, res) => {
 });
 
 // 1-2 alternate driving routes past the hazard, avoiding a buffer around
-// it -- see roadReroute.js for the rejoin-point estimate and why an
-// external routing service (OpenRouteService) is used instead of the
-// `streets` table (no real topology/routing exists there, same
-// limitation nextCrossStreet.js works around differently). Same
+// it -- see roadReroute.js for the rejoin-point estimate and the
+// pgRouting/pgr_ksp query against our own `streets`-derived topology
+// (streets_topology_nodes/streets_routing_edges, built by
+// routing_topology.py) -- no external routing service. Same
 // client-resends-the-hazard's-own-coordinates reasoning as
 // /road-signals/cross-street above.
 app.get('/road-signals/reroute', async (req, res) => {
@@ -935,7 +935,7 @@ app.get('/road-signals/reroute', async (req, res) => {
     const usersDb = await usersDbPromise;
     await checkRoadAlertsAccess(usersDb, email, serviceKey);
 
-    const result = await getRoadReroute({
+    const result = await getRoadReroute(db, {
       driverLatitude: driverLatitude !== undefined ? Number(driverLatitude) : undefined,
       driverLongitude: driverLongitude !== undefined ? Number(driverLongitude) : undefined,
       driverHeading: driverHeading !== undefined ? Number(driverHeading) : undefined,
@@ -948,7 +948,7 @@ app.get('/road-signals/reroute', async (req, res) => {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
     if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
-    if (err instanceof UpstreamError) return res.status(502).json({ error: err.message });
+    if (err instanceof OutOfRangeError) return res.status(422).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: 'internal error' });
   }

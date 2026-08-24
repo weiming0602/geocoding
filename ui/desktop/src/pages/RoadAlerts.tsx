@@ -956,7 +956,8 @@ export default function RoadAlerts() {
                               </div>
                               <p className="card-meta" style={{ marginTop: 'var(--space-2)' }}>
                                 Rejoin point is estimated ~1 mi past the hazard, not exact -- 511 data doesn't give
-                                the hazard's full extent.
+                                the hazard's full extent. Routes are based on street connectivity only -- they
+                                don't account for one-way streets.
                               </p>
                             </>
                           )}

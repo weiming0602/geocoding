@@ -303,16 +303,18 @@ export type CrossStreetResponse = {
 };
 
 // GET /road-signals/reroute -- 1-2 alternate driving routes past a
-// hazard, computed by an external routing service (OpenRouteService)
-// avoiding a small buffer around the hazard's point. `rejoinPoint` is
-// an ESTIMATE (511 data gives only a single hazard point, never a real
-// start/end span) -- a fixed distance further along the road past the
-// hazard, not the hazard's actual cleared extent.
+// hazard, computed via pgRouting against our own TIGER-derived street
+// topology, avoiding a small buffer around the hazard's point.
+// `rejoinPoint` is an ESTIMATE (511 data gives only a single hazard
+// point, never a real start/end span) -- a fixed distance further along
+// the road past the hazard, not the hazard's actual cleared extent.
+// `durationSeconds` is always null -- TIGER carries no speed/road-class
+// data to estimate travel time from.
 export type RerouteOption = {
   // A GeoJSON LineString's `coordinates` field: [[lon, lat], ...].
   geometry: { type: 'LineString'; coordinates: [number, number][] };
   distanceMeters: number;
-  durationSeconds: number;
+  durationSeconds: number | null;
 };
 
 export type RoadRerouteResponse = {

@@ -1,21 +1,6 @@
-const { ValidationError, UpstreamError } = require('./errors');
+const { NotFoundError, OutOfRangeError } = require('./errors');
 const { validateCoordinate, flatDistanceMeters } = require('./nextCrossStreet');
 const { metersPerDegree } = require('./interpolate');
-
-// Free-tier OpenRouteService -- the only free routing service found with
-// real "avoid this area" support (OSRM's public demo can only offer
-// alternative paths and hope one clears the hazard, no guarantee on a
-// road with no real alternative). Unlike Overpass/Nominatim, ORS has no
-// anonymous tier -- a personal API key is required, so this feature is
-// unavailable (a clear "not configured" error, not a silent no-op) until
-// one is set. Read live inside isOrsConfigured/getRoadReroute, not
-// captured once at module load -- same reasoning as emailDelivery.js's
-// isSesConfigured(), so a test (or a real env change) can toggle this
-// without re-requiring the module.
-function isOrsConfigured() {
-  return Boolean(process.env.ORS_API_KEY);
-}
-const ORS_TIMEOUT_MS = 10000;
 
 // 511 gives only a single point per hazard, never a real start/end span
 // (see roadSignals.js) -- this is a deliberate approximation of "past
@@ -32,6 +17,17 @@ const AVOID_RADIUS_METERS = 150;
 // away yet -- same reasoning/threshold family as nextCrossStreet.js's
 // own distance guard.
 const MAX_HAZARD_DISTANCE_METERS = 5000;
+// A driver/rejoin point further than this from the nearest real topology
+// node isn't "near a mapped street" -- it's an unmapped area (a
+// MULTILINESTRING edge routing_topology.py skips, a state we haven't
+// backfilled, or a genuinely off-road position), and snapping to
+// whatever node happens to be nearest -- however far -- would silently
+// produce a nonsensical route rather than an honest "no data here yet".
+const MAX_NODE_SNAP_DISTANCE_METERS = 300;
+// How many distinct route options to ask pgr_ksp for -- the "couple of
+// choices" this feature exists to offer, same target_count ORS was
+// asked for previously.
+const ROUTE_OPTION_COUNT = 2;
 
 /**
  * Bearing from (lat1,lon1) to (lat2,lon2), in degrees [0, 360) clockwise
@@ -57,42 +53,88 @@ function destinationPointFlat(lat, lon, bearingDeg, distanceMeters) {
 }
 
 /**
- * Rough circular GeoJSON polygon ring around (lat,lon) -- same flat-earth
- * degrees approximation (not a true geodesic circle) as placesSearch.js's
- * metersToViewbox / roadSignals.js's boundingBoxDegrees, good enough for
- * a ~150m avoid-area.
+ * Nearest streets_topology_nodes id to (latitude, longitude), or null if
+ * nothing real exists within MAX_NODE_SNAP_DISTANCE_METERS -- the GiST
+ * KNN `<->` operator picks the candidate, ST_DWithin is what actually
+ * bounds how far "nearest" is allowed to be.
  */
-function circlePolygon(latitude, longitude, radiusMeters, points = 16) {
-  const latDelta = radiusMeters / 111320;
-  const lonDelta = radiusMeters / (111320 * Math.cos((latitude * Math.PI) / 180));
-  const ring = [];
-  for (let i = 0; i <= points; i += 1) {
-    const angle = (i / points) * 2 * Math.PI;
-    ring.push([longitude + lonDelta * Math.cos(angle), latitude + latDelta * Math.sin(angle)]);
-  }
-  return ring;
+async function nearestTopologyNodeId(db, latitude, longitude) {
+  const { rows } = await db.query(
+    `SELECT id FROM streets_topology_nodes
+     WHERE ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
+     ORDER BY geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)
+     LIMIT 1`,
+    [longitude, latitude, MAX_NODE_SNAP_DISTANCE_METERS]
+  );
+  return rows.length > 0 ? rows[0].id : null;
 }
 
 /**
- * Calls OpenRouteService for 1-2 alternate driving routes from the
- * driver's position to an estimated point past the hazard, avoiding a
- * buffer around the hazard itself. Throws ValidationError if rerouting
- * isn't configured (no ORS_API_KEY), OutOfRangeError-style distance
- * guard via a plain ValidationError (kept simple -- unlike
- * nextCrossStreet.js this isn't a search-radius concern, just a sanity
- * bound), UpstreamError for anything that's ORS's fault.
+ * pgr_ksp's first argument is a `text` SQL string it EXECUTEs itself, not
+ * a normal bound-parameter slot -- hazardLatitude/hazardLongitude are
+ * substituted directly into it. Safe here specifically because both
+ * values already passed validateCoordinate (real numbers, range-checked)
+ * before this is ever called -- never build this kind of string from
+ * anything that hasn't gone through that same validation first.
  */
-async function getRoadReroute({ driverLatitude, driverLongitude, driverHeading, hazardLatitude, hazardLongitude }) {
+function buildAvoidHazardEdgesSql(hazardLatitude, hazardLongitude) {
+  return (
+    'SELECT id, source, target, cost FROM streets_routing_edges ' +
+    'WHERE NOT ST_DWithin(geom::geography, ' +
+    `ST_SetSRID(ST_MakePoint(${hazardLongitude}, ${hazardLatitude}), 4326)::geography, ${AVOID_RADIUS_METERS})`
+  );
+}
+
+/**
+ * Turns one pgr_ksp path's ordered (node, edge) rows into a single
+ * GeoJSON LineString coordinate list. Each streets_routing_edges row's
+ * own geometry runs from its `source` node to its `target` node --
+ * exactly the direction pgr_ksp traveled it only when the path departs
+ * from that edge's `source`; when the path instead departs from its
+ * `target` (the edge traveled backward relative to how it's stored),
+ * that segment's coordinates must be reversed before appending. Adjacent
+ * segments share an endpoint -- the duplicate is dropped, not left in.
+ */
+function buildPathGeometry(pathRows, edgesById) {
+  const coordinates = [];
+  for (const row of pathRows) {
+    if (row.edge === -1) continue; // final row: no outgoing edge, nothing to append
+    const edge = edgesById.get(row.edge);
+    if (!edge) continue; // shouldn't happen: every edge pgr_ksp used came from streets_routing_edges
+    const segment = edge.coordinates.slice();
+    if (edge.source !== row.node) segment.reverse();
+    for (const point of segment) {
+      const last = coordinates[coordinates.length - 1];
+      if (last && last[0] === point[0] && last[1] === point[1]) continue;
+      coordinates.push(point);
+    }
+  }
+  return coordinates;
+}
+
+/**
+ * Finds 1-2 alternate driving routes from the driver's position to an
+ * estimated point past the hazard, avoiding a buffer around the hazard
+ * itself -- entirely from our own streets/topology data via pgRouting's
+ * pgr_ksp, no external routing service. Throws OutOfRangeError if the
+ * hazard is too far away to be a meaningful detour target, NotFoundError
+ * if the driver/rejoin point isn't near any real routable street data
+ * yet, or if no route around the hazard exists at all (a dead end/
+ * disconnected area).
+ *
+ * TIGER carries no one-way/direction data at all (confirmed against
+ * Census's own field documentation, not an ingest gap) and no speed
+ * data -- every edge is treated as two-way (pgr_ksp's `directed: false`)
+ * and durationSeconds is always null rather than a fabricated estimate.
+ * Both limitations are surfaced to the driver in the UI, not hidden here.
+ */
+async function getRoadReroute(db, { driverLatitude, driverLongitude, driverHeading, hazardLatitude, hazardLongitude }) {
   validateCoordinate(driverLatitude, driverLongitude, 'driver');
   validateCoordinate(hazardLatitude, hazardLongitude, 'hazard');
 
-  if (!isOrsConfigured()) {
-    throw new ValidationError('rerouting is not configured on this server yet (missing ORS_API_KEY)');
-  }
-
   const directDistance = flatDistanceMeters(driverLatitude, driverLongitude, hazardLatitude, hazardLongitude);
   if (directDistance > MAX_HAZARD_DISTANCE_METERS) {
-    throw new ValidationError(
+    throw new OutOfRangeError(
       `hazard is ${Math.round(directDistance)}m away, beyond the ${MAX_HAZARD_DISTANCE_METERS}m range this feature covers`
     );
   }
@@ -106,54 +148,63 @@ async function getRoadReroute({ driverLatitude, driverLongitude, driverHeading, 
       : bearingDegreesFlat(driverLatitude, driverLongitude, hazardLatitude, hazardLongitude);
   const rejoinPoint = destinationPointFlat(hazardLatitude, hazardLongitude, bearing, REJOIN_DISTANCE_METERS);
 
-  const avoidRing = circlePolygon(hazardLatitude, hazardLongitude, AVOID_RADIUS_METERS);
-
-  const orsBaseUrl = process.env.ORS_BASE_URL || 'https://api.openrouteservice.org';
-  let response;
-  try {
-    response = await fetch(`${orsBaseUrl}/v2/directions/driving-car/geojson`, {
-      method: 'POST',
-      headers: {
-        // ORS takes the raw key directly in this header, not a "Bearer"
-        // scheme -- see https://openrouteservice.org/dev/#/api-docs.
-        Authorization: process.env.ORS_API_KEY,
-        'Content-Type': 'application/json',
-        'User-Agent': 'Meridian-Geocoding-Server/1.0 (+https://github.com/meridian-geocoding)',
-      },
-      body: JSON.stringify({
-        coordinates: [
-          [driverLongitude, driverLatitude],
-          [rejoinPoint.longitude, rejoinPoint.latitude],
-        ],
-        alternative_routes: { target_count: 2 },
-        options: { avoid_polygons: { type: 'Polygon', coordinates: [avoidRing] } },
-      }),
-      signal: AbortSignal.timeout(ORS_TIMEOUT_MS),
-    });
-  } catch (err) {
-    throw new UpstreamError(`rerouting is temporarily unavailable: ${err.message}`);
+  const [startNode, endNode] = await Promise.all([
+    nearestTopologyNodeId(db, driverLatitude, driverLongitude),
+    nearestTopologyNodeId(db, rejoinPoint.latitude, rejoinPoint.longitude),
+  ]);
+  if (startNode === null || endNode === null) {
+    throw new NotFoundError('no routable street data near this location yet');
   }
 
-  if (!response.ok) {
-    throw new UpstreamError(`rerouting is temporarily unavailable (status ${response.status})`);
+  const edgesSql = buildAvoidHazardEdgesSql(hazardLatitude, hazardLongitude);
+  // pgr_ksp is overloaded (bigint vs. anyarray node-id arguments, among
+  // others) -- pg sends $2/$3 without an explicit type OID, which
+  // Postgres can't resolve against that overload set on its own, hence
+  // the explicit ::bigint casts (confirmed necessary: omitting them
+  // throws "function pgr_ksp(...) is not unique").
+  const { rows: pathRows } = await db.query(
+    `SELECT path_id, path_seq, node, edge, agg_cost
+     FROM pgr_ksp($1, $2::bigint, $3::bigint, ${ROUTE_OPTION_COUNT}, false)
+     ORDER BY path_id, path_seq`,
+    [edgesSql, startNode, endNode]
+  );
+
+  const pathIds = [...new Set(pathRows.map((row) => row.path_id))];
+  if (pathIds.length === 0) {
+    throw new NotFoundError('no route found around this hazard');
   }
 
-  const body = await response.json();
-  const features = Array.isArray(body.features) ? body.features : [];
-  const options = features.map((feature) => ({
-    geometry: feature.geometry,
-    distanceMeters: feature.properties?.summary?.distance ?? null,
-    durationSeconds: feature.properties?.summary?.duration ?? null,
-  }));
+  const usedEdgeIds = [...new Set(pathRows.filter((row) => row.edge !== -1).map((row) => row.edge))];
+  const { rows: edgeRows } = await db.query(
+    `SELECT id, source, target, ST_AsGeoJSON(geom) AS geojson FROM streets_routing_edges WHERE id = ANY($1)`,
+    [usedEdgeIds]
+  );
+  const edgesById = new Map(
+    edgeRows.map((row) => [
+      row.id,
+      { source: row.source, target: row.target, coordinates: JSON.parse(row.geojson).coordinates },
+    ])
+  );
+
+  const options = pathIds.map((pathId) => {
+    const rows = pathRows.filter((row) => row.path_id === pathId);
+    return {
+      geometry: { type: 'LineString', coordinates: buildPathGeometry(rows, edgesById) },
+      distanceMeters: rows[rows.length - 1].agg_cost,
+      durationSeconds: null,
+    };
+  });
 
   return { options, rejoinPoint };
 }
 
 module.exports = {
   getRoadReroute,
-  isOrsConfigured,
-  circlePolygon,
+  bearingDegreesFlat,
+  destinationPointFlat,
+  buildPathGeometry,
   REJOIN_DISTANCE_METERS,
   AVOID_RADIUS_METERS,
   MAX_HAZARD_DISTANCE_METERS,
+  MAX_NODE_SNAP_DISTANCE_METERS,
 };
