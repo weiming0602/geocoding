@@ -11,6 +11,9 @@ interpolation math, never through PostGIS's ST_ functions.
 
 Requires the `postgis` extension (CREATE EXTENSION IF NOT EXISTS postgis;
 run once per database -- see the one-time setup in the migration docs).
+Routing (see routing_topology.py) additionally requires `pgrouting`
+(`sudo apt install postgresql-18-pgrouting`, then
+CREATE EXTENSION IF NOT EXISTS pgrouting; -- also a one-time, manual step).
 """
 
 CREATE_TABLE_SQL = """
@@ -37,8 +40,26 @@ CREATE TABLE IF NOT EXISTS streets (
     -- Generic Geometry, not LineString: a shapefile edge can have multiple
     -- parts (ingest.py's _shape_to_wkt then emits MULTILINESTRING), which
     -- a LineString-typed column would reject outright.
-    geom geometry(Geometry, 4326)
+    geom geometry(Geometry, 4326),
+    -- TIGER/Line's own topology node IDs for this edge's two endpoints --
+    -- real Census-computed intersection identifiers, not something we
+    -- derive ourselves by snapping geometry endpoints. Present in the
+    -- edges shapefile's own field list but unused until routing_topology.py
+    -- needed real connectivity (nextCrossStreet.js/geocode.js only ever
+    -- needed per-segment geometry, never graph structure).
+    tnidf TEXT,
+    tnidt TEXT
 );
+"""
+
+# Adds tnidf/tnidt to a `streets` table created before this schema change --
+# CREATE TABLE IF NOT EXISTS above only helps a brand-new database; this
+# is the one-time migration for the ~499K rows already ingested. Safe to
+# run unconditionally on either a new or an existing table (IF NOT EXISTS
+# guards on both the table and per-column). Run once, manually.
+ADD_ROUTING_COLUMNS_SQL = """
+ALTER TABLE streets ADD COLUMN IF NOT EXISTS tnidf TEXT;
+ALTER TABLE streets ADD COLUMN IF NOT EXISTS tnidt TEXT;
 """
 
 CREATE_INDEXES_SQL = """
@@ -71,6 +92,54 @@ CREATE INDEX IF NOT EXISTS idx_streets_zipr_zipl ON streets (zipr, zipl);
 -- this is what makes the table a real spatial layer for QGIS/PostGIS
 -- clients, and what any future ST_-function-based query would need.
 CREATE INDEX IF NOT EXISTS idx_streets_geom ON streets USING GIST (geom);
+"""
+
+# A pgRouting-compatible edges view needs small sequential integer
+# source/target ids, not TIGER's own (large, non-sequential) TNID text
+# values -- this table is that id mapping, plus each node's real
+# coordinate (an edge's start/end point) so a driver's/hazard's arbitrary
+# lat/lon can snap to the nearest real intersection via a GiST KNN query.
+# Populated by routing_topology.py's refresh_routing_topology, not at
+# ingest time -- it's derived from streets, not sourced from TIGER
+# directly.
+CREATE_ROUTING_TOPOLOGY_NODES_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS streets_topology_nodes (
+    id SERIAL PRIMARY KEY,
+    tnid TEXT UNIQUE NOT NULL,
+    geom geometry(Point, 4326) NOT NULL
+);
+"""
+
+CREATE_ROUTING_TOPOLOGY_NODES_INDEXES_SQL = """
+CREATE INDEX IF NOT EXISTS idx_streets_topology_nodes_geom
+    ON streets_topology_nodes USING GIST (geom);
+"""
+
+# pgr_dijkstra/pgr_ksp's edges-SQL parameter expects an (id, source,
+# target, cost) shape -- this view is that shape over our own streets +
+# topology nodes, so no separate routing-only copy of street data needs
+# to be maintained. cost is real-world meters (ST_Length on the geography
+# cast, not this codebase's usual flat-plane approximation -- PostGIS
+# already does accurate geodesic math here, no reason to hand-rolled a
+# worse one). No reverse_cost column: TIGER carries no one-way/direction
+# data at all (confirmed against Census's own field docs, not an ingest
+# gap), so every routing call passes directed := false rather than
+# pretending a directed/undirected distinction means anything here. Only
+# edges with a resolved tnidf/tnidt qualify -- a street row ingested
+# before this schema change (or never re-ingested since) simply doesn't
+# participate in routing until backfilled.
+CREATE_ROUTING_EDGES_VIEW_SQL = """
+CREATE OR REPLACE VIEW streets_routing_edges AS
+SELECT
+    s.id AS id,
+    nf.id AS source,
+    nt.id AS target,
+    ST_Length(s.geom::geography) AS cost,
+    s.geom AS geom
+FROM streets s
+JOIN streets_topology_nodes nf ON nf.tnid = s.tnidf
+JOIN streets_topology_nodes nt ON nt.tnid = s.tnidt
+WHERE s.tnidf IS NOT NULL AND s.tnidt IS NOT NULL;
 """
 
 CREATE_STREET_NAMES_TABLE_SQL = """
