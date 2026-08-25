@@ -37,10 +37,10 @@ read-write).
   `console.log`/`console.error`) durably via journald instead of an
   ephemeral terminal or `/tmp` file.
 - Server tests: `cd geocoding-server && node --test` — **not** `npm test`,
-  that script is a placeholder stub. 161 tests, same throwaway-database-
-  per-test pattern (see `test/helpers.js`); 1 pre-existing failure on
-  non-Windows boxes (`zip.test.js`'s PowerShell-extraction check, `spawnSync
-  powershell.exe ENOENT`) is expected and unrelated to any change here.
+  that script is a placeholder stub. 292 tests, same throwaway-database-
+  per-test pattern (see `test/helpers.js`); 1 pre-existing skip on
+  non-Windows boxes (`zip.test.js`'s PowerShell-extraction check) is
+  expected and unrelated to any change here.
 - Database backup (pg_dumps `geocoding` + `geocoding_users` -- the
   latter has real customer accounts/service keys/quota/feedback, not
   reconstructable from anywhere else -- to `~/backups/geocoding`,
