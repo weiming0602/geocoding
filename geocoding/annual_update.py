@@ -15,16 +15,18 @@ from datetime import date
 from pathlib import Path
 
 from .ingest_address_points import ingest_address_points
+from .routing_topology import refresh_routing_topology
 from .states import STATES
 from .update_state import update_state
 
 
 def annual_update(dsn: str, year: int, data_dir: Path, *, states=None, skip_address_points=False) -> bool:
     """Runs update_state for each of `states` (default: everything in
-    STATES) and, unless skipped, refreshes Maine's E911 address points.
-    Returns True if every step succeeded; logs and continues past a
-    failed state instead of aborting the whole run, so one state's
-    network hiccup doesn't block the others."""
+    STATES), refreshes the pgRouting topology from the result, and unless
+    skipped, refreshes Maine's E911 address points. Returns True if every
+    step succeeded; logs and continues past a failed step instead of
+    aborting the whole run, so one state's network hiccup (or a routing
+    refresh failure) doesn't block the others."""
     states = states or sorted(STATES)
     ok = True
 
@@ -35,6 +37,17 @@ def annual_update(dsn: str, year: int, data_dir: Path, *, states=None, skip_addr
         except Exception as exc:  # noqa: BLE001 -- one state's failure shouldn't stop the rest
             print(f"[{date.today()}] FAILED updating {state_abbr}: {exc}", file=sys.stderr)
             ok = False
+
+    # Re-derives streets_topology_nodes/streets_routing_edges from whatever
+    # tnidf/tnidt each update_state run above just backfilled -- keeps the
+    # routing graph (see roadReroute.js) current with each year's new
+    # streets, not just the one-time backfill this depended on originally.
+    print(f"[{date.today()}] refreshing routing topology...")
+    try:
+        refresh_routing_topology(dsn)
+    except Exception as exc:  # noqa: BLE001
+        print(f"[{date.today()}] FAILED refreshing routing topology: {exc}", file=sys.stderr)
+        ok = False
 
     if not skip_address_points and "ME" in states:
         print(f"[{date.today()}] refreshing Maine E911 address points...")

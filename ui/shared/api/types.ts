@@ -290,3 +290,34 @@ export type EmailRoadAlertResponse = {
   emailed: boolean;
   stubbed: boolean;
 };
+
+// GET /road-signals/cross-street -- the nearest street a driver could
+// turn onto to get off the hazard's road before reaching it (see
+// geocoding-server/src/nextCrossStreet.js). A proximity approximation
+// against the existing `streets` table, not a real routed path -- no
+// guarantee that street actually connects back to the driver's road.
+export type CrossStreetResponse = {
+  fullname: string;
+  distanceFromDriverMeters: number;
+  matchedCoordinates: { latitude: number; longitude: number };
+};
+
+// GET /road-signals/reroute -- 1-2 alternate driving routes past a
+// hazard, computed via pgRouting against our own TIGER-derived street
+// topology, avoiding a small buffer around the hazard's point.
+// `rejoinPoint` is an ESTIMATE (511 data gives only a single hazard
+// point, never a real start/end span) -- a fixed distance further along
+// the road past the hazard, not the hazard's actual cleared extent.
+// `durationSeconds` is always null -- TIGER carries no speed/road-class
+// data to estimate travel time from.
+export type RerouteOption = {
+  // A GeoJSON LineString's `coordinates` field: [[lon, lat], ...].
+  geometry: { type: 'LineString'; coordinates: [number, number][] };
+  distanceMeters: number;
+  durationSeconds: number | null;
+};
+
+export type RoadRerouteResponse = {
+  options: RerouteOption[];
+  rejoinPoint: { latitude: number; longitude: number };
+};

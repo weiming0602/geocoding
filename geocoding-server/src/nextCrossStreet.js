@@ -125,4 +125,4 @@ async function findNextCrossStreet(db, { driverLatitude, driverLongitude, hazard
   };
 }
 
-module.exports = { findNextCrossStreet, flatDistanceMeters, MAX_HAZARD_DISTANCE_METERS };
+module.exports = { findNextCrossStreet, flatDistanceMeters, validateCoordinate, MAX_HAZARD_DISTANCE_METERS };

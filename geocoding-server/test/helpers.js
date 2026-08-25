@@ -50,7 +50,7 @@ function bboxOf(wkt) {
  * it, plus its DSN (for tests that need to point a freshly-required
  * src/server.js at it via env vars) and a drop() to tear it all down.
  */
-async function createTestDatabase({ postgis = true } = {}) {
+async function createTestDatabase({ postgis = true, pgrouting = false } = {}) {
   const name = `geocoding_test_${crypto.randomBytes(8).toString('hex')}`;
 
   const admin = new Pool({ connectionString: ADMIN_DSN });
@@ -61,6 +61,9 @@ async function createTestDatabase({ postgis = true } = {}) {
   const pool = new Pool({ connectionString: dsn });
   if (postgis) {
     await pool.query('CREATE EXTENSION IF NOT EXISTS postgis');
+  }
+  if (pgrouting) {
+    await pool.query('CREATE EXTENSION IF NOT EXISTS pgrouting');
   }
 
   async function drop() {
@@ -274,11 +277,28 @@ async function makeUsersDb() {
  * `seedStreets: false` skips loading the geocode fixture rows, for tests
  * that only exercise user/quota/billing endpoints and never query
  * streets at all.
+ *
+ * `geoSeed` (only meaningful alongside `seedStreets: false`) is an async
+ * function called with a real *writable* pool against the throwaway geo
+ * database, before the server (whose own `db` is read-only-enforced, see
+ * createReadOnlyPool) ever starts -- for a test needing its own custom
+ * fixture (e.g. roadRerouteFixture.js's synthetic street network) rather
+ * than the standard seedFixtureStreets rows. `geoOptions` controls that
+ * seeding pool's own createTestDatabase() call (e.g. `{ postgis: true,
+ * pgrouting: true }`), independent of `seedStreets`'s own default.
  */
-async function withTestServer(callback, { seedStreets = true } = {}) {
+async function withTestServer(callback, { seedStreets = true, geoOptions = {}, geoSeed } = {}) {
   const geo = seedStreets
     ? await makeFixtureDsn()
-    : await createTestDatabase({ postgis: false }).then(({ dsn, drop }) => ({ dsn, drop }));
+    : await createTestDatabase({ postgis: false, ...geoOptions }).then(async ({ pool, dsn, drop }) => {
+        // Same pattern as makeFixtureDsn: seed via this writable pool, then
+        // just discard the reference -- `drop` (returned below) already
+        // closes over this same pool and is what ends it, exactly once,
+        // whenever the caller's teardown runs. Ending it here too would
+        // double-close it.
+        if (geoSeed) await geoSeed(pool);
+        return { dsn, drop };
+      });
   const users = await createTestDatabase({ postgis: false }).then(({ dsn, drop }) => ({
     dsn,
     drop,
