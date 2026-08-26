@@ -40,14 +40,57 @@ export class ApiError extends Error {
   }
 }
 
+// status: 0 marks a request that never got an HTTP response at all
+// (server unreachable, DNS failure, offline) -- distinct from any real
+// status code, so callers can tell "the server said no" apart from "we
+// never reached a server."
+const NETWORK_ERROR_STATUS = 0;
+
+/**
+ * Wraps `fetch()` so a network-level failure (server not running,
+ * unreachable host, offline) throws a clear, actionable ApiError instead
+ * of the browser's bare "Failed to fetch"/"NetworkError" -- that raw
+ * message names no cause and no fix, which is exactly the complaint this
+ * addresses. Every function below goes through this rather than calling
+ * `fetch` directly, so the fix applies everywhere at once.
+ */
+export async function fetchOrThrow(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    throw new ApiError(
+      `Could not reach the server at ${url}. Make sure it's running and that this device can reach that address.`,
+      NETWORK_ERROR_STATUS
+    );
+  }
+}
+
+/**
+ * Parses a response body as JSON, converting a malformed/non-JSON body
+ * (e.g. an HTML error page from a proxy in front of the real server)
+ * into the same kind of clear ApiError rather than letting a raw
+ * SyntaxError leak through.
+ */
+async function parseJsonOrThrow<T>(response: Response): Promise<T | ApiErrorResponse> {
+  try {
+    return (await response.json()) as T | ApiErrorResponse;
+  } catch {
+    throw new ApiError(
+      `The server at this address didn't return a valid response (status ${response.status}). ` +
+        `It may not be the geocoding API, or something in between (a proxy, a captive portal) intercepted the request.`,
+      response.status
+    );
+  }
+}
+
 async function postJson<T>(baseUrl: string, path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, {
+  const response = await fetchOrThrow(`${baseUrl}${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
 
-  const parsed = (await response.json()) as T | ApiErrorResponse;
+  const parsed = await parseJsonOrThrow<T>(response);
   if (!response.ok || (parsed as ApiErrorResponse).error !== undefined) {
     throw new ApiError((parsed as ApiErrorResponse).error ?? `request failed (${response.status})`, response.status);
   }
@@ -55,8 +98,8 @@ async function postJson<T>(baseUrl: string, path: string, body: unknown): Promis
 }
 
 async function getJson<T>(baseUrl: string, path: string): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`);
-  const parsed = (await response.json()) as T | ApiErrorResponse;
+  const response = await fetchOrThrow(`${baseUrl}${path}`);
+  const parsed = await parseJsonOrThrow<T>(response);
   if (!response.ok || (parsed as ApiErrorResponse).error !== undefined) {
     throw new ApiError((parsed as ApiErrorResponse).error ?? `request failed (${response.status})`, response.status);
   }
@@ -64,8 +107,8 @@ async function getJson<T>(baseUrl: string, path: string): Promise<T> {
 }
 
 async function deleteJson<T>(baseUrl: string, path: string): Promise<T> {
-  const response = await fetch(`${baseUrl}${path}`, { method: 'DELETE' });
-  const parsed = (await response.json()) as T | ApiErrorResponse;
+  const response = await fetchOrThrow(`${baseUrl}${path}`, { method: 'DELETE' });
+  const parsed = await parseJsonOrThrow<T>(response);
   if (!response.ok || (parsed as ApiErrorResponse).error !== undefined) {
     throw new ApiError((parsed as ApiErrorResponse).error ?? `request failed (${response.status})`, response.status);
   }
@@ -100,7 +143,7 @@ export async function batchGeocodeDownload(
   source: BatchSource,
   baseUrl = DEFAULT_API_BASE_URL
 ): Promise<{ blob: Blob; quota: string | null }> {
-  const response = await fetch(`${baseUrl}/geocode/batch/download`, {
+  const response = await fetchOrThrow(`${baseUrl}/geocode/batch/download`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(source),

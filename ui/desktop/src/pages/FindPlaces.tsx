@@ -1,8 +1,8 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
 import { searchPlaces } from '../../../shared/api/client';
 import type { PlaceResult } from '../../../shared/api/types';
-import MapView from '../components/MapView';
+import FindPlacesMapView from '../components/FindPlacesMapView';
 import PageHeader from '../components/PageHeader';
 
 const RADIUS_OPTIONS = [
@@ -21,6 +21,14 @@ export default function FindPlaces() {
   const [results, setResults] = useState<PlaceResult[] | null>(null);
   const [skipped, setSkipped] = useState(0);
   const [truncated, setTruncated] = useState(false);
+  // Highlighting only, set from either direction (a row click or a
+  // marker click) -- see BatchMapView's selectedIndex comment.
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  // Row-click direction only -- pans/zooms the map. nonce forces a
+  // re-fire even when the same row is clicked twice in a row.
+  const [focusRequest, setFocusRequest] = useState<{ index: number; nonce: number } | null>(null);
+  const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({});
+  const mapWrapperRef = useRef<HTMLDivElement>(null);
 
   // "barber shop near Brunswick, Maine" resolves its own center
   // server-side (via Nominatim) -- only queries without a "near" clause
@@ -39,6 +47,8 @@ export default function FindPlaces() {
     setLoading(true);
     setError(null);
     setResults(null);
+    setSelectedIndex(null);
+    setFocusRequest(null);
     try {
       const response = await searchPlaces({
         query: query.trim(),
@@ -72,6 +82,31 @@ export default function FindPlaces() {
     document.body.removeChild(link);
     URL.revokeObjectURL(objectUrl);
   }, [results]);
+
+  // Defensive: a place without a usable coordinate has no marker to plot
+  // -- filtered out here (after indexing, so resultIndex still lines up
+  // with the results array) rather than ever handing maplibre a NaN
+  // LngLat, which throws and blanks the whole page (no error boundary).
+  const places = (results ?? [])
+    .map((r, resultIndex) => ({
+      name: r.name,
+      address: r.address,
+      latitude: r.latitude,
+      longitude: r.longitude,
+      resultIndex,
+    }))
+    .filter((p) => Number.isFinite(p.latitude) && Number.isFinite(p.longitude));
+
+  const handleSelectRow = useCallback((index: number) => {
+    setSelectedIndex(index);
+    setFocusRequest({ index, nonce: Date.now() });
+    mapWrapperRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
+
+  const handlePlaceClick = useCallback((index: number) => {
+    setSelectedIndex(index);
+    rowRefs.current[index]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
 
   return (
     <div>
@@ -163,12 +198,16 @@ export default function FindPlaces() {
         </div>
 
         <div>
-          <MapView
-            latitude={center?.latitude}
-            longitude={center?.longitude}
-            label={center ? 'Search center' : undefined}
-            onMapClick={setCenter}
-          />
+          <div ref={mapWrapperRef}>
+            <FindPlacesMapView
+              center={center}
+              onCenterClick={setCenter}
+              places={places}
+              selectedIndex={selectedIndex}
+              focusRequest={focusRequest}
+              onPlaceClick={handlePlaceClick}
+            />
+          </div>
 
           {results && results.length > 0 && (
             <div style={{ marginTop: 'var(--space-4)', overflowX: 'auto' }}>
@@ -181,7 +220,19 @@ export default function FindPlaces() {
                 </thead>
                 <tbody>
                   {results.map((result, index) => (
-                    <tr key={index}>
+                    <tr
+                      key={index}
+                      ref={(el) => {
+                        rowRefs.current[index] = el;
+                      }}
+                      onClick={() => handleSelectRow(index)}
+                      style={{
+                        cursor: 'pointer',
+                        borderLeft:
+                          selectedIndex === index ? '3px solid var(--color-accent)' : '3px solid transparent',
+                        background: selectedIndex === index ? 'var(--color-surface)' : undefined,
+                      }}
+                    >
                       <td>{result.name}</td>
                       <td className="text-muted">{result.address}</td>
                     </tr>

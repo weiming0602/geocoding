@@ -9,6 +9,27 @@ export type MarkerPoint = {
   address: string;
   latitude: number;
   longitude: number;
+  // Index into the full (unfiltered) results list this marker came from
+  // -- markers only exist for successful results, so a marker's position
+  // in this array isn't its row's position in the results list. This is
+  // what lets a map click be matched back to the right table row.
+  resultIndex: number;
+};
+
+type FocusRequest = { index: number; nonce: number };
+
+type Props = {
+  markers: MarkerPoint[];
+  // Highlighting only, set from either direction (a row click or a
+  // marker click) -- never pans/zooms the map on its own.
+  selectedIndex?: number | null;
+  // Pans/zooms to the given marker -- row-click direction only. `nonce`
+  // (Date.now() at request time) forces the effect to re-fire even when
+  // the same row is clicked twice in a row, since a repeated `index`
+  // value alone wouldn't otherwise change.
+  focusRequest?: FocusRequest | null;
+  // Map-click direction only -- never fired for a highlight-only change.
+  onMarkerClick?: (resultIndex: number) => void;
 };
 
 const SIZES = { Compact: 220, Default: 320, Large: 560 } as const;
@@ -16,8 +37,15 @@ type SizeName = keyof typeof SIZES;
 
 const SOURCE_ID = 'batch-results';
 const LAYER_ID = 'batch-results-points';
+const DEFAULT_RADIUS = 6;
+const SELECTED_RADIUS = 10;
+const DEFAULT_COLOR = '#3fb1ce';
+// Same value as --color-accent in styles.css -- maplibre's paint
+// expressions run in WebGL, not CSS, so a custom property string can't
+// be handed to setPaintProperty directly; this is that value inlined.
+const SELECTED_COLOR = '#b68235';
 
-type PointFeatureCollection = GeoJSON.FeatureCollection<GeoJSON.Point, { address: string }>;
+type PointFeatureCollection = GeoJSON.FeatureCollection<GeoJSON.Point, { address: string; resultIndex: number }>;
 
 function toGeoJSON(markers: MarkerPoint[]): PointFeatureCollection {
   return {
@@ -25,7 +53,7 @@ function toGeoJSON(markers: MarkerPoint[]): PointFeatureCollection {
     features: markers.map((point) => ({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [point.longitude, point.latitude] },
-      properties: { address: point.address },
+      properties: { address: point.address, resultIndex: point.resultIndex },
     })),
   };
 }
@@ -41,11 +69,17 @@ function toGeoJSON(markers: MarkerPoint[]): PointFeatureCollection {
 // (mouseenter/mouseleave scoped to LAYER_ID + queryRenderedFeatures)
 // instead of a per-marker DOM element, unlike mapHoverLabel.ts's
 // Marker-based approach (still used by the single-result map, MapView.tsx).
-export default function BatchMapView({ markers }: { markers: MarkerPoint[] }) {
+export default function BatchMapView({ markers, selectedIndex = null, focusRequest = null, onMarkerClick }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const [size, setSize] = useState<SizeName>('Default');
   const [ready, setReady] = useState(false);
+  // The 'load' listener (and the click handler registered inside it) is
+  // set up once per map instance -- reading the callback through a ref
+  // (kept current every render) means a new onMarkerClick identity from
+  // the parent never needs the whole map to be torn down and rebuilt.
+  const onMarkerClickRef = useRef(onMarkerClick);
+  onMarkerClickRef.current = onMarkerClick;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -62,8 +96,8 @@ export default function BatchMapView({ markers }: { markers: MarkerPoint[] }) {
         type: 'circle',
         source: SOURCE_ID,
         paint: {
-          'circle-radius': 6,
-          'circle-color': '#3fb1ce',
+          'circle-radius': DEFAULT_RADIUS,
+          'circle-color': DEFAULT_COLOR,
           'circle-stroke-width': 2,
           'circle-stroke-color': '#ffffff',
         },
@@ -83,6 +117,11 @@ export default function BatchMapView({ markers }: { markers: MarkerPoint[] }) {
       map.on('mouseleave', LAYER_ID, () => {
         map.getCanvas().style.cursor = '';
         popup.remove();
+      });
+      map.on('click', LAYER_ID, (e) => {
+        const feature = e.features?.[0];
+        const resultIndex = feature?.properties?.resultIndex;
+        if (typeof resultIndex === 'number') onMarkerClickRef.current?.(resultIndex);
       });
 
       setReady(true);
@@ -122,6 +161,41 @@ export default function BatchMapView({ markers }: { markers: MarkerPoint[] }) {
     );
     map.fitBounds(bounds, { padding: 40, maxZoom: 16 });
   }, [markers, ready]);
+
+  // Highlighting only -- rebuilds the paint expressions' literal
+  // comparison value each time, rather than using feature-state (which
+  // would need a stable per-feature id); never pans/zooms on its own, so
+  // a marker click's own selection change doesn't fight the pan/zoom the
+  // click itself may have already caused.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const selected = selectedIndex ?? -1;
+    map.setPaintProperty(LAYER_ID, 'circle-radius', [
+      'case',
+      ['==', ['get', 'resultIndex'], selected],
+      SELECTED_RADIUS,
+      DEFAULT_RADIUS,
+    ]);
+    map.setPaintProperty(LAYER_ID, 'circle-color', [
+      'case',
+      ['==', ['get', 'resultIndex'], selected],
+      SELECTED_COLOR,
+      DEFAULT_COLOR,
+    ]);
+  }, [selectedIndex, ready]);
+
+  // Row-click direction only -- pans/zooms to the requested marker. Keyed
+  // on the whole focusRequest object (not just its index) so clicking the
+  // same row twice in a row still re-triggers this, since nonce changes
+  // every time even when index doesn't.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !focusRequest) return;
+    const marker = markers.find((m) => m.resultIndex === focusRequest.index);
+    if (!marker) return;
+    map.flyTo({ center: [marker.longitude, marker.latitude], zoom: Math.max(map.getZoom(), 15) });
+  }, [focusRequest, ready, markers]);
 
   // MapLibre renders to a fixed-size canvas -- it doesn't notice its
   // container growing/shrinking on its own, so resize() has to be

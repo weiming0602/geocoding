@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from 'react';
-import { Alert, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Alert, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 // expo-file-system's new Paths/File API (SDK 57) has a broken internal
 // import (./pathUtilities fails to resolve under Metro's web bundler) --
@@ -65,6 +65,14 @@ export default function BatchGeocodeForm({
   const [results, setResults] = useState<BatchResult[] | null>(null);
   const [quota, setQuota] = useState<{ remaining: number; tier: number } | string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // List<->map linking (see BatchGeocodeMap.web.tsx). selectedIndex is
+  // highlight-only, set from either direction; focusRequest additionally
+  // pans/zooms the map, and is only ever set from a list-row tap.
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [focusRequest, setFocusRequest] = useState<{ index: number; nonce: number } | null>(null);
+  const rowRefs = useRef<Record<number, View | null>>({});
+  const mapWrapperRef = useRef<View>(null);
 
   // Runs once per mount (this component fully unmounts/remounts on every
   // tab switch, per App.tsx's conditional rendering) -- reports the
@@ -136,6 +144,8 @@ export default function BatchGeocodeForm({
     setError(null);
     setResults(null);
     setQuota(null);
+    setSelectedIndex(null);
+    setFocusRequest(null);
 
     try {
       const response = await batchGeocode(buildBatchSource());
@@ -232,12 +242,39 @@ export default function BatchGeocodeForm({
 
   const successCount = results ? results.filter((r) => r.success).length : 0;
   const successMarkers = (results ?? [])
-    .filter((r): r is Extract<BatchResult, { success: true }> => r.success)
-    .map((r) => ({
+    .map((r, resultIndex) => ({ r, resultIndex }))
+    .filter((x): x is { r: Extract<BatchResult, { success: true }>; resultIndex: number } => x.r.success)
+    .map(({ r, resultIndex }) => ({
       address: r.address,
       latitude: r.coordinates.latitude,
       longitude: r.coordinates.longitude,
+      resultIndex,
     }));
+
+  // Row tap (list -> map): highlight + pan/zoom + scroll to the map.
+  const handleSelectRow = useCallback((index: number) => {
+    setSelectedIndex(index);
+    setFocusRequest({ index, nonce: Date.now() });
+    if (Platform.OS === 'web') {
+      (mapWrapperRef.current as unknown as HTMLElement | null)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    }
+  }, []);
+
+  // Marker click (map -> list): highlight + scroll to that row only --
+  // never re-centers the map, which would fight the pan/zoom the click
+  // itself may have already caused.
+  const handleMarkerClick = useCallback((index: number) => {
+    setSelectedIndex(index);
+    if (Platform.OS === 'web') {
+      (rowRefs.current[index] as unknown as HTMLElement | null)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    }
+  }, []);
 
   return (
     <View style={styles.container}>
@@ -354,21 +391,51 @@ export default function BatchGeocodeForm({
               ID list from Import Addresses didn't line up with these results, so IDs are omitted.
             </Text>
           )}
-          {results.map((result, index) => (
-            <View key={index} style={styles.resultRow}>
-              {idsMatchResults && <Text style={styles.cardMeta}>{forwardedIds![index] || '—'}</Text>}
-              <Text style={styles.resultAddress}>{result.address}</Text>
-              {result.success ? (
-                <Text style={styles.cardMeta} selectable>
-                  {result.coordinates.latitude.toFixed(6)}, {result.coordinates.longitude.toFixed(6)}
-                  {result.source === 'interpolation' ? ` (${result.rangeSide} side)` : ''}
-                </Text>
-              ) : (
-                <Text style={styles.errorText}>{result.error}</Text>
-              )}
+          {results.map((result, index) => {
+            const rowContent = (
+              <>
+                {idsMatchResults && <Text style={styles.cardMeta}>{forwardedIds![index] || '—'}</Text>}
+                <Text style={styles.resultAddress}>{result.address}</Text>
+                {result.success ? (
+                  <Text style={styles.cardMeta} selectable>
+                    {result.coordinates.latitude.toFixed(6)}, {result.coordinates.longitude.toFixed(6)}
+                    {result.source === 'interpolation' ? ` (${result.rangeSide} side)` : ''}
+                  </Text>
+                ) : (
+                  <Text style={styles.errorText}>{result.error}</Text>
+                )}
+              </>
+            );
+            const rowStyle = [styles.resultRow, selectedIndex === index && styles.resultRowSelected];
+            // Only a successful result has coordinates/a marker to show on
+            // the map -- a failed row stays a plain, non-tappable View.
+            return result.success ? (
+              <TouchableOpacity
+                key={index}
+                ref={(r) => {
+                  rowRefs.current[index] = r as unknown as View | null;
+                }}
+                style={rowStyle}
+                onPress={() => handleSelectRow(index)}
+              >
+                {rowContent}
+              </TouchableOpacity>
+            ) : (
+              <View key={index} style={rowStyle}>
+                {rowContent}
+              </View>
+            );
+          })}
+          {successMarkers.length > 0 && (
+            <View ref={mapWrapperRef}>
+              <BatchGeocodeMap
+                markers={successMarkers}
+                selectedIndex={selectedIndex}
+                focusRequest={focusRequest}
+                onMarkerClick={handleMarkerClick}
+              />
             </View>
-          ))}
-          {successMarkers.length > 0 && <BatchGeocodeMap markers={successMarkers} />}
+          )}
         </View>
       )}
 
@@ -479,6 +546,12 @@ const styles = StyleSheet.create({
     paddingBottom: space[2],
     borderBottomWidth: 1,
     borderBottomColor: colors.divider,
+  },
+  resultRowSelected: {
+    borderLeftWidth: 3,
+    borderLeftColor: colors.accent,
+    paddingLeft: space[2],
+    backgroundColor: colors.surface,
   },
   resultAddress: {
     fontFamily: 'Lora_400Regular',

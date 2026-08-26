@@ -1,10 +1,11 @@
 import * as Location from 'expo-location';
-import React, { useCallback, useState } from 'react';
-import { Alert, Platform, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useCallback, useRef, useState } from 'react';
+import { Alert, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 import { searchPlaces } from '../../shared/api/client';
 import type { PlaceResult } from '../../shared/api/types';
 import { colors, radius, space } from '../../shared/theme';
+import FindPlacesMap from './FindPlacesMap';
 import ThemedButton from './ThemedButton';
 
 const RADIUS_OPTIONS = [
@@ -16,10 +17,13 @@ const RADIUS_OPTIONS = [
 
 // No interactive map exists on native (see GeocodeMap.tsx -- native has
 // no maplibre/expo-maps setup, only a deep-link-out "Open in Maps"
-// button), so unlike the desktop version, there's no click-a-point
-// fallback here at all -- a query needs either a "near <place>" clause
-// (resolved server-side via Nominatim) or a GPS fix from "Use My
-// Location". That pairing covers the same ground a map tap would.
+// button, and FindPlacesMap.tsx follows the same list-of-pins limitation
+// as BatchGeocodeMap.tsx), so unlike the desktop version, there's no
+// click-a-point fallback here at all -- a query needs either a "near
+// <place>" clause (resolved server-side via Nominatim) or a GPS fix from
+// "Use My Location". That pairing covers the same ground a map tap would.
+// The web build (FindPlacesMap.web.tsx) does render a real interactive
+// map with list<->map linking, same as BatchGeocodeForm/BatchGeocodeMap.
 export default function FindPlacesForm() {
   const [query, setQuery] = useState('');
   const [center, setCenter] = useState<{ latitude: number; longitude: number } | null>(null);
@@ -30,6 +34,13 @@ export default function FindPlacesForm() {
   const [results, setResults] = useState<PlaceResult[] | null>(null);
   const [skipped, setSkipped] = useState(0);
   const [truncated, setTruncated] = useState(false);
+  // List<->map linking (see FindPlacesMap.web.tsx). selectedIndex is
+  // highlight-only, set from either direction; focusRequest additionally
+  // pans/zooms the map, and is only ever set from a list-row tap.
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  const [focusRequest, setFocusRequest] = useState<{ index: number; nonce: number } | null>(null);
+  const rowRefs = useRef<Record<number, View | null>>({});
+  const mapWrapperRef = useRef<View>(null);
 
   const hasNearClause = /\bnear\b/i.test(query);
 
@@ -64,6 +75,8 @@ export default function FindPlacesForm() {
     setLoading(true);
     setError(null);
     setResults(null);
+    setSelectedIndex(null);
+    setFocusRequest(null);
     try {
       const response = await searchPlaces({
         query: query.trim(),
@@ -101,6 +114,45 @@ export default function FindPlacesForm() {
     document.body.removeChild(link);
     URL.revokeObjectURL(objectUrl);
   }, [results]);
+
+  // Defensive: a place without a usable coordinate has no marker to plot
+  // -- filtered out here (after indexing, so resultIndex still lines up
+  // with the results array) rather than ever handing maplibre a NaN
+  // LngLat, which throws and blanks the whole page (see FindPlacesMap.web.tsx).
+  const places = (results ?? [])
+    .map((r, resultIndex) => ({
+      name: r.name,
+      address: r.address,
+      latitude: r.latitude,
+      longitude: r.longitude,
+      resultIndex,
+    }))
+    .filter((p) => Number.isFinite(p.latitude) && Number.isFinite(p.longitude));
+
+  // Row tap (list -> map): highlight + pan/zoom + scroll to the map.
+  const handleSelectRow = useCallback((index: number) => {
+    setSelectedIndex(index);
+    setFocusRequest({ index, nonce: Date.now() });
+    if (Platform.OS === 'web') {
+      (mapWrapperRef.current as unknown as HTMLElement | null)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    }
+  }, []);
+
+  // Marker click (map -> list): highlight + scroll to that row only --
+  // never re-centers the map, which would fight the pan/zoom the click
+  // itself may have already caused.
+  const handlePlaceClick = useCallback((index: number) => {
+    setSelectedIndex(index);
+    if (Platform.OS === 'web') {
+      (rowRefs.current[index] as unknown as HTMLElement | null)?.scrollIntoView({
+        behavior: 'smooth',
+        block: 'center',
+      });
+    }
+  }, []);
 
   return (
     <View style={styles.container}>
@@ -188,11 +240,29 @@ export default function FindPlacesForm() {
             </Text>
           )}
           {results.map((result, index) => (
-            <View key={index} style={styles.resultRow}>
+            <TouchableOpacity
+              key={index}
+              ref={(r) => {
+                rowRefs.current[index] = r as unknown as View | null;
+              }}
+              style={[styles.resultRow, selectedIndex === index && styles.resultRowSelected]}
+              onPress={() => handleSelectRow(index)}
+            >
               <Text style={styles.resultAddress}>{result.name}</Text>
               <Text style={styles.cardMeta}>{result.address}</Text>
-            </View>
+            </TouchableOpacity>
           ))}
+          {places.length > 0 && (
+            <View style={styles.spacing} ref={mapWrapperRef}>
+              <FindPlacesMap
+                center={center}
+                places={places}
+                selectedIndex={selectedIndex}
+                focusRequest={focusRequest}
+                onPlaceClick={handlePlaceClick}
+              />
+            </View>
+          )}
           {results.length > 0 && (
             <View style={styles.spacing}>
               <ThemedButton title="Download Address List (.txt)" onPress={handleDownload} variant="secondary" block />
@@ -289,6 +359,12 @@ const styles = StyleSheet.create({
     paddingBottom: space[2],
     borderBottomWidth: 1,
     borderBottomColor: colors.divider,
+  },
+  resultRowSelected: {
+    borderLeftWidth: 3,
+    borderLeftColor: colors.accent,
+    paddingLeft: space[2],
+    backgroundColor: colors.surface,
   },
   resultAddress: {
     fontFamily: 'Lora_400Regular',

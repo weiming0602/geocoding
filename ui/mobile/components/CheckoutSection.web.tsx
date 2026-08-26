@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { DEFAULT_API_BASE_URL } from '../../shared/api/client';
+import { DEFAULT_API_BASE_URL, fetchOrThrow } from '../../shared/api/client';
 import { findTier, formatUsd } from '../../shared/pricing';
 import { colors, radius, space } from '../../shared/theme';
 import ThemedButton from './ThemedButton';
@@ -67,7 +67,7 @@ export default function CheckoutSection({ addressCount, onBack }: Props) {
               // the server captures it (with the Client Secret), which is
               // what actually confirms the money moved instead of just
               // trusting the client's word for it.
-              const response = await fetch(`${DEFAULT_API_BASE_URL}/billing/purchase`, {
+              const response = await fetchOrThrow(`${DEFAULT_API_BASE_URL}/billing/purchase`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
