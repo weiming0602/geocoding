@@ -1,6 +1,6 @@
-name: Set up Postgres + PostGIS for the my_ai role
+name: Set up Postgres + PostGIS + pgRouting for the my_ai role
 description: >
-  Installs Postgres and PostGIS on the runner and creates a superuser
+  Installs Postgres, PostGIS, and pgRouting on the runner and creates a superuser
   role named my_ai with no password, matching every DSN hardcoded
   throughout this repo's test suites (test/helpers.js's ADMIN_DSN,
   tests/conftest.py's ADMIN_DSN) -- both assume a local Unix-socket
@@ -26,7 +26,7 @@ runs:
     # runners' default user has passwordless sudo, so this should never
     # actually block, but if that ever stopped being true, -n turns a
     # hang into an immediate, legible failure instead.
-    - name: Install Postgres and PostGIS
+    - name: Install Postgres, PostGIS, and pgRouting
       shell: bash
       env:
         DEBIAN_FRONTEND: noninteractive
@@ -36,7 +36,7 @@ runs:
         sudo -n apt-get update
         sudo -n apt-get install -y postgresql postgresql-contrib
         PGV=$(pg_lsclusters | awk 'NR==2 {print $1}')
-        sudo -n apt-get install -y "postgresql-${PGV}-postgis-3"
+        sudo -n apt-get install -y "postgresql-${PGV}-postgis-3" "postgresql-${PGV}-pgrouting"
         echo "PGV=$PGV" >> "$GITHUB_ENV"
 
     # Installing the postgresql package doesn't start the cluster on this

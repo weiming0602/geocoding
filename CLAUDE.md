@@ -37,10 +37,10 @@ read-write).
   `console.log`/`console.error`) durably via journald instead of an
   ephemeral terminal or `/tmp` file.
 - Server tests: `cd geocoding-server && node --test` — **not** `npm test`,
-  that script is a placeholder stub. 161 tests, same throwaway-database-
-  per-test pattern (see `test/helpers.js`); 1 pre-existing failure on
-  non-Windows boxes (`zip.test.js`'s PowerShell-extraction check, `spawnSync
-  powershell.exe ENOENT`) is expected and unrelated to any change here.
+  that script is a placeholder stub. 292 tests, same throwaway-database-
+  per-test pattern (see `test/helpers.js`); 1 pre-existing skip on
+  non-Windows boxes (`zip.test.js`'s PowerShell-extraction check) is
+  expected and unrelated to any change here.
 - Database backup (pg_dumps `geocoding` + `geocoding_users` -- the
   latter has real customer accounts/service keys/quota/feedback, not
   reconstructable from anywhere else -- to `~/backups/geocoding`,
@@ -92,13 +92,19 @@ read-write).
   or `schema.py` — these three are the ones most likely to break silently.
 
 # Environment / data layout
-- Local Postgres 18 + PostGIS, peer-authenticated as the `my_ai` role (no
-  password for local Unix-socket connections). `geocoding-server/src/db.js`
-  and `geocoding-server/test/helpers.js` build connection strings as
+- Local Postgres 18 + PostGIS + pgRouting, peer-authenticated as the
+  `my_ai` role (no password for local Unix-socket connections).
+  `geocoding-server/src/db.js` and `geocoding-server/test/helpers.js`
+  build connection strings as
   `postgresql://my_ai@%2Fvar%2Frun%2Fpostgresql/<db>` — the socket path
   must be percent-encoded into the URI's host component; `pg` only treats
   a Unix socket path as such from that form or a plain `host` config
-  field, never from a bare connection-string host.
+  field, never from a bare connection-string host. pgRouting (see
+  `GET /road-signals/reroute` below) is a separate package/extension from
+  PostGIS -- `postgresql-18-pgrouting` (or the matching version for
+  whatever Postgres major version is installed), then `CREATE EXTENSION
+  IF NOT EXISTS pgrouting;`, both one-time manual steps against the
+  `geocoding` database.
 - `streets` has a native PostGIS `geom` column (SRID 4326, GiST index)
   alongside the plain-text WKT `geometry` column that
   `geocode.js`/`interpolate.py` actually use — populated directly at
@@ -198,6 +204,34 @@ read-write).
   download/export matched addresses as a plain address list ready to
   feed straight into Batch geocode / Import Addresses -- this search
   itself does not use Meridian's own geocoding.
+- `GET /road-signals/reroute` (`geocoding-server/src/roadReroute.js`,
+  `ui/desktop`'s Road Alerts page's "Show a way around this" button)
+  finds 1-2 alternate driving routes from the driver's current position
+  to a point past a hazard, avoiding a small buffer circle around the
+  hazard itself -- entirely from our own TIGER-derived street data via
+  pgRouting (`pgr_ksp`), no external routing service or API key.
+  Requires the `pgrouting` Postgres extension (`sudo apt install
+  postgresql-18-pgrouting` or equivalent, then `CREATE EXTENSION IF NOT
+  EXISTS pgrouting;` -- a one-time manual step, same as PostGIS's own
+  setup) and a `streets` table backfilled with TIGER's own `tnidf`/
+  `tnidt` topology node IDs (see `geocoding/routing_topology.py`'s
+  `refresh_routing_topology`, wired into `annual_update.py`). Since the
+  underlying 511 feed only gives a single point per hazard (no
+  end-of-span data anywhere in `roadSignals.js`), the "rejoin point" the
+  route targets is a flat-plane projection a fixed distance past the
+  hazard along the driver's heading (or the driver-to-hazard bearing if
+  no heading is known) -- an estimate, labeled as such in the response
+  and the UI, not real hazard-extent data. **TIGER carries no one-way/
+  direction data at all** (confirmed against Census's own field
+  documentation -- not something we forgot to ingest, it simply isn't in
+  this dataset), so every route is computed as if every street were
+  two-way; the UI's caveat text says so. It also carries no speed/road-
+  class-beyond-MTFCC data, so `durationSeconds` in the response is always
+  `null` rather than a fabricated estimate -- only `distanceMeters` is
+  real. A driver/rejoin point with no routable street data within ~300m,
+  or a hazard with no route around it at all, throws `NotFoundError`
+  (404); a hazard beyond `MAX_HAZARD_DISTANCE_METERS` throws
+  `OutOfRangeError` (422), same convention as `/road-signals/cross-street`.
 - `FEEDBACK_NOTIFY_EMAIL` (optional -- unset = stub) is where `POST
   /feedback` emails you when a comment/question comes in; uses the same
   SES credentials above. The comment is saved in `geocoding_users`'

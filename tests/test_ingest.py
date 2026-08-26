@@ -118,6 +118,65 @@ def test_ingest_is_idempotent_on_repeat_runs(tmp_path, dsn):
     assert total == 2
 
 
+def _write_edges_shapefile_with_topology(path, tlid, tnidf, tnidt):
+    """Like _write_sample_edges_shapefile's single-row shape, but with
+    TNIDF/TNIDT fields present -- used to prove the upsert-backfill path
+    (ingest.py's ON CONFLICT ... DO UPDATE) actually updates these two
+    columns on an existing row, unlike every other field above which
+    stays skip-on-conflict."""
+    writer = shapefile.Writer(str(path), shapeType=shapefile.POLYLINE)
+    writer.field("TLID", "C")
+    writer.field("FULLNAME", "C")
+    writer.field("LFROMADD", "C")
+    writer.field("LTOADD", "C")
+    writer.field("RFROMADD", "C")
+    writer.field("RTOADD", "C")
+    writer.field("ZIPL", "C")
+    writer.field("ZIPR", "C")
+    writer.field("MTFCC", "C")
+    writer.field("STATEFP", "C")
+    writer.field("COUNTYFP", "C")
+    writer.field("TNIDF", "C")
+    writer.field("TNIDT", "C")
+
+    writer.line([[(-122.42, 37.77), (-122.41, 37.78)]])
+    writer.record(
+        tlid, "Main St", "100", "198", "101", "199",
+        "94110", "94110", "S1400", "06", "075", tnidf, tnidt,
+    )
+    writer.close()
+
+
+def test_ingest_backfills_tnidf_tnidt_on_an_already_ingested_row(tmp_path, dsn):
+    first_shp = tmp_path / "edges1"
+    _write_edges_shapefile_with_topology(first_shp, "101", "1001", "1002")
+    first_count = ingest(first_shp.with_suffix(".shp"), dsn)
+    assert first_count == 1
+
+    # Re-ingesting the same TLID with different TNIDF/TNIDT -- unlike a
+    # plain repeat run (test_ingest_is_idempotent_on_repeat_runs), this
+    # should update the existing row's topology columns rather than
+    # silently skip it.
+    second_shp = tmp_path / "edges2"
+    _write_edges_shapefile_with_topology(second_shp, "101", "2001", "2002")
+    second_count = ingest(second_shp.with_suffix(".shp"), dsn)
+    assert second_count == 1
+
+    with psycopg.connect(dsn) as conn:
+        total = conn.execute("SELECT COUNT(*) FROM streets").fetchone()[0]
+        row = conn.execute(
+            "SELECT fullname, tnidf, tnidt FROM streets WHERE tlid = '101'"
+        ).fetchone()
+
+    assert total == 1  # backfilled the existing row, not a duplicate
+    assert row == ("Main St", "2001", "2002")
+
+    # A third run with unchanged tnidf/tnidt shouldn't report a "change"
+    # (the WHERE ... IS DISTINCT FROM guard should skip a no-op update).
+    third_count = ingest(second_shp.with_suffix(".shp"), dsn)
+    assert third_count == 0
+
+
 def test_ingest_skips_only_overlapping_rows(tmp_path, dsn):
     first_shp = tmp_path / "edges1"
     _write_sample_edges_shapefile(first_shp)

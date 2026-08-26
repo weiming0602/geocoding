@@ -30,6 +30,11 @@ FIELD_MAP = {
     "MTFCC": "mtfcc",
     "STATEFP": "statefp",
     "COUNTYFP": "countyfp",
+    # Real TIGER/Line topology node IDs for this edge's endpoints -- see
+    # routing_topology.py. Backfilled onto already-ingested rows via the
+    # ON CONFLICT ... DO UPDATE below, not just a fresh-insert-only field.
+    "TNIDF": "tnidf",
+    "TNIDT": "tnidt",
 }
 
 
@@ -53,8 +58,10 @@ def ingest(shp_path: Path, dsn: str) -> int:
     Rows are keyed by TLID (TIGER/Line ID, unique nationwide), so
     re-ingesting a file already loaded — or one that overlaps an
     already-loaded county — silently skips rows that exist already
-    instead of duplicating or erroring. Returns the number of rows
-    newly inserted (not the number read from the shapefile).
+    instead of duplicating or erroring, *except* for tnidf/tnidt (see
+    below), which get backfilled onto an existing row rather than
+    skipped. Returns the number of rows newly inserted or backfilled
+    (not the number read from the shapefile).
     """
     with psycopg.connect(dsn) as conn:
         conn.execute(CREATE_TABLE_SQL)
@@ -75,10 +82,31 @@ def ingest(shp_path: Path, dsn: str) -> int:
         columns += [FIELD_MAP[name] for name in available]
         value_exprs = ["%s", "%s", "%s", "%s", "%s", "ST_GeomFromText(%s, 4326)"]
         value_exprs += ["%s" for _ in available]
+
+        # tnidf/tnidt are the one exception to "re-ingesting skips rows
+        # that already exist": this schema change landed after ~499K rows
+        # were already ingested without them, and re-downloading every
+        # state's shapefile just to run a one-off migration is wasteful
+        # when a normal update_state re-run already walks every row. If
+        # this particular shapefile doesn't carry TNIDF/TNIDT (e.g. an
+        # older cached file), the WHERE guard's EXCLUDED reference would
+        # be to a column not in this INSERT -- skip the upsert clause
+        # entirely in that case and fall back to plain DO NOTHING.
+        topology_fields = [name for name in ("TNIDF", "TNIDT") if name in available]
+        if topology_fields:
+            topology_columns = [FIELD_MAP[name] for name in topology_fields]
+            set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in topology_columns)
+            where_clause = " OR ".join(
+                f"streets.{col} IS DISTINCT FROM EXCLUDED.{col}" for col in topology_columns
+            )
+            conflict_clause = f"DO UPDATE SET {set_clause} WHERE {where_clause}"
+        else:
+            conflict_clause = "DO NOTHING"
+
         insert_sql = (
             f"INSERT INTO streets ({', '.join(columns)}) "
             f"VALUES ({', '.join(value_exprs)}) "
-            "ON CONFLICT (tlid) DO NOTHING RETURNING id"
+            f"ON CONFLICT (tlid) {conflict_clause} RETURNING id"
         )
 
         rows = []
@@ -111,7 +139,7 @@ def main() -> None:
     args = parser.parse_args()
 
     count = ingest(args.shapefile, args.dsn)
-    print(f"Inserted {count} new street edges into {args.dsn}")
+    print(f"Inserted or backfilled {count} street edges into {args.dsn}")
 
 
 if __name__ == "__main__":
