@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router';
 
-import { DEFAULT_API_BASE_URL } from '../../../shared/api/client';
+import { DEFAULT_API_BASE_URL, fetchOrThrow } from '../../../shared/api/client';
 import { findTier, formatUsd } from '../../../shared/pricing';
 
 // The app's PayPal Client ID (public by design -- meant to be embedded
@@ -59,7 +59,7 @@ export default function Checkout() {
               // the server captures it (with the Client Secret), which is
               // what actually confirms the money moved instead of just
               // trusting the client's word for it.
-              const response = await fetch(`${DEFAULT_API_BASE_URL}/billing/purchase`, {
+              const response = await fetchOrThrow(`${DEFAULT_API_BASE_URL}/billing/purchase`, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({

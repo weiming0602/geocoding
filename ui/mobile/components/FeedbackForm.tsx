@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { DEFAULT_API_BASE_URL } from '../../shared/api/client';
+import { DEFAULT_API_BASE_URL, fetchOrThrow } from '../../shared/api/client';
 import { colors, radius, space } from '../../shared/theme';
 import ThemedButton from './ThemedButton';
 
@@ -26,7 +26,7 @@ export default function FeedbackForm() {
     setStatus('submitting');
     setError('');
     try {
-      const response = await fetch(`${DEFAULT_API_BASE_URL}/feedback`, {
+      const response = await fetchOrThrow(`${DEFAULT_API_BASE_URL}/feedback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
