@@ -29,6 +29,10 @@ export default function GeocodeMap({ latitude, longitude, label }: Props) {
       zoom: 15,
     });
     map.addControl(new NavigationControl(), 'top-right');
+    // See BatchGeocodeMap.web.tsx / public/README.md -- a style/tile-load
+    // failure here previously had no visible symptom at all beyond a
+    // missing map, worth logging instead of leaving silent.
+    map.on('error', (e) => console.error('GeocodeMap: map error', e.error));
 
     const marker = new Marker().setLngLat([longitude, latitude]).addTo(map);
     mapRef.current = map;

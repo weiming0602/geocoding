@@ -47,6 +47,14 @@ export default function Batch() {
   const [quota, setQuota] = useState<{ remaining: number; tier: number } | string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Highlighting only, set from either direction (a row click or a
+  // marker click) -- see BatchMapView's own selectedIndex comment.
+  const [selectedIndex, setSelectedIndex] = useState<number | null>(null);
+  // Row-click direction only -- pans/zooms the map. nonce forces a
+  // re-fire even when the same row is clicked twice in a row.
+  const [focusRequest, setFocusRequest] = useState<{ index: number; nonce: number } | null>(null);
+  const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({});
+  const mapWrapperRef = useRef<HTMLDivElement>(null);
 
   const hasSource = Boolean(pickedFile) || filePath.trim().length > 0;
   const buildSource = useCallback((): BatchSource => {
@@ -76,6 +84,8 @@ export default function Batch() {
     setError(null);
     setResults(null);
     setQuota(null);
+    setSelectedIndex(null);
+    setFocusRequest(null);
     try {
       const response = await batchGeocode(buildSource());
       setResults(response.results);
@@ -119,8 +129,25 @@ export default function Batch() {
 
   const successCount = results ? results.filter((r) => r.success).length : 0;
   const successMarkers = (results ?? [])
-    .filter((r): r is Extract<BatchResult, { success: true }> => r.success)
-    .map((r) => ({ address: r.address, latitude: r.coordinates.latitude, longitude: r.coordinates.longitude }));
+    .map((r, resultIndex) => ({ r, resultIndex }))
+    .filter((x): x is { r: Extract<BatchResult, { success: true }>; resultIndex: number } => x.r.success)
+    .map(({ r, resultIndex }) => ({
+      address: r.address,
+      latitude: r.coordinates.latitude,
+      longitude: r.coordinates.longitude,
+      resultIndex,
+    }));
+
+  const handleSelectRow = useCallback((index: number) => {
+    setSelectedIndex(index);
+    setFocusRequest({ index, nonce: Date.now() });
+    mapWrapperRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
+
+  const handleMarkerClick = useCallback((index: number) => {
+    setSelectedIndex(index);
+    rowRefs.current[index]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
 
   // Only trust forwardedIds if it lines up 1:1 with results -- a
   // mismatch shouldn't ever happen (results come back in the same order
@@ -303,7 +330,19 @@ export default function Batch() {
                   </thead>
                   <tbody>
                     {results.map((result, index) => (
-                      <tr key={index}>
+                      <tr
+                        key={index}
+                        ref={(el) => {
+                          rowRefs.current[index] = el;
+                        }}
+                        onClick={() => result.success && handleSelectRow(index)}
+                        style={{
+                          cursor: result.success ? 'pointer' : undefined,
+                          borderLeft:
+                            selectedIndex === index ? '3px solid var(--color-accent)' : '3px solid transparent',
+                          background: selectedIndex === index ? 'var(--color-surface)' : undefined,
+                        }}
+                      >
                         {idsMatchResults && forwardedIds && <td className="text-muted">{forwardedIds[index]}</td>}
                         <td>{result.address}</td>
                         <td>
@@ -327,8 +366,13 @@ export default function Batch() {
                 </table>
               </div>
               {successMarkers.length > 0 && (
-                <div style={{ marginTop: 'var(--space-4)' }}>
-                  <BatchMapView markers={successMarkers} />
+                <div ref={mapWrapperRef} style={{ marginTop: 'var(--space-4)' }}>
+                  <BatchMapView
+                    markers={successMarkers}
+                    selectedIndex={selectedIndex}
+                    focusRequest={focusRequest}
+                    onMarkerClick={handleMarkerClick}
+                  />
                 </div>
               )}
             </>
