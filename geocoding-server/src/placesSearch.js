@@ -160,7 +160,12 @@ async function geocodePlaceName(locationPhrase) {
       `couldn't find a location matching "${locationPhrase}" -- try being more specific, or click a point on the map instead`
     );
   }
-  return { latitude: parseFloat(results[0].lat), longitude: parseFloat(results[0].lon) };
+  const latitude = parseFloat(results[0].lat);
+  const longitude = parseFloat(results[0].lon);
+  if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+    throw new UpstreamError(`Nominatim returned an unusable location for "${locationPhrase}"`);
+  }
+  return { latitude, longitude };
 }
 
 /**
@@ -239,9 +244,15 @@ async function searchNominatimPlaces(terms, latitude, longitude, radiusMeters) {
       skipped += 1;
       continue;
     }
+    const latitude = parseFloat(element.lat);
+    const longitude = parseFloat(element.lon);
+    if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) {
+      skipped += 1;
+      continue;
+    }
     if (seen.has(address)) continue;
     seen.add(address);
-    results.push({ name: element.name || address, address });
+    results.push({ name: element.name || address, address, latitude, longitude });
     if (results.length >= MAX_RESULTS) break;
   }
   return { results, skipped };
@@ -390,9 +401,13 @@ async function searchPlaces(query, latitude, longitude, radiusMeters) {
       skipped += 1;
       continue;
     }
+    if (!Number.isFinite(element.lat) || !Number.isFinite(element.lon)) {
+      skipped += 1;
+      continue;
+    }
     if (seen.has(address)) continue; // multiple tag matches can hit the same node
     seen.add(address);
-    results.push({ name: tags.name || address, address });
+    results.push({ name: tags.name || address, address, latitude: element.lat, longitude: element.lon });
     if (results.length >= MAX_RESULTS) break;
   }
 

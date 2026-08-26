@@ -114,6 +114,8 @@ test(
       json: async () => ({
         elements: [
           {
+            lat: 43.6591,
+            lon: -70.2568,
             tags: {
               name: 'Thai Palace',
               'addr:housenumber': '10',
@@ -126,6 +128,8 @@ test(
           // Same address matched via a different tag (e.g. both "name"
           // and "cuisine" matched) -- should be deduped, not counted twice.
           {
+            lat: 43.6591,
+            lon: -70.2568,
             tags: {
               name: 'Thai Palace',
               'addr:housenumber': '10',
@@ -143,10 +147,65 @@ test(
     async () => {
       const result = await searchPlaces('thai', 43.66, -70.26, 5000);
       assert.deepEqual(result.results, [
-        { name: 'Thai Palace', address: '10 Main St, Portland, ME 04101' },
+        { name: 'Thai Palace', address: '10 Main St, Portland, ME 04101', latitude: 43.6591, longitude: -70.2568 },
       ]);
       assert.equal(result.skipped, 1);
       assert.equal(result.truncated, false);
+    }
+  )
+);
+
+// Regression: a result with a usable address but no valid coordinate
+// (Overpass's own "out body" omits lat/lon for way/relation elements,
+// only nodes carry it inline) previously flowed through as NaN, which
+// crashed both frontends' map components (setLngLat/fitBounds throw on
+// a NaN LngLat, with no error boundary to catch it) -- must be counted
+// as skipped instead, same as a result missing a street address.
+test(
+  'searchPlaces skips a result with a usable address but no valid coordinate (Overpass)',
+  withFetch(
+    async () => ({
+      ok: true,
+      json: async () => ({
+        elements: [
+          {
+            tags: {
+              name: 'Thai Palace',
+              'addr:housenumber': '10',
+              'addr:street': 'Main St',
+              'addr:postcode': '04101',
+            },
+            // No lat/lon at all.
+          },
+          {
+            lat: NaN,
+            lon: -70.26,
+            tags: {
+              name: 'Pizza Place',
+              'addr:housenumber': '20',
+              'addr:street': 'Main St',
+              'addr:postcode': '04101',
+            },
+          },
+          {
+            lat: 43.66,
+            lon: -70.26,
+            tags: {
+              name: 'Good Place',
+              'addr:housenumber': '30',
+              'addr:street': 'Main St',
+              'addr:postcode': '04101',
+            },
+          },
+        ],
+      }),
+    }),
+    async () => {
+      const result = await searchPlaces('place', 43.66, -70.26, 5000);
+      assert.deepEqual(result.results, [
+        { name: 'Good Place', address: '30 Main St 04101', latitude: 43.66, longitude: -70.26 },
+      ]);
+      assert.equal(result.skipped, 2);
     }
   )
 );
@@ -158,6 +217,8 @@ test(
       ok: true,
       json: async () => ({
         elements: Array.from({ length: MAX_RESULTS + 10 }, (_, i) => ({
+          lat: 43.66 + i * 0.001,
+          lon: -70.26,
           tags: {
             name: `Place ${i}`,
             'addr:housenumber': String(i + 1),
@@ -223,6 +284,8 @@ test('searchPlaces retries Overpass once and succeeds if a later attempt lands o
       json: async () => ({
         elements: [
           {
+            lat: 43.66,
+            lon: -70.26,
             tags: {
               name: 'Thai Palace',
               'addr:housenumber': '10',
@@ -351,6 +414,27 @@ test(
   )
 );
 
+// Regression: same NaN-coordinate crash as the result-level tests above,
+// but for the "near <place>" center itself (geocodePlaceName) -- a
+// malformed lat/lon from Nominatim's own place lookup must not silently
+// become the search center (which the frontend map would then hand to
+// maplibre as a NaN LngLat and crash on).
+test(
+  'searchPlaces throws UpstreamError when Nominatim returns an unusable coordinate for a "near" clause',
+  withFetchByUrl(
+    {
+      nominatim: async () => ({ ok: true, json: async () => [{ lat: 'not-a-number', lon: '-69.9653' }] }),
+      overpass: async () => ({ ok: true, json: async () => ({}) }),
+    },
+    async () => {
+      await assert.rejects(
+        () => searchPlaces('barber shop near Brunswick, Maine', undefined, undefined, 5000),
+        /unusable location/
+      );
+    }
+  )
+);
+
 test(
   'searchPlaces throws UpstreamError when Nominatim itself fails',
   withFetchByUrl(
@@ -378,6 +462,8 @@ test(
             json: async () => [
               {
                 name: 'Clippers Barber Shop',
+                lat: '43.9151',
+                lon: '-69.9648',
                 address: { house_number: '16', road: 'Vannah Avenue', city: 'Portland', state: 'Maine', postcode: '04103' },
               },
             ],
@@ -392,8 +478,61 @@ test(
     async () => {
       const result = await searchPlaces('barber shop near Brunswick, Maine', undefined, undefined, 5000);
       assert.deepEqual(result.results, [
-        { name: 'Clippers Barber Shop', address: '16 Vannah Avenue, Portland, Maine 04103' },
+        {
+          name: 'Clippers Barber Shop',
+          address: '16 Vannah Avenue, Portland, Maine 04103',
+          latitude: 43.9151,
+          longitude: -69.9648,
+        },
       ]);
+    }
+  )
+);
+
+// Regression: same NaN-coordinate crash as the Overpass path above, but
+// via Nominatim's own POI search (searchNominatimPlaces) -- a result
+// missing lat/lon (parseFloat(undefined) === NaN) must be skipped, not
+// handed to the frontend map component as an unusable point.
+test(
+  'searchPlaces skips a Nominatim POI result with a usable address but no valid coordinate',
+  withFetchByUrl(
+    {
+      nominatim: async (url) => {
+        if (String(url).includes('addressdetails=1')) {
+          return {
+            ok: true,
+            json: async () => [
+              {
+                name: 'No Coordinate Shop',
+                address: { house_number: '1', road: 'Main St', city: 'Portland', postcode: '04101' },
+                // No lat/lon at all.
+              },
+              {
+                name: 'Clippers Barber Shop',
+                lat: '43.9151',
+                lon: '-69.9648',
+                address: { house_number: '16', road: 'Vannah Avenue', city: 'Portland', state: 'Maine', postcode: '04103' },
+              },
+            ],
+          };
+        }
+        return { ok: true, json: async () => [{ lat: '43.9145', lon: '-69.9653' }] };
+      },
+      overpass: async () => {
+        throw new Error('Overpass should not be called when Nominatim already found results');
+      },
+    },
+    async () => {
+      const result = await searchPlaces('barber shop near Brunswick, Maine', undefined, undefined, 5000);
+      assert.deepEqual(result.results, [
+        {
+          name: 'Clippers Barber Shop',
+          address: '16 Vannah Avenue, Portland, Maine 04103',
+          latitude: 43.9151,
+          longitude: -69.9648,
+        },
+      ]);
+      assert.equal(result.skipped, 1);
     }
   )
 );
@@ -408,6 +547,8 @@ test(
         json: async () => ({
           elements: [
             {
+              lat: 43.9,
+              lon: -69.96,
               tags: { name: 'Pizza Place', 'addr:housenumber': '5', 'addr:street': 'Elm St', 'addr:postcode': '04011' },
             },
           ],
@@ -416,7 +557,9 @@ test(
     },
     async () => {
       const result = await searchPlaces('pizza', 43.9, -69.96, 5000);
-      assert.deepEqual(result.results, [{ name: 'Pizza Place', address: '5 Elm St 04011' }]);
+      assert.deepEqual(result.results, [
+        { name: 'Pizza Place', address: '5 Elm St 04011', latitude: 43.9, longitude: -69.96 },
+      ]);
     }
   )
 );

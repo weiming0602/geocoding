@@ -33,6 +33,8 @@ test(
       json: async () => ({
         elements: [
           {
+            lat: 43.6591,
+            lon: -70.2568,
             tags: {
               name: 'Thai Palace',
               'addr:housenumber': '10',
@@ -62,7 +64,7 @@ test(
           assert.equal(response.status, 200);
           const body = await response.json();
           assert.deepEqual(body.results, [
-            { name: 'Thai Palace', address: '10 Main St, Portland, ME 04101' },
+            { name: 'Thai Palace', address: '10 Main St, Portland, ME 04101', latitude: 43.6591, longitude: -70.2568 },
           ]);
           assert.equal(body.skipped, 0);
           assert.equal(body.truncated, false);

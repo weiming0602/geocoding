@@ -123,6 +123,8 @@ export type ApiErrorResponse = {
 export type PlaceResult = {
   name: string;
   address: string;
+  latitude: number;
+  longitude: number;
 };
 
 export type PlaceSearchResponse = {
