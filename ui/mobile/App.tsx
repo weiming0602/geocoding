@@ -6,9 +6,10 @@ import { Lora_400Regular, Lora_600SemiBold, useFonts as useLora } from '@expo-go
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useState } from 'react';
-import { SafeAreaView, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Modal, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { getStoredAccount } from './components/roadAlertsStorage';
+import { Icon, type IconName } from './components/icons';
 import BatchGeocodeScreen from './screens/BatchGeocodeScreen';
 import FindPlacesScreen from './screens/FindPlacesScreen';
 import HelpScreen from './screens/HelpScreen';
@@ -21,7 +22,7 @@ import RoadAlertsScreen from './screens/RoadAlertsScreen';
 import SingleGeocodeScreen from './screens/SingleGeocodeScreen';
 import { INITIAL_IMPORT_STATE, type ImportWizardState } from './components/ImportAddressesForm';
 import { getRoadAlertsNotifications } from '../shared/api/client';
-import { colors, space } from '../shared/theme';
+import { colors, radius, space } from '../shared/theme';
 
 SplashScreen.preventAutoHideAsync();
 
@@ -37,21 +38,25 @@ type Screen =
   | 'progress'
   | 'help';
 
-const TABS: { key: Screen; label: string }[] = [
-  { key: 'single', label: 'Single Address' },
-  { key: 'batch', label: 'Batch Geocode' },
-  { key: 'reverse', label: 'Reverse Geocode' },
-  { key: 'findPlaces', label: 'Find Places' },
-  { key: 'roadAlerts', label: 'Road Alerts' },
-  { key: 'import', label: 'Import Addresses' },
-  { key: 'quota', label: 'Plan & Quota' },
-  { key: 'pricing', label: 'Pricing' },
-  { key: 'progress', label: 'Progress' },
-  { key: 'help', label: 'Help' },
+// icon values match ui/desktop's NAV_LINKS one-for-one (see
+// components/icons.tsx's port-from-desktop comment) so the two apps'
+// menus read as the same system, not two different icon sets.
+const TABS: { key: Screen; label: string; icon: IconName }[] = [
+  { key: 'single', label: 'Single Address', icon: 'geocode' },
+  { key: 'batch', label: 'Batch Geocode', icon: 'batch' },
+  { key: 'reverse', label: 'Reverse Geocode', icon: 'reverseGeocode' },
+  { key: 'findPlaces', label: 'Find Places', icon: 'findPlaces' },
+  { key: 'roadAlerts', label: 'Road Alerts', icon: 'roadAlerts' },
+  { key: 'import', label: 'Import Addresses', icon: 'importAddresses' },
+  { key: 'quota', label: 'Plan & Quota', icon: 'planQuota' },
+  { key: 'pricing', label: 'Pricing', icon: 'pricing' },
+  { key: 'progress', label: 'Progress', icon: 'progress' },
+  { key: 'help', label: 'Help', icon: 'help' },
 ];
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('single');
+  const [menuOpen, setMenuOpen] = useState(false);
   const [headingLoaded] = useCormorantGaramond({ CormorantGaramond_600SemiBold });
   const [bodyLoaded] = useLora({ Lora_400Regular, Lora_600SemiBold });
 
@@ -129,30 +134,43 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container} onLayout={onLayout}>
-      <View style={styles.tabBar}>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.tabBarContent}
+      <View style={styles.header}>
+        <Text style={styles.brand}>Meridian</Text>
+        <TouchableOpacity
+          onPress={() => setMenuOpen((open) => !open)}
+          accessibilityRole="button"
+          accessibilityLabel={menuOpen ? 'Close menu' : 'Open menu'}
         >
-          {TABS.map((tab) => (
-            <TouchableOpacity
-              key={tab.key}
-              style={[styles.tab, screen === tab.key && styles.tabActive]}
-              onPress={() => goToScreen(tab.key)}
-            >
-              <Text
-                style={[styles.tabLabel, screen === tab.key && styles.tabLabelActive]}
-                numberOfLines={1}
-              >
-                {tab.key === 'roadAlerts' && roadAlertsReplyCount > 0
-                  ? `${tab.label} · ${roadAlertsReplyCount}`
-                  : tab.label}
-              </Text>
-            </TouchableOpacity>
-          ))}
-        </ScrollView>
+          <Text style={styles.menuButtonText}>☰ Menu</Text>
+        </TouchableOpacity>
       </View>
+
+      <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
+        <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setMenuOpen(false)}>
+          <View style={styles.modalCard}>
+            {TABS.map((tab) => {
+              const active = screen === tab.key;
+              return (
+                <TouchableOpacity
+                  key={tab.key}
+                  style={[styles.modalOption, styles.modalOptionRow]}
+                  onPress={() => {
+                    goToScreen(tab.key);
+                    setMenuOpen(false);
+                  }}
+                >
+                  <Icon name={tab.icon} size={16} color={active ? colors.accent : colors.text} />
+                  <Text style={[styles.modalOptionText, active && styles.modalOptionTextActive]}>
+                    {tab.key === 'roadAlerts' && roadAlertsReplyCount > 0
+                      ? `${tab.label} · ${roadAlertsReplyCount}`
+                      : tab.label}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {screen === 'single' && <SingleGeocodeScreen />}
       {screen === 'batch' && (
@@ -190,37 +208,57 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: colors.bg,
   },
-  tabBar: {
+  header: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: space[3],
+    paddingHorizontal: space[4],
     borderBottomWidth: 1,
     borderBottomColor: colors.divider,
   },
-  // Intrinsic-width tabs in a horizontally scrolling row -- flex:1 across
-  // all 9 tabs is what made longer labels ("Reverse Geocode", "Import
-  // Addresses") overlap their neighbors at real phone/tablet widths,
-  // since nothing clipped or wrapped the overflow.
-  tabBarContent: {
-    flexDirection: 'row',
-  },
-  tab: {
-    paddingVertical: 14,
-    paddingHorizontal: space[3],
-    alignItems: 'center',
-    borderBottomWidth: 2,
-    borderBottomColor: 'transparent',
-  },
-  tabActive: {
-    borderBottomColor: colors.accent,
-  },
-  tabLabel: {
-    fontFamily: 'Lora_400Regular',
-    fontSize: 13,
-    color: colors.text,
-    opacity: 0.7,
-  },
-  tabLabelActive: {
-    color: colors.accent,
-    opacity: 1,
+  brand: {
     fontFamily: 'CormorantGaramond_600SemiBold',
+    fontSize: 20,
+    color: colors.text,
+  },
+  menuButtonText: {
+    fontFamily: 'Lora_400Regular',
     fontSize: 15,
+    color: colors.accent,
+  },
+  // Same modal shape as ImportAddressesForm.tsx's column-role picker --
+  // a dimmed full-screen backdrop (closes on outside tap) behind a
+  // centered card listing options, reused here rather than inventing a
+  // second dropdown/menu visual language in this app.
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    padding: space[4],
+  },
+  modalCard: {
+    backgroundColor: colors.bg,
+    borderRadius: radius.lg,
+    padding: space[4],
+  },
+  modalOption: {
+    paddingVertical: space[2],
+    borderTopWidth: 1,
+    borderTopColor: colors.divider,
+  },
+  modalOptionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[2],
+  },
+  modalOptionText: {
+    fontFamily: 'Lora_400Regular',
+    fontSize: 15,
+    color: colors.text,
+  },
+  modalOptionTextActive: {
+    color: colors.accent,
+    fontFamily: 'CormorantGaramond_600SemiBold',
   },
 });

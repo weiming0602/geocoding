@@ -236,8 +236,10 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
 .tag-danger { background: color-mix(in srgb, #a4402a 12%, transparent); color: #a4402a; }
 
 /* — navigation — */
+/* Brand on its own top line, nav links on their own line below --
+   column, not row, so the two never share horizontal space. */
 .nav {
-  display: flex; align-items: center; gap: var(--space-4);
+  display: flex; flex-direction: column; align-items: flex-start; gap: var(--space-3);
   padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--color-divider);
   position: relative;
@@ -245,19 +247,19 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
 .nav-brand {
   display: flex; align-items: center; gap: var(--space-2);
   font-family: var(--font-heading); font-weight: var(--font-heading-weight);
-  font-size: 20px; margin-right: auto;
+  font-size: 26px;
 }
 .nav-brand svg { color: var(--color-icon-active); }
-.nav-links { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; }
+.nav-links { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
 .nav-item {
-  display: flex; align-items: center; gap: 7px;
-  padding: 6px 12px 6px 6px; border-radius: 999px;
-  color: inherit; text-decoration: none; font-size: 14px; white-space: nowrap;
+  display: flex; align-items: center; gap: 5px;
+  padding: 4px 9px 4px 4px; border-radius: 999px;
+  color: inherit; text-decoration: none; font-size: 12px; white-space: nowrap;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 .nav-item:hover:not(.active) { background: color-mix(in srgb, var(--color-text) 6%, transparent); }
 .nav-item-tile {
-  width: 28px; height: 28px; border-radius: 9px; flex: none;
+  width: 20px; height: 20px; border-radius: 7px; flex: none;
   display: flex; align-items: center; justify-content: center;
   background: var(--color-icon-default); color: #fff;
 }
@@ -270,41 +272,6 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
   width: 36px; height: 36px; border-radius: var(--radius-md); flex: none;
   display: flex; align-items: center; justify-content: center;
   background: var(--color-icon-default); color: #fff;
-}
-
-/* Hidden above the breakpoint -- .nav-links stays a plain always-visible
-   row there, same as before the toggle existed. */
-.nav-toggle {
-  display: none;
-  width: 36px; height: 36px; padding: 0;
-  align-items: center; justify-content: center;
-  background: transparent; border: 1px solid var(--color-divider);
-  border-radius: var(--radius-md); cursor: pointer; color: var(--color-text);
-}
-.nav-toggle:hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
-
-@media (max-width: 720px) {
-  .nav-toggle { display: inline-flex; }
-  /* Collapsed into a dropdown panel instead of the plain row above --
-     10 links' worth of text has nowhere to go at phone widths, and
-     flex-wrap alone (without this) still overflowed the viewport since
-     wrapping happens per-item, not per-row. */
-  .nav-links {
-    display: none;
-    position: absolute; top: 100%; left: 0; right: 0; z-index: 20;
-    flex-direction: column; align-items: stretch; gap: 0;
-    background: var(--color-bg);
-    border-bottom: 1px solid var(--color-divider);
-    box-shadow: var(--shadow-md);
-    padding: var(--space-2) var(--space-4) var(--space-4);
-  }
-  .nav-links.nav-links-open { display: flex; }
-  .nav-links .nav-item {
-    padding: var(--space-3) 0;
-    border-bottom: 1px solid var(--color-divider);
-    border-radius: 0;
-  }
-  .nav-links .nav-item:last-child { border-bottom: none; }
 }
 
 /* — install banner — */
