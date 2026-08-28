@@ -206,7 +206,7 @@ read-write).
   itself does not use Meridian's own geocoding.
 - `GET /road-signals/reroute` (`geocoding-server/src/roadReroute.js`,
   `ui/desktop`'s Road Alerts page's "Show a way around this" button)
-  finds 1-2 alternate driving routes from the driver's current position
+  finds 1-3 alternate driving routes from the driver's current position
   to a point past a hazard, avoiding a small buffer circle around the
   hazard itself -- entirely from our own TIGER-derived street data via
   pgRouting (`pgr_ksp`), no external routing service or API key.
