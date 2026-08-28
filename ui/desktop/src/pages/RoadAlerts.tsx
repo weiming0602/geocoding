@@ -22,9 +22,11 @@ import type {
   RoadSignalSeverity,
 } from '../../../shared/api/types';
 import { bearingDegrees, haversineDistanceMeters, isAhead } from '../../../shared/geo';
+import { buildGoogleMapsDirectionsUrl } from '../../../shared/googleMapsDirections';
+import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
 import PageHeader from '../components/PageHeader';
 import RoadAlertsRegistration from '../components/RoadAlertsRegistration';
-import RoadRerouteMap from '../components/RoadRerouteMap';
+import RoadRerouteMap, { ROUTE_COLORS } from '../components/RoadRerouteMap';
 import { clearStoredAccount, getStoredAccount, type StoredRoadAlertsAccount } from '../roadAlertsStorage';
 import { isSpeechRecognitionAvailable, listenOnce, matchesSaveCommand } from '../webSpeechRecognition';
 
@@ -63,6 +65,24 @@ function metersLabel(meters: number): string {
   return `${(meters / 1000).toFixed(1)} km`;
 }
 
+// Prefers lastUpdatedAt over createdAt -- same "how current is this,
+// really" reasoning as the server's own sortByFreshness (roadSignals.js),
+// which already orders the list by this same field so the newest alert is
+// always on top; this just puts a human-readable label on that ordering.
+function freshnessLabel(signal: RoadSignal): string {
+  const raw = signal.lastUpdatedAt || signal.createdAt;
+  if (!raw) return 'time unknown';
+  const ms = Date.now() - new Date(raw).getTime();
+  if (Number.isNaN(ms)) return 'time unknown';
+  if (ms < 60_000) return 'updated just now';
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `updated ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `updated ${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `updated ${days}d ago`;
+}
+
 // Alerts speak automatically at every tier except fun_to_know -- manual
 // replay via each row's Speak button is the only way a fun_to_know item
 // is ever heard.
@@ -91,6 +111,12 @@ export default function RoadAlerts() {
   const [usernameSaving, setUsernameSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [partial, setPartial] = useState(false);
+  // The alert list is the primary thing to see here -- registration,
+  // digest/username, spoken-detail level, and manual test coordinates are
+  // setup/testing concerns that shouldn't sit between opening this page and
+  // seeing what's nearby. Collapsed by default; watching now starts on its
+  // own (see the auto-start effect below) instead of waiting on a press.
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // "Save this" voice command per alert row -- keyed by signal id so each
   // row shows its own status; voiceListeningSignalId gates against
@@ -129,6 +155,10 @@ export default function RoadAlerts() {
   const [rerouteBySignalId, setRerouteBySignalId] = useState<
     Record<string, RoadRerouteResponse | 'loading' | 'error'>
   >({});
+  // Which option row is currently hovered, so RoadRerouteMap can call out
+  // the matching route -- only one reroute panel is ever open at once
+  // (expandedRerouteSignalId), so this doesn't need to be keyed per signal.
+  const [hoveredRouteIndex, setHoveredRouteIndex] = useState<number | null>(null);
 
   // Typed coordinates in place of real GPS -- a desktop has no real
   // location to drive around, so this is the primary way to actually see
@@ -292,6 +322,17 @@ export default function RoadAlerts() {
     watchIdRef.current = id;
     setWatching(true);
   }, [onPosition]);
+
+  // Starts watching as soon as an account is ready, rather than waiting on
+  // a press -- opening this page should surface alerts on its own. Depends
+  // only on `account` (not `watching`) so this fires once per sign-in
+  // rather than re-firing every time Stop (in Settings) flips `watching`
+  // back to false.
+  useEffect(() => {
+    if (account) {
+      handleStart();
+    }
+  }, [account, handleStart]);
 
   const handleManualCheck = useCallback(async () => {
     const latitude = Number(manualLatitude);
@@ -604,6 +645,7 @@ export default function RoadAlerts() {
 
   const handleToggleReroute = useCallback(
     async (signal: RoadSignal) => {
+      setHoveredRouteIndex(null);
       if (expandedRerouteSignalId === signal.id) {
         setExpandedRerouteSignalId(null);
         return;
@@ -664,6 +706,16 @@ export default function RoadAlerts() {
         Live traffic hazards near you, spoken aloud as you approach them.
       </p>
 
+      <button
+        className="btn btn-ghost"
+        style={{ marginBottom: 'var(--space-4)' }}
+        onClick={() => setSettingsOpen((o) => !o)}
+      >
+        {settingsOpen ? 'Hide settings' : 'Settings'}
+      </button>
+
+      {settingsOpen && (
+        <>
       <div className="card" style={{ background: 'var(--color-surface)', marginBottom: 'var(--space-4)' }}>
         <p className="card-body" style={{ margin: 0 }}>
           Traffic data from New England 511 (Maine, New Hampshire, and Vermont DOTs). Provided
@@ -817,6 +869,8 @@ export default function RoadAlerts() {
           {manualChecking ? 'Checking…' : 'Check this location'}
         </button>
       </div>
+        </>
+      )}
 
       {error && (
         <p className="card-body" style={{ color: '#a4402a', marginBottom: 'var(--space-4)' }}>
@@ -834,7 +888,7 @@ export default function RoadAlerts() {
       </h5>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
-        {signals.map((signal) => {
+        {signals.map((signal, index) => {
           const ahead =
             position && typeof signal.latitude === 'number' && typeof signal.longitude === 'number'
               ? isAhead(
@@ -855,19 +909,34 @@ export default function RoadAlerts() {
           const topicState = topicBySignalId[signal.id];
 
           return (
-            <div key={signal.id} className="card elev-sm">
+            <div
+              key={signal.id}
+              className="card elev-sm"
+              style={index === 0 ? { background: 'var(--color-accent-100)' } : undefined}
+            >
               <div
-                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}
+                style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}
               >
                 <span className="card-kicker">
                   {distance !== null ? `${metersLabel(distance)} away` : 'distance unknown'}
                   {!ahead ? ' · behind you' : ''}
                 </span>
-                <span className={`tag ${SEVERITY_TAG_CLASS[signal.severity]}`}>
-                  {SEVERITY_LABELS[signal.severity]}
+                <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
+                  <span className={`tag ${SEVERITY_TAG_CLASS[signal.severity]}`}>
+                    {SEVERITY_LABELS[signal.severity]}
+                  </span>
+                  <span className="card-kicker">{freshnessLabel(signal)}</span>
                 </span>
               </div>
               <div className="card-title" style={{ fontSize: 17 }}>
+                <span
+                  role="img"
+                  aria-label={HAZARD_CATEGORY_LABELS[signal.hazardCategory]}
+                  title={HAZARD_CATEGORY_LABELS[signal.hazardCategory]}
+                  style={{ marginRight: 6 }}
+                >
+                  {HAZARD_CATEGORY_ICONS[signal.hazardCategory]}
+                </span>
                 {signal.roadway ?? 'Unknown road'}
                 {signal.direction ? ` (${signal.direction})` : ''}
               </div>
@@ -942,16 +1011,61 @@ export default function RoadAlerts() {
                                 }}
                                 rejoinPoint={rerouteState.rejoinPoint}
                                 options={rerouteState.options}
+                                highlightedIndex={hoveredRouteIndex}
                               />
                               <div style={{ marginTop: 'var(--space-2)' }}>
                                 {rerouteState.options.map((option, index) => (
-                                  <p key={index} className="card-meta" style={{ margin: '2px 0' }}>
-                                    Option {index + 1}:{' '}
-                                    {option.distanceMeters !== null ? metersLabel(option.distanceMeters) : '?'}
-                                    {option.durationSeconds !== null
-                                      ? `, ~${Math.round(option.durationSeconds / 60)} min`
-                                      : ''}
-                                  </p>
+                                  <div
+                                    key={index}
+                                    onMouseEnter={() => setHoveredRouteIndex(index)}
+                                    onMouseLeave={() => setHoveredRouteIndex(null)}
+                                    style={{
+                                      display: 'flex',
+                                      alignItems: 'center',
+                                      justifyContent: 'space-between',
+                                      gap: 'var(--space-2)',
+                                      margin: '2px 0',
+                                      padding: '4px 6px',
+                                      borderRadius: 'var(--radius-sm)',
+                                      cursor: 'default',
+                                      background:
+                                        hoveredRouteIndex === index ? 'var(--color-surface)' : 'transparent',
+                                    }}
+                                  >
+                                    <p className="card-meta" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                      <span
+                                        aria-hidden="true"
+                                        style={{
+                                          display: 'inline-block',
+                                          width: 10,
+                                          height: 10,
+                                          borderRadius: '50%',
+                                          background: ROUTE_COLORS[index % ROUTE_COLORS.length],
+                                          flexShrink: 0,
+                                        }}
+                                      />
+                                      Option {index + 1}:{' '}
+                                      {option.distanceMeters !== null ? metersLabel(option.distanceMeters) : '?'}
+                                      {option.durationSeconds !== null
+                                        ? `, ~${Math.round(option.durationSeconds / 60)} min`
+                                        : ''}
+                                    </p>
+                                    {position && (
+                                      <a
+                                        className="btn btn-ghost"
+                                        style={{ padding: '2px 10px', fontSize: 13 }}
+                                        href={buildGoogleMapsDirectionsUrl(
+                                          { latitude: position.latitude, longitude: position.longitude },
+                                          rerouteState.rejoinPoint,
+                                          option
+                                        )}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                      >
+                                        Navigate with Google Maps
+                                      </a>
+                                    )}
+                                  </div>
                                 ))}
                               </div>
                               <p className="card-meta" style={{ marginTop: 'var(--space-2)' }}>

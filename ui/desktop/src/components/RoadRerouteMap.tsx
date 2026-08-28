@@ -19,24 +19,39 @@ type Props = {
   hazardPosition: Point;
   rejoinPoint: Point;
   options: RerouteOption[];
+  // Which option (index into `options`) to visually call out -- e.g. the
+  // one the driver is currently hovering in the option list below the
+  // map. null/undefined draws every route the same as always.
+  highlightedIndex?: number | null;
 };
 
 const SOURCE_ID = 'road-reroute-routes';
 const LAYER_ID = 'road-reroute-routes-lines';
-// Reuses the icon-nav color system (styles.css) rather than inventing new
-// route colors, so this reads as part of the same app.
-const ROUTE_COLORS = ['#2fd1ac', '#f2a52d'];
+const HIGHLIGHT_LAYER_ID = 'road-reroute-routes-highlight';
+// One per ROUTE_OPTION_COUNT (roadReroute.js) -- was missing a 3rd color
+// until now, so a genuine 3rd option silently fell through to this
+// layer's own "no match" default (the same gray as the rejoin marker),
+// which is likely a real part of why 3 options could look like fewer.
+export const ROUTE_COLORS = ['#1e3a8a', '#f2a52d', '#7c3aed'];
 
 type RouteFeatureCollection = GeoJSON.FeatureCollection<GeoJSON.LineString, { routeIndex: number }>;
 
+// Drawn in reverse (option 0 last, i.e. on top) so the primary route's
+// thick dark-blue line wins visually wherever pgr_ksp's options happen to
+// overlap or fully coincide -- otherwise a later feature always paints
+// over an earlier one at the same pixels, which could silently hide
+// option 0 under an alternate.
 function toGeoJSON(options: RerouteOption[]): RouteFeatureCollection {
   return {
     type: 'FeatureCollection',
-    features: options.map((option, index) => ({
-      type: 'Feature',
-      geometry: option.geometry,
-      properties: { routeIndex: index },
-    })),
+    features: options
+      .map((option, index) => ({ option, index }))
+      .reverse()
+      .map(({ option, index }) => ({
+        type: 'Feature',
+        geometry: option.geometry,
+        properties: { routeIndex: index },
+      })),
   };
 }
 
@@ -46,7 +61,13 @@ function toGeoJSON(options: RerouteOption[]): RouteFeatureCollection {
 // (driver/hazard/rejoin), same as MapView.tsx's single-marker approach --
 // there are only ever 3 of them, so no need for BatchMapView's
 // WebGL-circle-layer scaling trick.
-export default function RoadRerouteMap({ driverPosition, hazardPosition, rejoinPoint, options }: Props) {
+export default function RoadRerouteMap({
+  driverPosition,
+  hazardPosition,
+  rejoinPoint,
+  options,
+  highlightedIndex = null,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const [ready, setReady] = useState(false);
@@ -72,7 +93,7 @@ export default function RoadRerouteMap({ driverPosition, hazardPosition, rejoinP
         source: SOURCE_ID,
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
-          'line-width': 4,
+          'line-width': 6,
           'line-color': [
             'match',
             ['get', 'routeIndex'],
@@ -80,9 +101,39 @@ export default function RoadRerouteMap({ driverPosition, hazardPosition, rejoinP
             ROUTE_COLORS[0],
             1,
             ROUTE_COLORS[1],
+            2,
+            ROUTE_COLORS[2],
             /* default */ '#9b9797',
           ],
         },
+      });
+      // A second layer over the same source, filtered (via setFilter, in
+      // the effect below) to just the hovered option's feature and drawn
+      // wider -- guarantees the hovered route reads as "on top" even
+      // where two options fully coincide, since draw order otherwise
+      // follows the source's fixed feature order (see toGeoJSON's own
+      // comment), not hover state. Filtered to match nothing until a
+      // driver actually hovers an option.
+      map.addLayer({
+        id: HIGHLIGHT_LAYER_ID,
+        type: 'line',
+        source: SOURCE_ID,
+        layout: { 'line-cap': 'round', 'line-join': 'round' },
+        paint: {
+          'line-width': 11,
+          'line-color': [
+            'match',
+            ['get', 'routeIndex'],
+            0,
+            ROUTE_COLORS[0],
+            1,
+            ROUTE_COLORS[1],
+            2,
+            ROUTE_COLORS[2],
+            /* default */ '#9b9797',
+          ],
+        },
+        filter: ['==', ['get', 'routeIndex'], -1],
       });
       setReady(true);
     });
@@ -138,6 +189,26 @@ export default function RoadRerouteMap({ driverPosition, hazardPosition, rejoinP
       rejoinMarker.remove();
     };
   }, [ready, driverPosition, hazardPosition, rejoinPoint, options]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+
+    if (highlightedIndex == null) {
+      map.setFilter(HIGHLIGHT_LAYER_ID, ['==', ['get', 'routeIndex'], -1]);
+      map.setPaintProperty(LAYER_ID, 'line-opacity', 1);
+    } else {
+      map.setFilter(HIGHLIGHT_LAYER_ID, ['==', ['get', 'routeIndex'], highlightedIndex]);
+      // Other options fade back (not hidden) so the driver can still see
+      // there's more than one path, just not which one is "live" right now.
+      map.setPaintProperty(LAYER_ID, 'line-opacity', [
+        'case',
+        ['==', ['get', 'routeIndex'], highlightedIndex],
+        1,
+        0.25,
+      ]);
+    }
+  }, [ready, highlightedIndex]);
 
   return (
     <div
