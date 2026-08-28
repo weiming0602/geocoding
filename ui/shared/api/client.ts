@@ -28,7 +28,22 @@ import type {
 // dev machine's LAN IP) instead of relying on this default. ui/desktop,
 // running in a real browser on the same machine as the server (in dev),
 // can use the default as-is.
-export const DEFAULT_API_BASE_URL = 'http://localhost:3001';
+//
+// `let`, not `const`, so setApiBaseUrl (below) can override it -- every
+// exported function here defaults its own `baseUrl` param to this
+// identifier, and a default parameter is re-evaluated on every call, so
+// a call made after setApiBaseUrl runs picks up the new value even
+// though this module already loaded with the old one.
+export let DEFAULT_API_BASE_URL = 'http://localhost:3001';
+
+// Lets a bundler-specific entry point (e.g. ui/desktop's main.tsx, via
+// Vite's import.meta.env.VITE_API_BASE_URL) point this shared,
+// bundler-agnostic module at a real deployed server instead of
+// localhost, without this file itself needing to know which bundler
+// (Vite vs. Metro) is loading it.
+export function setApiBaseUrl(url: string): void {
+  DEFAULT_API_BASE_URL = url;
+}
 
 export class ApiError extends Error {
   status: number;
