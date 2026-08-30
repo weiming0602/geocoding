@@ -2,6 +2,7 @@ import { useState } from 'react';
 
 import FeedbackForm from '../components/FeedbackForm';
 import PageHeader from '../components/PageHeader';
+import RoadAlertsDiagram from '../components/RoadAlertsDiagram';
 
 type HelpTopic = 'geocoding' | 'roadAlerts';
 
@@ -53,7 +54,7 @@ function GeocodingHelp() {
       </p>
 
       <div className="plate" style={{ marginBottom: 'var(--space-6)', padding: 'var(--space-3)' }}>
-        <strong>Coverage:</strong> Maine and New Hampshire, by design. Meridian isn't trying to
+        <strong>💡 Coverage:</strong> Maine and New Hampshire, by design. Meridian isn't trying to
         cover the whole country — it's built specifically for these two states. Addresses outside
         Maine and New Hampshire aren't supported yet.
       </div>
@@ -143,8 +144,13 @@ function RoadAlertsHelp() {
       </p>
 
       <div className="plate" style={{ marginBottom: 'var(--space-6)', padding: 'var(--space-3)' }}>
-        <strong>Coverage:</strong> Maine, New Hampshire, and Vermont, sourced from New England
+        <strong>💡 Coverage:</strong> Maine, New Hampshire, and Vermont, sourced from New England
         511 in real time. Free while it's in testing — register with just an email, no payment.
+      </div>
+
+      <h2>How a hazard gets to you</h2>
+      <div className="plate" style={{ marginBottom: 'var(--space-2)', padding: 'var(--space-4)' }}>
+        <RoadAlertsDiagram />
       </div>
 
       <h2>Severity tiers</h2>

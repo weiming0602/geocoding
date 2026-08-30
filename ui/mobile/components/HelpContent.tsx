@@ -4,6 +4,7 @@ import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { colors, radius, space } from '../../shared/theme';
 import FeedbackForm from './FeedbackForm';
 import { Icon } from './icons';
+import RoadAlertsDiagram from './RoadAlertsDiagram';
 
 const chestnutImage = require('../assets/help/chestnut-91-left.png');
 const sawyerImage = require('../assets/help/sawyer-26-right.png');
@@ -54,7 +55,7 @@ function GeocodingHelp() {
 
       <View style={styles.coverageNote}>
         <Text style={styles.coverageText}>
-          <Text style={styles.bold}>Coverage: </Text>
+          <Text style={styles.bold}>💡 Coverage: </Text>
           Maine and New Hampshire, by design. Meridian isn't trying to cover the whole country —
           it's built specifically for these two states. Addresses outside Maine and New Hampshire
           aren't supported yet.
@@ -138,10 +139,15 @@ function RoadAlertsHelp() {
 
       <View style={styles.coverageNote}>
         <Text style={styles.coverageText}>
-          <Text style={styles.bold}>Coverage: </Text>
+          <Text style={styles.bold}>💡 Coverage: </Text>
           Maine, New Hampshire, and Vermont, sourced from New England 511 in real time. Free while
           it's in testing — register with just an email, no payment.
         </Text>
+      </View>
+
+      <Text style={styles.heading}>How a hazard gets to you</Text>
+      <View style={styles.diagramFrame}>
+        <RoadAlertsDiagram />
       </View>
 
       <Text style={styles.heading}>Severity tiers</Text>
@@ -275,6 +281,14 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     padding: space[3],
     marginBottom: space[6],
+  },
+  diagramFrame: {
+    borderWidth: 1,
+    borderColor: colors.divider,
+    borderRadius: radius.md,
+    backgroundColor: colors.surface,
+    padding: space[4],
+    marginBottom: space[4],
   },
   coverageText: {
     fontFamily: 'Lora_400Regular',
