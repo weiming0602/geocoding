@@ -263,8 +263,24 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
   display: flex; align-items: center; justify-content: center;
   background: var(--color-icon-default); color: #fff;
 }
-.nav-item.active { font-weight: 600; background: var(--color-icon-active-tint); color: var(--color-icon-active-tint-text); }
+.nav-item.active { font-weight: 600; background: var(--color-icon-active-tint); color: var(--color-icon-active-tint-text); animation: nav-item-hop 0.65s ease; }
 .nav-item.active .nav-item-tile { background: var(--color-icon-active); }
+
+/* Plays once whenever a nav item newly becomes .active (react-router's
+   NavLink adds the class to a different element on each navigation, so
+   this re-triggers per click rather than looping) -- 3 decreasing bounces
+   (like a dropped ball settling) so the selected tab reads as "alive," not
+   just a static background swap. */
+@keyframes nav-item-hop {
+  0% { transform: translateY(0) scale(1); }
+  14% { transform: translateY(-6px) scale(1.07); }
+  28% { transform: translateY(0) scale(0.97); }
+  42% { transform: translateY(-3.5px) scale(1.04); }
+  56% { transform: translateY(0) scale(0.98); }
+  70% { transform: translateY(-1.5px) scale(1.02); }
+  84% { transform: translateY(0) scale(1); }
+  100% { transform: translateY(0) scale(1); }
+}
 
 /* Overview's task cards link to other pages, so their tiles stay the
    default teal -- amber is reserved for wherever you already are. */

@@ -5,8 +5,8 @@ import {
 import { Lora_400Regular, Lora_600SemiBold, useFonts as useLora } from '@expo-google-fonts/lora';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import React, { useCallback, useEffect, useState } from 'react';
-import { Modal, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Animated, Easing, Modal, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { getStoredAccount } from './components/roadAlertsStorage';
 import { Icon, type IconName } from './components/icons';
@@ -53,6 +53,58 @@ const TABS: { key: Screen; label: string; icon: IconName }[] = [
   { key: 'progress', label: 'Progress', icon: 'progress' },
   { key: 'help', label: 'Help', icon: 'help' },
 ];
+
+// Desktop's equivalent (styles.css's nav-item-hop) plays a one-shot hop
+// whenever a nav pill newly becomes .active -- there's no persistent nav
+// bar here to do the same trick on (this menu is a Modal that closes the
+// instant a tab is picked), so instead the tapped row itself hops in
+// place, and the actual navigation (onSelect) waits for the animation to
+// finish rather than firing immediately -- otherwise the modal would
+// close before the bounce was ever visible.
+function MenuItem({
+  tab,
+  active,
+  badge,
+  onSelect,
+}: {
+  tab: { key: Screen; label: string; icon: IconName };
+  active: boolean;
+  badge?: string;
+  onSelect: () => void;
+}) {
+  const bounce = useRef(new Animated.Value(0)).current;
+
+  // 3 decreasing bounces (like a dropped ball settling), matching
+  // desktop's nav-item-hop keyframes -- each peak targets a fraction of
+  // `bounce`'s 0..1 range rather than a fresh 0..1 climb, so translateY/
+  // scale below (interpolated off that same range) shrink proportionally
+  // without needing separate interpolations per hop.
+  const handlePress = () => {
+    bounce.setValue(0);
+    Animated.sequence([
+      Animated.timing(bounce, { toValue: 1, duration: 110, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0, duration: 120, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0.55, duration: 100, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0, duration: 110, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0.25, duration: 90, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0, duration: 100, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+    ]).start(() => onSelect());
+  };
+
+  const translateY = bounce.interpolate({ inputRange: [0, 1], outputRange: [0, -6] });
+  const scale = bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] });
+
+  return (
+    <TouchableOpacity style={styles.modalOption} onPress={handlePress}>
+      <Animated.View style={[styles.modalOptionRow, { transform: [{ translateY }, { scale }] }]}>
+        <Icon name={tab.icon} size={16} color={active ? colors.accent : colors.text} />
+        <Text style={[styles.modalOptionText, active && styles.modalOptionTextActive]}>
+          {badge ? `${tab.label} · ${badge}` : tab.label}
+        </Text>
+      </Animated.View>
+    </TouchableOpacity>
+  );
+}
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('single');
@@ -148,26 +200,18 @@ export default function App() {
       <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
         <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setMenuOpen(false)}>
           <View style={styles.modalCard}>
-            {TABS.map((tab) => {
-              const active = screen === tab.key;
-              return (
-                <TouchableOpacity
-                  key={tab.key}
-                  style={[styles.modalOption, styles.modalOptionRow]}
-                  onPress={() => {
-                    goToScreen(tab.key);
-                    setMenuOpen(false);
-                  }}
-                >
-                  <Icon name={tab.icon} size={16} color={active ? colors.accent : colors.text} />
-                  <Text style={[styles.modalOptionText, active && styles.modalOptionTextActive]}>
-                    {tab.key === 'roadAlerts' && roadAlertsReplyCount > 0
-                      ? `${tab.label} · ${roadAlertsReplyCount}`
-                      : tab.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+            {TABS.map((tab) => (
+              <MenuItem
+                key={tab.key}
+                tab={tab}
+                active={screen === tab.key}
+                badge={tab.key === 'roadAlerts' && roadAlertsReplyCount > 0 ? String(roadAlertsReplyCount) : undefined}
+                onSelect={() => {
+                  goToScreen(tab.key);
+                  setMenuOpen(false);
+                }}
+              />
+            ))}
           </View>
         </TouchableOpacity>
       </Modal>
