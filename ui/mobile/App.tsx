@@ -193,6 +193,8 @@ export default function App() {
     return null;
   }
 
+  const currentTab = TABS.find((tab) => tab.key === screen);
+
   return (
     <SafeAreaView style={styles.container} onLayout={onLayout}>
       {/* Same giant, half-cropped, tilted BrandMark watermark as desktop's
@@ -211,14 +213,31 @@ export default function App() {
       </View>
 
       <View style={styles.header}>
-        <Text style={styles.brand}>Meridian</Text>
-        <TouchableOpacity
-          onPress={() => setMenuOpen((open) => !open)}
-          accessibilityRole="button"
-          accessibilityLabel={menuOpen ? 'Close menu' : 'Open menu'}
-        >
-          <Text style={styles.menuButtonText}>☰ Menu</Text>
-        </TouchableOpacity>
+        <View style={styles.headerTopRow}>
+          <View style={styles.brandRow}>
+            <BrandMark size={20} color={colors.text} />
+            <Text style={styles.brand}>Meridian</Text>
+          </View>
+          <TouchableOpacity
+            onPress={() => setMenuOpen((open) => !open)}
+            accessibilityRole="button"
+            accessibilityLabel={menuOpen ? 'Close menu' : 'Open menu'}
+          >
+            <Text style={styles.menuButtonText}>☰ Menu</Text>
+          </TouchableOpacity>
+        </View>
+        {/* Desktop always shows which page you're on via the highlighted
+            nav pill; mobile has no persistent nav bar to do the same (the
+            menu is a Modal that only shows while open) -- this second row
+            is the equivalent "you are here," with the same icon shown for
+            that screen in the menu, so mobile isn't missing the icon
+            entirely the way plain "Meridian" text alone was. */}
+        {currentTab && (
+          <View style={styles.currentScreenRow}>
+            <Icon name={currentTab.icon} size={13} color={colors.accent} />
+            <Text style={styles.currentScreenText}>{currentTab.label}</Text>
+          </View>
+        )}
       </View>
 
       <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
@@ -277,13 +296,20 @@ const styles = StyleSheet.create({
     backgroundColor: colors.bg,
   },
   header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
     paddingVertical: space[3],
     paddingHorizontal: space[4],
     borderBottomWidth: 1,
     borderBottomColor: colors.divider,
+  },
+  headerTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  brandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[1],
   },
   brand: {
     fontFamily: 'CormorantGaramond_600SemiBold',
@@ -293,6 +319,17 @@ const styles = StyleSheet.create({
   menuButtonText: {
     fontFamily: 'Lora_400Regular',
     fontSize: 15,
+    color: colors.accent,
+  },
+  currentScreenRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[1],
+    marginTop: 4,
+  },
+  currentScreenText: {
+    fontFamily: 'Lora_400Regular',
+    fontSize: 12,
     color: colors.accent,
   },
   // Same modal shape as ImportAddressesForm.tsx's column-role picker --
