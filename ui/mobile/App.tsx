@@ -9,7 +9,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Modal, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { getStoredAccount } from './components/roadAlertsStorage';
-import { Icon, type IconName } from './components/icons';
+import { BrandMark, Icon, type IconName } from './components/icons';
 import BatchGeocodeScreen from './screens/BatchGeocodeScreen';
 import FindPlacesScreen from './screens/FindPlacesScreen';
 import HelpScreen from './screens/HelpScreen';
@@ -195,6 +195,21 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container} onLayout={onLayout}>
+      {/* Same giant, half-cropped, tilted BrandMark watermark as desktop's
+          Layout.tsx, scaled down for a phone screen -- sized/positioned
+          relative to this SafeAreaView (RN's `absolute` is always
+          relative to the nearest ancestor View, there's no separate
+          `fixed`), so it stays put as a backdrop behind whichever screen
+          is showing rather than living inside any one screen's own
+          ScrollView. pointerEvents="none" so it never intercepts a touch
+          meant for whatever's drawn over it. */}
+      <View
+        pointerEvents="none"
+        style={{ position: 'absolute', right: -140, bottom: -140, opacity: 0.07, transform: [{ rotate: '-22deg' }] }}
+      >
+        <BrandMark size={380} color={colors.text} />
+      </View>
+
       <View style={styles.header}>
         <Text style={styles.brand}>Meridian</Text>
         <TouchableOpacity

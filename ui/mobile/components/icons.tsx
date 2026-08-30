@@ -1,5 +1,5 @@
 import React from 'react';
-import Svg, { Circle, Path } from 'react-native-svg';
+import Svg, { Circle, Ellipse, Path } from 'react-native-svg';
 
 // Ported 1:1 from ui/desktop/src/components/icons.tsx -- same path data,
 // same 24x24 viewBox/stroke style, so mobile's menu icons match desktop's
@@ -120,4 +120,19 @@ export function Icon({ name, size = 20, color = 'currentColor' }: IconProps) {
         </Svg>
       );
   }
+}
+
+// Ported 1:1 from ui/desktop/src/components/icons.tsx's BrandMark -- same
+// path data (a globe: outer circle + two meridian ellipses + the equator
+// line), so mobile's brand mark matches desktop's exactly rather than
+// introducing a second, different-looking logo.
+export function BrandMark({ size = 28, color = 'currentColor' }: { size?: number; color?: string }) {
+  return (
+    <Svg width={size} height={size} viewBox="0 0 32 32" fill="none" stroke={color} strokeWidth={1.8} strokeLinecap="round">
+      <Circle cx={16} cy={16} r={12.5} />
+      <Ellipse cx={16} cy={16} rx={4.2} ry={12.5} />
+      <Ellipse cx={16} cy={16} rx={8.3} ry={12.5} />
+      <Path d="M3.5 16h25" />
+    </Svg>
+  );
 }

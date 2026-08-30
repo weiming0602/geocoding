@@ -39,6 +39,38 @@ export default function Layout({ children }: { children: ReactNode }) {
         flexDirection: 'column',
       }}
     >
+      {/* A giant, half-cropped BrandMark sitting fixed in the corner --
+          quiet enough (7% opacity, neutral text color, no fill -- just
+          the same outline strokes the real logo uses) to read as texture
+          behind the page rather than a second logo competing with the
+          real one in the nav. Fixed (not absolute) so it stays put as a
+          backdrop while the page scrolls, like wallpaper rather than
+          part of the document; a deliberate tilt gives it some life
+          instead of sitting dead-center-symmetrical. No z-index -- a
+          fixed-position element with a *negative* z-index and no
+          positioned ancestor establishing its own stacking context
+          renders behind the root stacking context entirely (invisible),
+          not just behind sibling content; default z-index:auto plus DOM
+          order (this div first) already paints it behind the nav/content
+          that follow it. pointerEvents: 'none' so it never intercepts a
+          click meant for whatever's drawn over it. */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'fixed',
+          right: '-320px',
+          bottom: '-320px',
+          width: 800,
+          height: 800,
+          color: 'var(--color-text)',
+          opacity: 0.07,
+          transform: 'rotate(-22deg)',
+          pointerEvents: 'none',
+        }}
+      >
+        <BrandMark size={800} />
+      </div>
+
       {showMobileRedirect ? <MobileRedirectBanner /> : <InstallAppBanner />}
       <nav className="nav">
         <div className="nav-brand">
