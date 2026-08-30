@@ -1,12 +1,55 @@
+import { useState } from 'react';
+
 import FeedbackForm from '../components/FeedbackForm';
 import PageHeader from '../components/PageHeader';
 
+type HelpTopic = 'geocoding' | 'roadAlerts';
+
 export default function Help() {
+  const [topic, setTopic] = useState<HelpTopic>('geocoding');
+
   return (
     <div style={{ maxWidth: 720, margin: '0 auto' }}>
-      <PageHeader icon="help">How Meridian geocodes an address</PageHeader>
+      <PageHeader icon="help">Help</PageHeader>
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
-        A short guide to what happens when you look up, reverse-geocode, or batch-process addresses.
+        A short guide to how Meridian's two features actually work.
+      </p>
+
+      <div className="seg" style={{ marginBottom: 'var(--space-6)' }}>
+        <label className="seg-opt">
+          <input
+            type="radio"
+            name="helpTopic"
+            checked={topic === 'geocoding'}
+            onChange={() => setTopic('geocoding')}
+          />
+          Geocoding
+        </label>
+        <label className="seg-opt">
+          <input
+            type="radio"
+            name="helpTopic"
+            checked={topic === 'roadAlerts'}
+            onChange={() => setTopic('roadAlerts')}
+          />
+          Road Alerts
+        </label>
+      </div>
+
+      {topic === 'geocoding' ? <GeocodingHelp /> : <RoadAlertsHelp />}
+
+      <h2 style={{ marginTop: 'var(--space-6)' }}>Still have a question?</h2>
+      <FeedbackForm />
+    </div>
+  );
+}
+
+function GeocodingHelp() {
+  return (
+    <>
+      <h1 style={{ marginTop: 0 }}>How Meridian geocodes an address</h1>
+      <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
+        What happens when you look up, reverse-geocode, or batch-process addresses.
       </p>
 
       <div className="plate" style={{ marginBottom: 'var(--space-6)', padding: 'var(--space-3)' }}>
@@ -87,9 +130,81 @@ export default function Help() {
         each calendar month; an email-delivery request that would exceed the remaining quota is
         rejected up front, before any addresses are processed.
       </p>
+    </>
+  );
+}
 
-      <h2 style={{ marginTop: 'var(--space-6)' }}>Still have a question?</h2>
-      <FeedbackForm />
-    </div>
+function RoadAlertsHelp() {
+  return (
+    <>
+      <h1 style={{ marginTop: 0 }}>How Road Alerts works</h1>
+      <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
+        Live traffic hazards near you, spoken aloud as you approach them.
+      </p>
+
+      <div className="plate" style={{ marginBottom: 'var(--space-6)', padding: 'var(--space-3)' }}>
+        <strong>Coverage:</strong> Maine, New Hampshire, and Vermont, sourced from New England
+        511 in real time. Free while it's in testing — register with just an email, no payment.
+      </div>
+
+      <h2>Severity tiers</h2>
+      <p>Every hazard is placed into one of four tiers, which controls how it's delivered:</p>
+      <ol>
+        <li>
+          <strong>Serious</strong> — spoken automatically with an alarm. A major accident, a road
+          closure, a severe weather warning.
+        </li>
+        <li>
+          <strong>Need to know</strong> — spoken automatically, no alarm. A meaningful delay,
+          construction, a weather advisory.
+        </li>
+        <li>
+          <strong>Proximity</strong> — spoken briefly, lower urgency. A speed camera, a school
+          zone, a sharp curve.
+        </li>
+        <li>
+          <strong>Fun to know</strong> — never interrupts; visual only, or spoken if you ask.
+        </li>
+      </ol>
+      <p>
+        When the source data is ambiguous, an alert defaults to "Need to know" rather than staying
+        silent — a missed real hazard costs more than one extra alert.
+      </p>
+
+      <h2>Hazard type icons</h2>
+      <p>
+        Each alert shows an icon for what kind of hazard it is — 🧪 hazardous material, 🚨 accident,
+        🚧 construction, ⛔ closure, 🚗 congestion, 🌧️ weather, or ⚠️ for anything else — so you can
+        tell what's ahead at a glance, without reading the full description.
+      </p>
+
+      <h2>Map and alternate routes</h2>
+      <p>
+        Tap <strong>"Show on map"</strong> on any alert to see the hazard's exact location relative
+        to you. Where a way around it exists, <strong>"Show a way around this"</strong> computes up
+        to three alternate routes from our own street data and shows them on the map — hover (or
+        tap, on a phone) an option to see just that route highlighted. Pick one and use{' '}
+        <strong>"Navigate with Google Maps"</strong> to hand it off for real turn-by-turn directions.
+      </p>
+      <p className="text-muted" style={{ fontSize: 13 }}>
+        These routes are an estimate: they're based on street connectivity only (no live traffic,
+        and no one-way street data exists for this region yet), and the point where a route
+        rejoins your original road past the hazard is approximate, not exact.
+      </p>
+
+      <h2>Comments</h2>
+      <p>
+        Tap <strong>"Comments"</strong> on an alert to read or add notes from other drivers about
+        that same stretch of road.
+      </p>
+
+      <h2>Saving an alert for later</h2>
+      <p>
+        Right after an alert is spoken, say <strong>"save this"</strong> (or "keep this"/"email
+        this") to have that specific alert emailed to you. Turn on the daily email digest in
+        Settings to get a single recap of everything you saved that day, instead of one email per
+        alert.
+      </p>
+    </>
   );
 }
