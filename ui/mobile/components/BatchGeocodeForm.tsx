@@ -10,6 +10,7 @@ import { batchGeocode, batchGeocodeDownload } from '../../shared/api/client';
 import type { BatchResult, BatchSource } from '../../shared/api/types';
 import { colors, radius, space } from '../../shared/theme';
 import BatchGeocodeMap from './BatchGeocodeMap';
+import { Icon } from './icons';
 import ThemedButton from './ThemedButton';
 
 type PickedFile = {
@@ -278,7 +279,10 @@ export default function BatchGeocodeForm({
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Batch geocoding</Text>
+      <View style={styles.titleRow}>
+        <Icon name="batch" size={24} color={colors.accent} />
+        <Text style={styles.title}>Batch geocoding</Text>
+      </View>
       <Text style={styles.subtitle}>One address per line.</Text>
 
       {showBackToImport && (
@@ -451,11 +455,16 @@ const styles = StyleSheet.create({
     width: '100%',
     padding: space[4],
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[2],
+    marginBottom: 4,
+  },
   title: {
     fontFamily: 'CormorantGaramond_600SemiBold',
     fontSize: 30,
     color: colors.text,
-    marginBottom: 4,
   },
   subtitle: {
     fontFamily: 'Lora_400Regular',

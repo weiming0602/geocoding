@@ -3,11 +3,15 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { MILESTONES_NEWEST_FIRST } from '../../shared/milestones';
 import { colors, space } from '../../shared/theme';
+import { Icon } from './icons';
 
 export default function ProgressContent() {
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Progress</Text>
+      <View style={styles.pageTitleRow}>
+        <Icon name="progress" size={24} color={colors.accent} />
+        <Text style={styles.title}>Progress</Text>
+      </View>
       <Text style={styles.subtitle}>
         A running record of what's shipped so far, and what's next.
       </Text>
@@ -46,11 +50,16 @@ const styles = StyleSheet.create({
     width: '100%',
     padding: space[4],
   },
+  pageTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[2],
+    marginBottom: 4,
+  },
   title: {
     fontFamily: 'CormorantGaramond_600SemiBold',
     fontSize: 26,
     color: colors.text,
-    marginBottom: 4,
   },
   subtitle: {
     fontFamily: 'Lora_400Regular',

@@ -6,6 +6,7 @@ import { searchPlaces } from '../../shared/api/client';
 import type { PlaceResult } from '../../shared/api/types';
 import { colors, radius, space } from '../../shared/theme';
 import FindPlacesMap from './FindPlacesMap';
+import { Icon } from './icons';
 import ThemedButton from './ThemedButton';
 
 const RADIUS_OPTIONS = [
@@ -156,7 +157,10 @@ export default function FindPlacesForm() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Find places</Text>
+      <View style={styles.titleRow}>
+        <Icon name="findPlaces" size={24} color={colors.accent} />
+        <Text style={styles.title}>Find places</Text>
+      </View>
       <Text style={styles.subtitle}>
         Search OpenStreetMap for a kind of place, download the results as an address list.
       </Text>
@@ -279,11 +283,16 @@ const styles = StyleSheet.create({
     width: '100%',
     padding: space[4],
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[2],
+    marginBottom: 4,
+  },
   title: {
     fontFamily: 'CormorantGaramond_600SemiBold',
     fontSize: 30,
     color: colors.text,
-    marginBottom: 4,
   },
   subtitle: {
     fontFamily: 'Lora_400Regular',

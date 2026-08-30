@@ -7,6 +7,7 @@ import type { ReverseGeocodeResult } from '../../shared/api/types';
 import { parseCoordinateInput } from '../../shared/parseCoordinateInput';
 import { colors, radius, space } from '../../shared/theme';
 import GeocodeMap from './GeocodeMap';
+import { Icon } from './icons';
 import ThemedButton from './ThemedButton';
 
 export default function ReverseGeocodeForm() {
@@ -64,7 +65,10 @@ export default function ReverseGeocodeForm() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Reverse geocode</Text>
+      <View style={styles.titleRow}>
+        <Icon name="reverseGeocode" size={24} color={colors.accent} />
+        <Text style={styles.title}>Reverse geocode</Text>
+      </View>
       <Text style={styles.subtitle}>Get the nearest address for a coordinate.</Text>
 
       <View style={styles.noteCard}>
@@ -149,11 +153,16 @@ const styles = StyleSheet.create({
     width: '100%',
     padding: space[4],
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[2],
+    marginBottom: 4,
+  },
   title: {
     fontFamily: 'CormorantGaramond_600SemiBold',
     fontSize: 30,
     color: colors.text,
-    marginBottom: 4,
   },
   subtitle: {
     fontFamily: 'Lora_400Regular',

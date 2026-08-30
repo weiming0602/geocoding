@@ -3,6 +3,7 @@ import { Image, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { colors, radius, space } from '../../shared/theme';
 import FeedbackForm from './FeedbackForm';
+import { Icon } from './icons';
 
 const chestnutImage = require('../assets/help/chestnut-91-left.png');
 const sawyerImage = require('../assets/help/sawyer-26-right.png');
@@ -14,7 +15,10 @@ export default function HelpContent() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Help</Text>
+      <View style={styles.titleRow}>
+        <Icon name="help" size={24} color={colors.accent} />
+        <Text style={styles.title}>Help</Text>
+      </View>
       <Text style={styles.subtitle}>A short guide to how Meridian's two features actually work.</Text>
 
       <View style={styles.tabRow}>
@@ -208,11 +212,16 @@ const styles = StyleSheet.create({
     width: '100%',
     padding: space[4],
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[2],
+    marginBottom: 4,
+  },
   title: {
     fontFamily: 'CormorantGaramond_600SemiBold',
     fontSize: 26,
     color: colors.text,
-    marginBottom: 4,
   },
   subtitle: {
     fontFamily: 'Lora_400Regular',

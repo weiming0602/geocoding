@@ -1,4 +1,4 @@
-import { NavLink } from 'react-router';
+import { Link, NavLink } from 'react-router';
 import type { ReactNode } from 'react';
 
 import { isMobileDevice } from '../deviceDetection';
@@ -105,6 +105,47 @@ export default function Layout({ children }: { children: ReactNode }) {
       >
         {children}
       </div>
+
+      <footer
+        style={{
+          borderTop: '1px solid var(--color-divider)',
+          padding: 'var(--space-6) var(--space-4)',
+        }}
+      >
+        <div
+          style={{
+            maxWidth: '1240px',
+            width: '100%',
+            margin: '0 auto',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 'var(--space-4)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+            <BrandMark size={20} />
+            <span style={{ fontFamily: 'var(--font-heading)', fontWeight: 'var(--font-heading-weight)' }}>
+              Meridian
+            </span>
+            <span className="text-muted" style={{ fontSize: 13 }}>
+              &copy; {new Date().getFullYear()} Meridian. Built for Maine &amp; New Hampshire.
+            </span>
+          </div>
+          <div style={{ display: 'flex', gap: 'var(--space-4)', fontSize: 13 }}>
+            <Link to="/pricing" className="text-muted">
+              Pricing
+            </Link>
+            <Link to="/progress" className="text-muted">
+              Progress
+            </Link>
+            <Link to="/help" className="text-muted">
+              Help
+            </Link>
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }
