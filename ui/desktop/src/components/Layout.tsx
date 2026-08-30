@@ -28,6 +28,16 @@ export default function Layout({ children }: { children: ReactNode }) {
   // option, same as before this existed.
   const showMobileRedirect = Boolean(MOBILE_APP_URL) && isMobileDevice();
 
+  // Unlike MobileRedirectBanner (which stays off entirely with no real
+  // VITE_MOBILE_APP_URL set -- no mobile deployment exists yet), this
+  // footer toggle also falls back to the local Expo web dev server in
+  // dev builds only (import.meta.env.DEV, Vite's own flag -- stripped
+  // out of a production build automatically, so this default can't leak
+  // into a real deploy even if VITE_MOBILE_APP_URL is forgotten there).
+  // Anyone, not just a detected mobile device, can use it to jump over
+  // and try the other app while both are running locally.
+  const mobileAppUrl = MOBILE_APP_URL || (import.meta.env.DEV ? 'http://localhost:8081' : undefined);
+
   return (
     <div
       style={{
@@ -133,7 +143,7 @@ export default function Layout({ children }: { children: ReactNode }) {
               &copy; {new Date().getFullYear()} Meridian. Built for Maine &amp; New Hampshire.
             </span>
           </div>
-          <div style={{ display: 'flex', gap: 'var(--space-4)', fontSize: 13 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)', fontSize: 13 }}>
             <Link to="/pricing" className="text-muted">
               Pricing
             </Link>
@@ -143,6 +153,11 @@ export default function Layout({ children }: { children: ReactNode }) {
             <Link to="/help" className="text-muted">
               Help
             </Link>
+            {mobileAppUrl && (
+              <a href={mobileAppUrl} className="btn btn-ghost" style={{ fontSize: 13, padding: '4px 10px' }}>
+                📱 Switch to mobile app
+              </a>
+            )}
           </div>
         </div>
       </footer>

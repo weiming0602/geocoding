@@ -6,7 +6,7 @@ import { Lora_400Regular, Lora_600SemiBold, useFonts as useLora } from '@expo-go
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Animated, Easing, Modal, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Easing, Linking, Modal, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 
 import { getStoredAccount } from './components/roadAlertsStorage';
 import { BrandMark, Icon, type IconName } from './components/icons';
@@ -41,13 +41,16 @@ type Screen =
 // icon values match ui/desktop's NAV_LINKS one-for-one (see
 // components/icons.tsx's port-from-desktop comment) so the two apps'
 // menus read as the same system, not two different icon sets.
+// Order matches ui/desktop's NAV_LINKS one-for-one (Layout.tsx), minus
+// Overview -- mobile has no equivalent landing screen, it opens straight
+// to Single Address -- so the two apps' menus read as the same list.
 const TABS: { key: Screen; label: string; icon: IconName }[] = [
   { key: 'single', label: 'Single Address', icon: 'geocode' },
-  { key: 'batch', label: 'Batch Geocode', icon: 'batch' },
   { key: 'reverse', label: 'Reverse Geocode', icon: 'reverseGeocode' },
   { key: 'findPlaces', label: 'Find Places', icon: 'findPlaces' },
   { key: 'roadAlerts', label: 'Road Alerts', icon: 'roadAlerts' },
   { key: 'import', label: 'Import Addresses', icon: 'importAddresses' },
+  { key: 'batch', label: 'Batch Geocode', icon: 'batch' },
   { key: 'quota', label: 'Plan & Quota', icon: 'planQuota' },
   { key: 'pricing', label: 'Pricing', icon: 'pricing' },
   { key: 'progress', label: 'Progress', icon: 'progress' },
@@ -193,6 +196,15 @@ export default function App() {
     return null;
   }
 
+  // Mirrors ui/desktop's Layout.tsx footer toggle -- an explicit
+  // EXPO_PUBLIC_DESKTOP_APP_URL wins if set; otherwise falls back to the
+  // local Vite dev server, but only in a dev build (__DEV__, Expo/RN's
+  // own always-available global -- stripped in a production/release
+  // build the same way Vite's import.meta.env.DEV is, so this default
+  // can't leak into a real deploy even if the env var is forgotten
+  // there).
+  const desktopAppUrl = process.env.EXPO_PUBLIC_DESKTOP_APP_URL || (__DEV__ ? 'http://localhost:5173' : undefined);
+
   return (
     <SafeAreaView style={styles.container} onLayout={onLayout}>
       {/* Same giant, half-cropped, tilted BrandMark watermark as desktop's
@@ -239,6 +251,13 @@ export default function App() {
                 }}
               />
             ))}
+            {desktopAppUrl && (
+              <TouchableOpacity style={styles.modalOption} onPress={() => Linking.openURL(desktopAppUrl)}>
+                <View style={styles.modalOptionRow}>
+                  <Text style={styles.modalOptionText}>💻 Switch to browser app</Text>
+                </View>
+              </TouchableOpacity>
+            )}
           </View>
         </TouchableOpacity>
       </Modal>
