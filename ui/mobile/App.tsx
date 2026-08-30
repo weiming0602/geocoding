@@ -95,12 +95,17 @@ function MenuItem({
     ]).start(() => onSelect());
   };
 
+  // translateY only -- no scale. This row is wide and short (an icon +
+  // a label in a flexDirection: 'row'), so scaling it stretches width far
+  // more than height in absolute pixels (its transform origin is the
+  // center, and the row is much wider than tall) -- that read as
+  // sideways motion instead of a vertical hop, which is the opposite of
+  // what this is supposed to look like.
   const translateY = bounce.interpolate({ inputRange: [0, 1], outputRange: [0, -12] });
-  const scale = bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 1.07] });
 
   return (
     <TouchableOpacity style={styles.modalOption} onPress={handlePress}>
-      <Animated.View style={[styles.modalOptionRow, { transform: [{ translateY }, { scale }] }]}>
+      <Animated.View style={[styles.modalOptionRow, { transform: [{ translateY }] }]}>
         <Icon name={tab.icon} size={16} color={active ? colors.accent : colors.text} />
         <Text style={[styles.modalOptionText, active && styles.modalOptionTextActive]}>
           {badge ? `${tab.label} · ${badge}` : tab.label}
