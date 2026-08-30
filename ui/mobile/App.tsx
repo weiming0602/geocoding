@@ -74,25 +74,26 @@ function MenuItem({
 }) {
   const bounce = useRef(new Animated.Value(0)).current;
 
-  // 3 decreasing bounces (like a dropped ball settling), matching
-  // desktop's nav-item-hop keyframes -- each peak targets a fraction of
-  // `bounce`'s 0..1 range rather than a fresh 0..1 climb, so translateY/
-  // scale below (interpolated off that same range) shrink proportionally
-  // without needing separate interpolations per hop.
+  // 3 decreasing, slow, floaty bounces (a balloon bobbing, not a dropped
+  // ball), matching desktop's nav-item-hop keyframes -- each peak targets
+  // a fraction of `bounce`'s 0..1 range rather than a fresh 0..1 climb, so
+  // translateY/scale below (interpolated off that same range) shrink
+  // proportionally without needing separate interpolations per hop.
+  // Easing.sin (not .quad) for a softer, less snappy rise/fall.
   const handlePress = () => {
     bounce.setValue(0);
     Animated.sequence([
-      Animated.timing(bounce, { toValue: 1, duration: 110, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-      Animated.timing(bounce, { toValue: 0, duration: 120, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-      Animated.timing(bounce, { toValue: 0.55, duration: 100, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-      Animated.timing(bounce, { toValue: 0, duration: 110, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
-      Animated.timing(bounce, { toValue: 0.25, duration: 90, easing: Easing.out(Easing.quad), useNativeDriver: true }),
-      Animated.timing(bounce, { toValue: 0, duration: 100, easing: Easing.inOut(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 1, duration: 200, easing: Easing.out(Easing.sin), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0, duration: 210, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0.55, duration: 180, easing: Easing.out(Easing.sin), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0, duration: 195, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0.25, duration: 160, easing: Easing.out(Easing.sin), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0, duration: 175, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
     ]).start(() => onSelect());
   };
 
-  const translateY = bounce.interpolate({ inputRange: [0, 1], outputRange: [0, -6] });
-  const scale = bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 1.08] });
+  const translateY = bounce.interpolate({ inputRange: [0, 1], outputRange: [0, -12] });
+  const scale = bounce.interpolate({ inputRange: [0, 1], outputRange: [1, 1.07] });
 
   return (
     <TouchableOpacity style={styles.modalOption} onPress={handlePress}>
