@@ -1,7 +1,7 @@
 import React from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 
-import { MILESTONES } from '../../shared/milestones';
+import { MILESTONES_NEWEST_FIRST } from '../../shared/milestones';
 import { colors, space } from '../../shared/theme';
 
 export default function ProgressContent() {
@@ -12,7 +12,7 @@ export default function ProgressContent() {
         A running record of what's shipped so far, and what's next.
       </Text>
 
-      {MILESTONES.map((milestone, i) => (
+      {MILESTONES_NEWEST_FIRST.map((milestone, i) => (
         <View key={milestone.title} style={styles.row}>
           <View style={styles.railColumn}>
             <View
@@ -21,7 +21,7 @@ export default function ProgressContent() {
                 milestone.current ? styles.dotCurrent : styles.dotDone,
               ]}
             />
-            {i < MILESTONES.length - 1 && <View style={styles.rail} />}
+            {i < MILESTONES_NEWEST_FIRST.length - 1 && <View style={styles.rail} />}
           </View>
           <View style={styles.entry}>
             <Text style={styles.date}>{milestone.date}</Text>

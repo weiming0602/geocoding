@@ -82,9 +82,38 @@ export const MILESTONES: Milestone[] = [
       "Fixed an edge case where certain street shapes could throw off an interpolated point, and tightened the exact-match path so a mismatched ZIP or state can no longer override a real address. Batch result CSVs now also show whether each match was an exact point or an estimate.",
   },
   {
+    date: 'Aug 28, 2026',
+    title: 'Road Alerts redesigned around what matters most',
+    description:
+      "Opens straight to nearby hazards -- no setup screens in the way. Settings are tucked behind a single toggle for when you actually want them.",
+  },
+  {
+    date: 'Aug 28, 2026',
+    title: 'See hazards and detours on a map',
+    description:
+      "Each alert now shows an interactive map with the hazard and your position -- and, where a way around it exists, up to three alternate routes to choose from.",
+  },
+  {
+    date: 'Aug 28, 2026',
+    title: 'One-tap navigation for a chosen detour',
+    description: 'Pick an alternate route and hand it straight to Google Maps for real turn-by-turn navigation.',
+  },
+  {
+    date: 'Aug 28, 2026',
+    title: 'Hazard type at a glance',
+    description:
+      "Construction, accidents, closures, and more now show their own icon in the alert list, sorted with the most recently updated hazard first.",
+  },
+  {
     date: 'Coming soon',
     title: 'New Hampshire accuracy upgrade',
     description: 'The same real per-house location data, for New Hampshire.',
     current: true,
   },
 ];
+
+// MILESTONES itself stays in shipped order (oldest first) so a new entry
+// is just appended at the end -- both apps' Progress screens display
+// newest first, so this derived, reversed view is what they actually
+// render.
+export const MILESTONES_NEWEST_FIRST: Milestone[] = [...MILESTONES].reverse();
