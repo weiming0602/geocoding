@@ -74,21 +74,24 @@ function MenuItem({
 }) {
   const bounce = useRef(new Animated.Value(0)).current;
 
-  // 3 decreasing, slow, floaty bounces (a balloon bobbing, not a dropped
-  // ball), matching desktop's nav-item-hop keyframes -- each peak targets
-  // a fraction of `bounce`'s 0..1 range rather than a fresh 0..1 climb, so
-  // translateY/scale below (interpolated off that same range) shrink
-  // proportionally without needing separate interpolations per hop.
-  // Easing.sin (not .quad) for a softer, less snappy rise/fall.
+  // 3 decreasing bounces, deliberately more ball-like than desktop's
+  // floaty nav-item-hop keyframes (per feedback -- mobile should read as
+  // an actual bounced ball, not a balloon): each rise eases out (like
+  // gravity decelerating something thrown up) and each fall eases in
+  // (gravity accelerating it back down), asymmetric rather than a
+  // symmetric float, and quicker overall. Each peak targets a fraction of
+  // `bounce`'s 0..1 range rather than a fresh 0..1 climb, so translateY/
+  // scale below (interpolated off that same range) shrink proportionally
+  // without needing separate interpolations per hop.
   const handlePress = () => {
     bounce.setValue(0);
     Animated.sequence([
-      Animated.timing(bounce, { toValue: 1, duration: 200, easing: Easing.out(Easing.sin), useNativeDriver: true }),
-      Animated.timing(bounce, { toValue: 0, duration: 210, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-      Animated.timing(bounce, { toValue: 0.55, duration: 180, easing: Easing.out(Easing.sin), useNativeDriver: true }),
-      Animated.timing(bounce, { toValue: 0, duration: 195, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
-      Animated.timing(bounce, { toValue: 0.25, duration: 160, easing: Easing.out(Easing.sin), useNativeDriver: true }),
-      Animated.timing(bounce, { toValue: 0, duration: 175, easing: Easing.inOut(Easing.sin), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 1, duration: 130, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0, duration: 110, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0.5, duration: 95, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0, duration: 80, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0.22, duration: 70, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0, duration: 60, easing: Easing.in(Easing.quad), useNativeDriver: true }),
     ]).start(() => onSelect());
   };
 
