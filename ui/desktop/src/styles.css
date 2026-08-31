@@ -290,6 +290,36 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
   100% { transform: translateY(0); }
 }
 
+/* — orbiting cursor on the header BrandMark — a small glowing dot that
+   continuously circles the globe's outer edge, only where the logo is
+   actually looked at directly (nav-brand, via icons.tsx's BrandMarkOrbit);
+   the footer mark and the giant background watermark stay static. 3.2s/
+   revolution reads as lively without becoming a distracting spinner. Color
+   matches .nav-brand svg's own --color-icon-active so the dot reads as
+   part of the same logo, not a separate accent. Respects
+   prefers-reduced-motion -- nothing else in this stylesheet currently
+   opts in, but this is exactly the kind of decorative, indefinitely-
+   looping motion that preference exists for. */
+.brand-orbit { position: relative; display: inline-flex; flex: none; }
+.brand-orbit__spin {
+  position: absolute; inset: 0;
+  animation: brand-orbit-spin 3.2s linear infinite;
+}
+.brand-orbit__dot {
+  position: absolute; top: 2px; left: 50%;
+  width: 4px; height: 4px; margin-left: -2px;
+  border-radius: 50%;
+  background: var(--color-icon-active);
+  box-shadow: 0 0 5px 1px color-mix(in srgb, var(--color-icon-active) 65%, transparent);
+}
+@keyframes brand-orbit-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brand-orbit__spin { animation: none; }
+}
+
 /* Overview's task cards link to other pages, so their tiles stay the
    default teal -- amber is reserved for wherever you already are. */
 .task-icon-tile {

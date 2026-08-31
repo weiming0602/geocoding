@@ -141,3 +141,22 @@ export function BrandMark({ size = 28 }: { size?: number }) {
     </svg>
   );
 }
+
+// A small dot that continuously orbits BrandMark's outer circle -- used
+// only at the one place the logo is actually looked at directly (the nav
+// header; see Layout.tsx's nav-brand), not the footer BrandMark or the
+// giant background watermark, where any motion would be pointless/noisy.
+// BrandMark itself stays untouched and static (it's also rendered at those
+// quieter sizes) -- this wraps it rather than baking the animation into
+// the glyph. See .brand-orbit* in styles.css for the actual keyframes and
+// the prefers-reduced-motion opt-out.
+export function BrandMarkOrbit({ size = 28 }: { size?: number }) {
+  return (
+    <span className="brand-orbit" style={{ width: size, height: size }}>
+      <BrandMark size={size} />
+      <span className="brand-orbit__spin" aria-hidden="true">
+        <span className="brand-orbit__dot" />
+      </span>
+    </span>
+  );
+}
