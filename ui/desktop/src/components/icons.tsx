@@ -159,11 +159,11 @@ export function BrandMarkOrbit({ size = 28 }: { size?: number }) {
     <span className="brand-orbit" style={{ width: size, height: size }}>
       <BrandMark size={size} />
       <svg className="brand-orbit__trail" viewBox="0 0 32 32" aria-hidden="true">
-        <circle cx={18.66} cy={3.48} r={5.5} fill="var(--color-icon-active)" opacity={0.22} />
-        <circle cx={18.66} cy={3.48} r={2.8} fill="#fff8ea" stroke="var(--color-icon-active)" strokeWidth={0.9} />
-        <circle cx={26.85} cy={9.22} r={2.1} fill="var(--color-icon-active)" opacity={0.62} />
-        <circle cx={28.42} cy={19.1} r={1.5} fill="var(--color-icon-active)" opacity={0.35} />
-        <circle cx={22.4} cy={27.08} r={1} fill="var(--color-icon-active)" opacity={0.16} />
+        <circle cx={7} cy={7} r={1} fill="var(--color-accent-2)" opacity={0.16} />
+        <circle cx={9.5} cy={9.5} r={1.6} fill="var(--color-accent-2)" opacity={0.32} />
+        <circle cx={12.5} cy={12.5} r={2.3} fill="var(--color-accent-2)" opacity={0.55} />
+        <circle cx={16} cy={16} r={6} fill="var(--color-accent-2)" opacity={0.25} />
+        <circle cx={16} cy={16} r={3.2} fill="var(--color-accent-2)" stroke="#fff8ea" strokeWidth={0.9} />
       </svg>
     </span>
   );

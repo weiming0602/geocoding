@@ -78,11 +78,11 @@ function BrandMarkOrbit({ size, color }: { size: number; color: string }) {
         style={{ position: 'absolute', top: 0, left: 0 }}
         pointerEvents="none"
       >
-        <Circle cx={18.66} cy={3.48} r={5.5} fill={color} opacity={0.22} />
-        <Circle cx={18.66} cy={3.48} r={2.8} fill="#fff8ea" stroke={color} strokeWidth={0.9} />
-        <Circle cx={26.85} cy={9.22} r={2.1} fill={color} opacity={0.62} />
-        <Circle cx={28.42} cy={19.1} r={1.5} fill={color} opacity={0.35} />
-        <Circle cx={22.4} cy={27.08} r={1} fill={color} opacity={0.16} />
+        <Circle cx={7} cy={7} r={1} fill={colors.accent2} opacity={0.16} />
+        <Circle cx={9.5} cy={9.5} r={1.6} fill={colors.accent2} opacity={0.32} />
+        <Circle cx={12.5} cy={12.5} r={2.3} fill={colors.accent2} opacity={0.55} />
+        <Circle cx={16} cy={16} r={6} fill={colors.accent2} opacity={0.25} />
+        <Circle cx={16} cy={16} r={3.2} fill={colors.accent2} stroke="#fff8ea" strokeWidth={0.9} />
       </Svg>
     </View>
   );
