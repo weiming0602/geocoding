@@ -7,6 +7,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Linking, Modal, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import Svg, { Circle } from 'react-native-svg';
 
 import { getStoredAccount } from './components/roadAlertsStorage';
 import { BrandMark, Icon, type IconName } from './components/icons';
@@ -57,66 +58,32 @@ const TABS: { key: Screen; label: string; icon: IconName }[] = [
   { key: 'help', label: 'Help', icon: 'help' },
 ];
 
-// A small glowing dot that continuously orbits the header's BrandMark --
-// same idea as desktop's .brand-orbit CSS (styles.css, via icons.tsx's
-// BrandMarkOrbit), but RN has no CSS keyframes/animation shorthand, so
-// this drives a looping Animated.Value instead. Only used here (the
-// header brandRow) -- not the giant background watermark above, or any
-// of the per-screen title icons -- so BrandMark itself stays untouched
-// and static everywhere else. useNativeDriver keeps the spin off the JS
-// thread, same reasoning as MenuItem's bounce below.
+// A frozen "comet trail" on the header's BrandMark -- a bright head dot
+// plus three shrinking, fading ghost dots along the globe's rim, drawn
+// once with no animation loop at all. Same coordinates/idea as desktop's
+// icons.tsx BrandMarkOrbit (a 32x32 viewBox, dots placed by hand along
+// the globe's own outer circle) -- reads as "moving very fast" the way a
+// cartoon motion trail does, without an actually-spinning cursor. Only
+// used here (the header brandRow), not the giant background watermark
+// above or any per-screen title icon, so BrandMark itself stays
+// untouched and static everywhere else.
 function BrandMarkOrbit({ size, color }: { size: number; color: string }) {
-  const spin = useRef(new Animated.Value(0)).current;
-
-  useEffect(() => {
-    const loop = Animated.loop(
-      Animated.timing(spin, { toValue: 1, duration: 3200, easing: Easing.linear, useNativeDriver: true })
-    );
-    loop.start();
-    return () => loop.stop();
-  }, [spin]);
-
-  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
-
-  // Roughly traces BrandMark's own outer circle -- same "2px in from the
-  // edge" approximation as desktop's .brand-orbit__dot. dotCenterY is
-  // measured from the container's top edge; the glow circle shares the
-  // same center so it reads as one softly-lit dot, not two shapes.
-  const dotSize = 4;
-  const glowSize = 10;
-  const dotCenterY = 4;
-
   return (
     <View style={{ width: size, height: size }}>
       <BrandMark size={size} color={color} />
-      <Animated.View
+      <Svg
+        width={size}
+        height={size}
+        viewBox="0 0 32 32"
+        style={{ position: 'absolute', top: 0, left: 0 }}
         pointerEvents="none"
-        style={{ position: 'absolute', width: size, height: size, transform: [{ rotate }] }}
       >
-        <View
-          style={{
-            position: 'absolute',
-            top: dotCenterY - glowSize / 2,
-            left: size / 2 - glowSize / 2,
-            width: glowSize,
-            height: glowSize,
-            borderRadius: glowSize / 2,
-            backgroundColor: color,
-            opacity: 0.28,
-          }}
-        />
-        <View
-          style={{
-            position: 'absolute',
-            top: dotCenterY - dotSize / 2,
-            left: size / 2 - dotSize / 2,
-            width: dotSize,
-            height: dotSize,
-            borderRadius: dotSize / 2,
-            backgroundColor: color,
-          }}
-        />
-      </Animated.View>
+        <Circle cx={18.66} cy={3.48} r={5.5} fill={color} opacity={0.22} />
+        <Circle cx={18.66} cy={3.48} r={2.8} fill="#fff8ea" stroke={color} strokeWidth={0.9} />
+        <Circle cx={26.85} cy={9.22} r={2.1} fill={color} opacity={0.62} />
+        <Circle cx={28.42} cy={19.1} r={1.5} fill={color} opacity={0.35} />
+        <Circle cx={22.4} cy={27.08} r={1} fill={color} opacity={0.16} />
+      </Svg>
     </View>
   );
 }

@@ -150,13 +150,21 @@ export function BrandMark({ size = 28 }: { size?: number }) {
 // quieter sizes) -- this wraps it rather than baking the animation into
 // the glyph. See .brand-orbit* in styles.css for the actual keyframes and
 // the prefers-reduced-motion opt-out.
+// A frozen "comet trail" -- a bright head dot plus three shrinking,
+// fading ghost dots along the globe's rim -- drawn once, no animation.
+// Reads as "moving fast" the way a cartoon motion-line/afterimage does,
+// rather than an actually-spinning cursor.
 export function BrandMarkOrbit({ size = 28 }: { size?: number }) {
   return (
     <span className="brand-orbit" style={{ width: size, height: size }}>
       <BrandMark size={size} />
-      <span className="brand-orbit__spin" aria-hidden="true">
-        <span className="brand-orbit__dot" />
-      </span>
+      <svg className="brand-orbit__trail" viewBox="0 0 32 32" aria-hidden="true">
+        <circle cx={18.66} cy={3.48} r={5.5} fill="var(--color-icon-active)" opacity={0.22} />
+        <circle cx={18.66} cy={3.48} r={2.8} fill="#fff8ea" stroke="var(--color-icon-active)" strokeWidth={0.9} />
+        <circle cx={26.85} cy={9.22} r={2.1} fill="var(--color-icon-active)" opacity={0.62} />
+        <circle cx={28.42} cy={19.1} r={1.5} fill="var(--color-icon-active)" opacity={0.35} />
+        <circle cx={22.4} cy={27.08} r={1} fill="var(--color-icon-active)" opacity={0.16} />
+      </svg>
     </span>
   );
 }
