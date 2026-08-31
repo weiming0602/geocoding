@@ -211,11 +211,12 @@ export default function BatchGeocodeForm({
       return;
     }
 
-    const header = 'ID,Address,Success,Latitude,Longitude,Side,Error';
+    const header = '#,ID,Address,Success,Latitude,Longitude,Side,Error';
     const rows = results.map((result, index) => {
       const id = forwardedIds![index];
       if (result.success) {
         return [
+          String(index + 1),
           id,
           result.address,
           'true',
@@ -227,7 +228,7 @@ export default function BatchGeocodeForm({
           .map(csvField)
           .join(',');
       }
-      return [id, result.address, 'false', '', '', '', result.error].map(csvField).join(',');
+      return [String(index + 1), id, result.address, 'false', '', '', '', result.error].map(csvField).join(',');
     });
     const csv = [header, ...rows].join('\n');
 
@@ -423,7 +424,10 @@ export default function BatchGeocodeForm({
           {results.map((result, index) => {
             const rowContent = (
               <>
-                {idsMatchResults && <Text style={styles.cardMeta}>{forwardedIds![index] || '—'}</Text>}
+                <Text style={styles.cardMeta}>
+                  #{index + 1}
+                  {idsMatchResults ? ` · ${forwardedIds![index] || '—'}` : ''}
+                </Text>
                 <Text style={styles.resultAddress}>{result.address}</Text>
                 {result.success ? (
                   <Text style={styles.cardMeta} selectable>
