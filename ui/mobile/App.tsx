@@ -57,6 +57,70 @@ const TABS: { key: Screen; label: string; icon: IconName }[] = [
   { key: 'help', label: 'Help', icon: 'help' },
 ];
 
+// A small glowing dot that continuously orbits the header's BrandMark --
+// same idea as desktop's .brand-orbit CSS (styles.css, via icons.tsx's
+// BrandMarkOrbit), but RN has no CSS keyframes/animation shorthand, so
+// this drives a looping Animated.Value instead. Only used here (the
+// header brandRow) -- not the giant background watermark above, or any
+// of the per-screen title icons -- so BrandMark itself stays untouched
+// and static everywhere else. useNativeDriver keeps the spin off the JS
+// thread, same reasoning as MenuItem's bounce below.
+function BrandMarkOrbit({ size, color }: { size: number; color: string }) {
+  const spin = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const loop = Animated.loop(
+      Animated.timing(spin, { toValue: 1, duration: 3200, easing: Easing.linear, useNativeDriver: true })
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [spin]);
+
+  const rotate = spin.interpolate({ inputRange: [0, 1], outputRange: ['0deg', '360deg'] });
+
+  // Roughly traces BrandMark's own outer circle -- same "2px in from the
+  // edge" approximation as desktop's .brand-orbit__dot. dotCenterY is
+  // measured from the container's top edge; the glow circle shares the
+  // same center so it reads as one softly-lit dot, not two shapes.
+  const dotSize = 4;
+  const glowSize = 10;
+  const dotCenterY = 4;
+
+  return (
+    <View style={{ width: size, height: size }}>
+      <BrandMark size={size} color={color} />
+      <Animated.View
+        pointerEvents="none"
+        style={{ position: 'absolute', width: size, height: size, transform: [{ rotate }] }}
+      >
+        <View
+          style={{
+            position: 'absolute',
+            top: dotCenterY - glowSize / 2,
+            left: size / 2 - glowSize / 2,
+            width: glowSize,
+            height: glowSize,
+            borderRadius: glowSize / 2,
+            backgroundColor: color,
+            opacity: 0.28,
+          }}
+        />
+        <View
+          style={{
+            position: 'absolute',
+            top: dotCenterY - dotSize / 2,
+            left: size / 2 - dotSize / 2,
+            width: dotSize,
+            height: dotSize,
+            borderRadius: dotSize / 2,
+            backgroundColor: color,
+          }}
+        />
+      </Animated.View>
+    </View>
+  );
+}
+
 // Desktop's equivalent (styles.css's nav-item-hop) plays a one-shot hop
 // whenever a nav pill newly becomes .active -- there's no persistent nav
 // bar here to do the same trick on (this menu is a Modal that closes the
@@ -224,7 +288,7 @@ export default function App() {
 
       <View style={styles.header}>
         <View style={styles.brandRow}>
-          <BrandMark size={20} color={colors.accent} />
+          <BrandMarkOrbit size={20} color={colors.accent} />
           <Text style={styles.brand}>Meridian</Text>
         </View>
         <TouchableOpacity
