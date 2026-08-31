@@ -7,7 +7,7 @@ import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Easing, Linking, Modal, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import Svg, { Circle } from 'react-native-svg';
+import Svg, { G, Line, Text as SvgText } from 'react-native-svg';
 
 import { getStoredAccount } from './components/roadAlertsStorage';
 import { BrandMark, Icon, type IconName } from './components/icons';
@@ -58,15 +58,18 @@ const TABS: { key: Screen; label: string; icon: IconName }[] = [
   { key: 'help', label: 'Help', icon: 'help' },
 ];
 
-// A frozen "comet trail" on the header's BrandMark -- a bright head dot
-// plus three shrinking, fading ghost dots along the globe's rim, drawn
-// once with no animation loop at all. Same coordinates/idea as desktop's
-// icons.tsx BrandMarkOrbit (a 32x32 viewBox, dots placed by hand along
-// the globe's own outer circle) -- reads as "moving very fast" the way a
-// cartoon motion trail does, without an actually-spinning cursor. Only
-// used here (the header brandRow), not the giant background watermark
-// above or any per-screen title icon, so BrandMark itself stays
-// untouched and static everywhere else.
+// A tilted "AI" badge over the header's BrandMark, drawn once with no
+// animation loop -- "AI" leaned over at an angle with three trailing
+// speed lines, the classic cartoon shorthand for "running/moving fast"
+// (manga speed lines behind a dashing character). Same coordinates/idea
+// as desktop's icons.tsx BrandMarkOrbit (a 32x32 viewBox). AI_BADGE_COLOR
+// is a vivid magenta-red deliberately unlike anything else in the
+// palette (golden accent, teal accent2, violet route color) so it reads
+// immediately against the globe instead of blending in. Only used here
+// (the header brandRow), not the giant background watermark above or any
+// per-screen title icon, so BrandMark itself stays untouched and static
+// everywhere else.
+const AI_BADGE_COLOR = '#ff2e6e';
 function BrandMarkOrbit({ size, color }: { size: number; color: string }) {
   return (
     <View style={{ width: size, height: size }}>
@@ -78,11 +81,23 @@ function BrandMarkOrbit({ size, color }: { size: number; color: string }) {
         style={{ position: 'absolute', top: 0, left: 0 }}
         pointerEvents="none"
       >
-        <Circle cx={7} cy={7} r={1} fill={colors.accent2} opacity={0.16} />
-        <Circle cx={9.5} cy={9.5} r={1.6} fill={colors.accent2} opacity={0.32} />
-        <Circle cx={12.5} cy={12.5} r={2.3} fill={colors.accent2} opacity={0.55} />
-        <Circle cx={16} cy={16} r={6} fill={colors.accent2} opacity={0.25} />
-        <Circle cx={16} cy={16} r={3.2} fill={colors.accent2} stroke="#fff8ea" strokeWidth={0.9} />
+        <G rotation={-14} origin="16, 16">
+          <Line x1={3} y1={10} x2={9} y2={13} stroke={AI_BADGE_COLOR} strokeWidth={1.8} strokeLinecap="round" opacity={0.85} />
+          <Line x1={1} y1={15} x2={8} y2={17} stroke={AI_BADGE_COLOR} strokeWidth={1.5} strokeLinecap="round" opacity={0.55} />
+          <Line x1={2} y1={21} x2={8} y2={21} stroke={AI_BADGE_COLOR} strokeWidth={1.2} strokeLinecap="round" opacity={0.3} />
+          <SvgText
+            x={16}
+            y={20.5}
+            textAnchor="middle"
+            fontSize={13}
+            fontWeight="800"
+            fill={AI_BADGE_COLOR}
+            stroke="#fff8ea"
+            strokeWidth={0.6}
+          >
+            AI
+          </SvgText>
+        </G>
       </Svg>
     </View>
   );
