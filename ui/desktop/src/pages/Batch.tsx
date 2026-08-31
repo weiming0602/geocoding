@@ -1,10 +1,11 @@
-import { useCallback, useRef, useState } from 'react';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Link, useLocation } from 'react-router';
 
 import { batchGeocode, batchGeocodeDownload } from '../../../shared/api/client';
 import type { BatchResult, BatchSource } from '../../../shared/api/types';
 import BatchMapView from '../components/BatchMapView';
 import PageHeader from '../components/PageHeader';
+import { useMapMarkerCap } from '../useMapMarkerCap';
 
 type ForwardedFile = { fileContent: string; fileName?: string; ids?: string[] };
 
@@ -128,15 +129,40 @@ export default function Batch() {
   }, [hasSource, buildSource]);
 
   const successCount = results ? results.filter((r) => r.success).length : 0;
-  const successMarkers = (results ?? [])
-    .map((r, resultIndex) => ({ r, resultIndex }))
-    .filter((x): x is { r: Extract<BatchResult, { success: true }>; resultIndex: number } => x.r.success)
-    .map(({ r, resultIndex }) => ({
-      address: r.address,
-      latitude: r.coordinates.latitude,
-      longitude: r.coordinates.longitude,
-      resultIndex,
-    }));
+  const successMarkers = useMemo(
+    () =>
+      (results ?? [])
+        .map((r, resultIndex) => ({ r, resultIndex }))
+        .filter((x): x is { r: Extract<BatchResult, { success: true }>; resultIndex: number } => x.r.success)
+        .map(({ r, resultIndex }) => ({
+          address: r.address,
+          latitude: r.coordinates.latitude,
+          longitude: r.coordinates.longitude,
+          resultIndex,
+        })),
+    [results]
+  );
+
+  // Connection-adaptive render cap -- purely a map-rendering performance
+  // guard, evaluated live from the browser's Network Information API (see
+  // useMapMarkerCap.ts). Never affects the results table or CSV/ZIP
+  // export, which stay complete and uncapped.
+  const mapMarkerCap = useMapMarkerCap();
+  const mapMarkers = useMemo(() => {
+    if (successMarkers.length <= mapMarkerCap) return successMarkers;
+    const capped = successMarkers.slice(0, mapMarkerCap);
+    // Keep the selected/focused marker visible even if it'd otherwise fall
+    // outside the cap slice -- clicking a table row shouldn't silently show
+    // nothing on the map.
+    if (selectedIndex !== null && !capped.some((m) => m.resultIndex === selectedIndex)) {
+      const selectedMarker = successMarkers.find((m) => m.resultIndex === selectedIndex);
+      if (selectedMarker) {
+        capped[capped.length - 1] = selectedMarker;
+      }
+    }
+    return capped;
+  }, [successMarkers, mapMarkerCap, selectedIndex]);
+  const mapMarkersCapped = mapMarkers.length < successMarkers.length;
 
   const handleSelectRow = useCallback((index: number) => {
     setSelectedIndex(index);
@@ -367,8 +393,15 @@ export default function Batch() {
               </div>
               {successMarkers.length > 0 && (
                 <div ref={mapWrapperRef} style={{ marginTop: 'var(--space-4)' }}>
+                  {mapMarkersCapped && (
+                    <p className="text-muted" style={{ fontSize: 12, marginBottom: 'var(--space-2)' }}>
+                      Showing {mapMarkerCap.toLocaleString()} of {successMarkers.length.toLocaleString()} results on
+                      the map (based on your connection) — full results are in the table above and any CSV/ZIP
+                      export.
+                    </p>
+                  )}
                   <BatchMapView
-                    markers={successMarkers}
+                    markers={mapMarkers}
                     selectedIndex={selectedIndex}
                     focusRequest={focusRequest}
                     onMarkerClick={handleMarkerClick}
