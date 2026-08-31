@@ -184,11 +184,12 @@ export default function Batch() {
 
   const handleDownloadCsv = useCallback(() => {
     if (!results || !idsMatchResults || !forwardedIds) return;
-    const header = ['ID', 'Address', 'Success', 'Latitude', 'Longitude', 'Side', 'Error'];
+    const header = ['#', 'ID', 'Address', 'Success', 'Latitude', 'Longitude', 'Side', 'Error'];
     const lines = [header.join(',')];
     results.forEach((result, i) => {
       const row = result.success
         ? [
+            String(i + 1),
             forwardedIds[i],
             result.address,
             'true',
@@ -197,7 +198,7 @@ export default function Batch() {
             result.source === 'interpolation' ? result.rangeSide : '',
             '',
           ]
-        : [forwardedIds[i], result.address, 'false', '', '', '', result.error];
+        : [String(i + 1), forwardedIds[i], result.address, 'false', '', '', '', result.error];
       lines.push(row.map(csvField).join(','));
     });
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
@@ -349,6 +350,7 @@ export default function Batch() {
                 <table className="table">
                   <thead>
                     <tr>
+                      <th>#</th>
                       {idsMatchResults && <th>ID</th>}
                       <th>Address</th>
                       <th>Result</th>
@@ -369,6 +371,7 @@ export default function Batch() {
                           background: selectedIndex === index ? 'var(--color-surface)' : undefined,
                         }}
                       >
+                        <td className="text-muted">{index + 1}</td>
                         {idsMatchResults && forwardedIds && <td className="text-muted">{forwardedIds[index]}</td>}
                         <td>{result.address}</td>
                         <td>
