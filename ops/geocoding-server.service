@@ -26,6 +26,13 @@ After=network.target postgresql.service
 
 [Service]
 Type=simple
+# Postgres peer authentication (see CLAUDE.md's "Environment / data
+# layout") matches the connecting OS user to the requested role -- both
+# db.js's DSNs request role "my_ai", so this must run as that same OS
+# user, not root's default. Without this, every query fails with
+# "Peer authentication failed for user \"my_ai\"".
+User=my_ai
+Group=my_ai
 WorkingDirectory=/home/my_ai/projects/geocoding/geocoding-server
 # dotenv (loaded at the top of server.js) reads the real .env from this
 # same directory -- no secrets belong in this unit file.
