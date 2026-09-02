@@ -1,8 +1,8 @@
-import { NavLink } from 'react-router';
+import { Link, NavLink } from 'react-router';
 import type { ReactNode } from 'react';
 
 import { isMobileDevice } from '../deviceDetection';
-import { BrandMark, Icon, type IconName } from './icons';
+import { BrandMark, BrandMarkOrbit, Icon, type IconName } from './icons';
 import InstallAppBanner from './InstallAppBanner';
 import MobileRedirectBanner, { MOBILE_APP_URL } from './MobileRedirectBanner';
 
@@ -28,6 +28,16 @@ export default function Layout({ children }: { children: ReactNode }) {
   // option, same as before this existed.
   const showMobileRedirect = Boolean(MOBILE_APP_URL) && isMobileDevice();
 
+  // Unlike MobileRedirectBanner (which stays off entirely with no real
+  // VITE_MOBILE_APP_URL set -- no mobile deployment exists yet), this
+  // footer toggle also falls back to the local Expo web dev server in
+  // dev builds only (import.meta.env.DEV, Vite's own flag -- stripped
+  // out of a production build automatically, so this default can't leak
+  // into a real deploy even if VITE_MOBILE_APP_URL is forgotten there).
+  // Anyone, not just a detected mobile device, can use it to jump over
+  // and try the other app while both are running locally.
+  const mobileAppUrl = MOBILE_APP_URL || (import.meta.env.DEV ? 'http://localhost:8081' : undefined);
+
   return (
     <div
       style={{
@@ -39,10 +49,42 @@ export default function Layout({ children }: { children: ReactNode }) {
         flexDirection: 'column',
       }}
     >
+      {/* A giant, half-cropped BrandMark sitting fixed in the corner --
+          quiet enough (7% opacity, neutral text color, no fill -- just
+          the same outline strokes the real logo uses) to read as texture
+          behind the page rather than a second logo competing with the
+          real one in the nav. Fixed (not absolute) so it stays put as a
+          backdrop while the page scrolls, like wallpaper rather than
+          part of the document; a deliberate tilt gives it some life
+          instead of sitting dead-center-symmetrical. No z-index -- a
+          fixed-position element with a *negative* z-index and no
+          positioned ancestor establishing its own stacking context
+          renders behind the root stacking context entirely (invisible),
+          not just behind sibling content; default z-index:auto plus DOM
+          order (this div first) already paints it behind the nav/content
+          that follow it. pointerEvents: 'none' so it never intercepts a
+          click meant for whatever's drawn over it. */}
+      <div
+        aria-hidden="true"
+        style={{
+          position: 'fixed',
+          right: '-320px',
+          bottom: '-320px',
+          width: 800,
+          height: 800,
+          color: 'var(--color-text)',
+          opacity: 0.07,
+          transform: 'rotate(-22deg)',
+          pointerEvents: 'none',
+        }}
+      >
+        <BrandMark size={800} />
+      </div>
+
       {showMobileRedirect ? <MobileRedirectBanner /> : <InstallAppBanner />}
       <nav className="nav">
         <div className="nav-brand">
-          <BrandMark size={32} />
+          <BrandMarkOrbit size={32} />
           Meridian
         </div>
         <div className="nav-links">
@@ -73,6 +115,52 @@ export default function Layout({ children }: { children: ReactNode }) {
       >
         {children}
       </div>
+
+      <footer
+        style={{
+          borderTop: '1px solid var(--color-divider)',
+          padding: 'var(--space-6) var(--space-4)',
+        }}
+      >
+        <div
+          style={{
+            maxWidth: '1240px',
+            width: '100%',
+            margin: '0 auto',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 'var(--space-4)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+            <BrandMark size={20} />
+            <span style={{ fontFamily: 'var(--font-heading)', fontWeight: 'var(--font-heading-weight)' }}>
+              Meridian
+            </span>
+            <span className="text-muted" style={{ fontSize: 13 }}>
+              &copy; {new Date().getFullYear()} Meridian. Built for Maine &amp; New Hampshire.
+            </span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)', fontSize: 13 }}>
+            <Link to="/pricing" className="text-muted">
+              Pricing
+            </Link>
+            <Link to="/progress" className="text-muted">
+              Progress
+            </Link>
+            <Link to="/help" className="text-muted">
+              Help
+            </Link>
+            {mobileAppUrl && (
+              <a href={mobileAppUrl} className="btn btn-ghost" style={{ fontSize: 13, padding: '4px 10px' }}>
+                📱 Switch to mobile app
+              </a>
+            )}
+          </div>
+        </div>
+      </footer>
     </div>
   );
 }

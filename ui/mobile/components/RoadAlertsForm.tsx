@@ -1,7 +1,7 @@
 import * as Location from 'expo-location';
 import * as Speech from 'expo-speech';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { StyleSheet, Text, TextInput, View } from 'react-native';
+import { Linking, Pressable, StyleSheet, Text, TextInput, View } from 'react-native';
 
 import {
   ApiError,
@@ -9,6 +9,7 @@ import {
   getRoadAlertsPreferences,
   getRoadAlertsTopic,
   getRoadAlertsUsername,
+  getRoadReroute,
   getRoadSignals,
   getTestWeightedPoints,
   markRoadAlertsNotificationsViewed,
@@ -16,11 +17,20 @@ import {
   updateRoadAlertsPreferences,
   updateRoadAlertsUsername,
 } from '../../shared/api/client';
-import type { RoadAlertsTopicResponse, RoadSignal, RoadSignalSeverity } from '../../shared/api/types';
+import type {
+  RoadAlertsTopicResponse,
+  RoadRerouteResponse,
+  RoadSignal,
+  RoadSignalSeverity,
+} from '../../shared/api/types';
 import { bearingDegrees, haversineDistanceMeters, isAhead } from '../../shared/geo';
+import { buildGoogleMapsDirectionsUrl } from '../../shared/googleMapsDirections';
+import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../shared/hazardCategories';
 import { findAlertsForWeightedPoints, type WeightedPoint } from '../../shared/roadAlertsMatching';
 import { colors, radius, space } from '../../shared/theme';
+import RoadAlertsMap, { ROUTE_COLORS } from './RoadAlertsMap';
 import RoadAlertsRegistration from './RoadAlertsRegistration';
+import { Icon } from './icons';
 import ThemedButton from './ThemedButton';
 import { clearStoredAccount, getStoredAccount, type StoredRoadAlertsAccount } from './roadAlertsStorage';
 import { isSpeechRecognitionAvailable, listenOnce, matchesSaveCommand } from './webSpeechRecognition';
@@ -56,6 +66,24 @@ const SEVERITY_COLORS: Record<RoadSignalSeverity, string> = {
 function metersLabel(meters: number): string {
   if (meters < 1000) return `${Math.round(meters)} m`;
   return `${(meters / 1000).toFixed(1)} km`;
+}
+
+// Prefers lastUpdatedAt over createdAt -- same "how current is this,
+// really" reasoning as the server's own sortByFreshness (roadSignals.js),
+// which already orders the list by this same field so the newest alert is
+// always on top; this just puts a human-readable label on that ordering.
+function freshnessLabel(signal: RoadSignal): string {
+  const raw = signal.lastUpdatedAt || signal.createdAt;
+  if (!raw) return 'time unknown';
+  const ms = Date.now() - new Date(raw).getTime();
+  if (Number.isNaN(ms)) return 'time unknown';
+  if (ms < 60_000) return 'updated just now';
+  const minutes = Math.floor(ms / 60_000);
+  if (minutes < 60) return `updated ${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `updated ${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `updated ${days}d ago`;
 }
 
 // Alerts speak automatically at every tier except fun_to_know (per
@@ -123,6 +151,13 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
   const [usernameSaving, setUsernameSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [partial, setPartial] = useState(false);
+  // The alert list is the primary thing a driver needs -- registration,
+  // digest/username, spoken-detail level, and manual test coordinates are
+  // all setup/testing concerns that shouldn't sit between opening this
+  // screen and seeing what's nearby. Collapsed by default; a driver who
+  // never opens it still gets alerts, since watching now starts on its own
+  // (see the auto-start effect below) instead of waiting on a Start press.
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // "Save this" voice command per alert row -- web-only (see
   // webSpeechRecognition.ts). Keyed by signal id so each row shows its
@@ -149,6 +184,21 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
   // overloading its state with a second, differently-shaped use case.
   const [voiceListeningStatementSignalId, setVoiceListeningStatementSignalId] = useState<string | null>(null);
   const [voiceStatementStatusBySignalId, setVoiceStatementStatusBySignalId] = useState<Record<string, string>>({});
+
+  // Inline map -- one open at a time, same reasoning as the comments panel
+  // above. Opening it needs no server round trip (just the driver's
+  // current position and the signal's own lat/lon); "Show a way around
+  // this" reuses the same panel, layering the fetched route options and
+  // rejoin point on top once they arrive (see rerouteBySignalId below).
+  const [mapOpenSignalId, setMapOpenSignalId] = useState<string | null>(null);
+  const [expandedRerouteSignalId, setExpandedRerouteSignalId] = useState<string | null>(null);
+  const [rerouteBySignalId, setRerouteBySignalId] = useState<
+    Record<string, RoadRerouteResponse | 'loading' | 'error'>
+  >({});
+  // Which option row was last tapped, so RoadAlertsMap can call out the
+  // matching route -- touch equivalent of desktop's hover-to-highlight.
+  // Not keyed per signal, same reasoning as mapOpenSignalId above.
+  const [highlightedRouteIndex, setHighlightedRouteIndex] = useState<number | null>(null);
 
   // Manual testing input -- typed coordinates (+ optional heading) in
   // place of a real GPS fix, so a specific "approaching a hazard" scenario
@@ -391,6 +441,17 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
     }
   }, [onPosition]);
 
+  // Starts watching as soon as an account is ready, rather than waiting on
+  // a Start press -- a driver opening this screen should see alerts show
+  // up on their own. Depends only on `account` (not `watching`) so this
+  // fires once per sign-in rather than re-firing every time Stop (in
+  // Settings) flips `watching` back to false.
+  useEffect(() => {
+    if (account) {
+      handleStart();
+    }
+  }, [account, handleStart]);
+
   const handleManualCheck = useCallback(async () => {
     const latitude = Number(manualLatitude);
     const longitude = Number(manualLongitude);
@@ -542,6 +603,52 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
       }
     },
     [expandedSignalId, topicBySignalId]
+  );
+
+  const handleToggleMap = useCallback((signal: RoadSignal) => {
+    setHighlightedRouteIndex(null);
+    setMapOpenSignalId((current) => (current === signal.id ? null : signal.id));
+  }, []);
+
+  // Mirrors desktop's handleToggleReroute (RoadAlerts.tsx) -- same
+  // /road-signals/reroute call, same per-signal cache-once-fetched
+  // behavior. Also opens the map panel (if not already open) so the
+  // driver sees the route the moment it arrives, rather than fetching
+  // route data behind a still-closed map.
+  const handleToggleReroute = useCallback(
+    async (signal: RoadSignal) => {
+      setHighlightedRouteIndex(null);
+      if (expandedRerouteSignalId === signal.id) {
+        setExpandedRerouteSignalId(null);
+        return;
+      }
+      setExpandedRerouteSignalId(signal.id);
+      setMapOpenSignalId(signal.id);
+      if (rerouteBySignalId[signal.id]) return; // already fetched once this session
+
+      const current = accountRef.current;
+      if (!current || !position || typeof signal.latitude !== 'number' || typeof signal.longitude !== 'number') {
+        return;
+      }
+
+      setRerouteBySignalId((prev) => ({ ...prev, [signal.id]: 'loading' }));
+      try {
+        const response = await getRoadReroute({
+          driverLatitude: position.latitude,
+          driverLongitude: position.longitude,
+          driverHeading: position.heading,
+          hazardLatitude: signal.latitude,
+          hazardLongitude: signal.longitude,
+          hazardRoadway: signal.roadway ?? undefined,
+          email: current.email,
+          serviceKey: current.serviceKey,
+        });
+        setRerouteBySignalId((prev) => ({ ...prev, [signal.id]: response }));
+      } catch {
+        setRerouteBySignalId((prev) => ({ ...prev, [signal.id]: 'error' }));
+      }
+    },
+    [expandedRerouteSignalId, rerouteBySignalId, position]
   );
 
   const handlePostStatement = useCallback(
@@ -708,11 +815,24 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Road alerts</Text>
+      <View style={styles.titleRow}>
+        <Icon name="roadAlerts" size={24} color={colors.accent} />
+        <Text style={styles.title}>Road alerts</Text>
+      </View>
       <Text style={styles.subtitle}>
         Live traffic hazards near you, spoken aloud as you approach them.
       </Text>
 
+      <View style={styles.spacingSmall}>
+        <ThemedButton
+          title={settingsOpen ? 'Hide settings' : 'Settings'}
+          onPress={() => setSettingsOpen((o) => !o)}
+          variant="ghost"
+        />
+      </View>
+
+      {settingsOpen && (
+        <>
       <View style={styles.noteCard}>
         <Text style={styles.noteText}>
           Traffic data from New England 511 (Maine, New Hampshire, and Vermont DOTs). Provided
@@ -861,6 +981,8 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
           />
         </View>
       </View>
+        </>
+      )}
 
       {error && <Text style={[styles.spacing, styles.errorText]}>{error}</Text>}
       {!error && partial && (
@@ -873,7 +995,7 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
         <Text style={styles.cardTitle}>
           {signals.length} alert{signals.length === 1 ? '' : 's'} within {metersLabel(RADIUS_METERS)}
         </Text>
-        {signals.map((signal) => {
+        {signals.map((signal, index) => {
           const onRoute = onRouteIds.has(signal.id);
           const ahead =
             onRoute ||
@@ -895,19 +1017,28 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
               : null;
 
           return (
-            <View key={signal.id} style={styles.resultCard}>
-              <View style={styles.resultHeader}>
+            <View
+              key={signal.id}
+              style={[styles.resultCard, index === 0 ? { backgroundColor: colors.accent100 } : null]}
+            >
+              <View style={[styles.resultHeader, { alignItems: 'flex-start' }]}>
                 <Text style={styles.cardKicker}>
                   {distance !== null ? `${metersLabel(distance)} away` : 'distance unknown'}
                   {onRoute ? ' · on your route' : !ahead ? ' · behind you' : ''}
                 </Text>
-                <View style={[styles.severityTag, { borderColor: SEVERITY_COLORS[signal.severity] }]}>
-                  <Text style={[styles.severityTagText, { color: SEVERITY_COLORS[signal.severity] }]}>
-                    {SEVERITY_LABELS[signal.severity]}
-                  </Text>
+                <View style={{ alignItems: 'flex-end', gap: 2 }}>
+                  <View style={[styles.severityTag, { borderColor: SEVERITY_COLORS[signal.severity] }]}>
+                    <Text style={[styles.severityTagText, { color: SEVERITY_COLORS[signal.severity] }]}>
+                      {SEVERITY_LABELS[signal.severity]}
+                    </Text>
+                  </View>
+                  <Text style={styles.cardKicker}>{freshnessLabel(signal)}</Text>
                 </View>
               </View>
               <Text style={styles.resultAddress}>
+                <Text accessibilityLabel={HAZARD_CATEGORY_LABELS[signal.hazardCategory]}>
+                  {HAZARD_CATEGORY_ICONS[signal.hazardCategory]}{' '}
+                </Text>
                 {signal.roadway ?? 'Unknown road'}
                 {signal.direction ? ` (${signal.direction})` : ''}
               </Text>
@@ -926,10 +1057,95 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
                   onPress={() => handleToggleComments(signal)}
                   variant="ghost"
                 />
+                {position && typeof signal.latitude === 'number' && typeof signal.longitude === 'number' && (
+                  <>
+                    <ThemedButton
+                      title={mapOpenSignalId === signal.id ? 'Hide map' : 'Show on map'}
+                      onPress={() => handleToggleMap(signal)}
+                      variant="ghost"
+                    />
+                    <ThemedButton
+                      title={expandedRerouteSignalId === signal.id ? 'Hide route options' : 'Show a way around this'}
+                      onPress={() => handleToggleReroute(signal)}
+                      variant="ghost"
+                    />
+                  </>
+                )}
               </View>
               {voiceStatusBySignalId[signal.id] && (
                 <Text style={styles.cardMeta}>{voiceStatusBySignalId[signal.id]}</Text>
               )}
+              {mapOpenSignalId === signal.id &&
+                position &&
+                typeof signal.latitude === 'number' &&
+                typeof signal.longitude === 'number' &&
+                (() => {
+                  const rerouteState = rerouteBySignalId[signal.id];
+                  const rerouteReady =
+                    rerouteState && rerouteState !== 'loading' && rerouteState !== 'error' ? rerouteState : null;
+                  return (
+                    <>
+                      {expandedRerouteSignalId === signal.id && rerouteState === 'loading' && (
+                        <Text style={styles.cardMeta}>Finding a way around…</Text>
+                      )}
+                      {expandedRerouteSignalId === signal.id && rerouteState === 'error' && (
+                        <Text style={styles.cardMeta}>Could not find a way around this hazard.</Text>
+                      )}
+                      {expandedRerouteSignalId === signal.id &&
+                        rerouteReady &&
+                        rerouteReady.options.length === 0 && (
+                          <Text style={styles.cardMeta}>No route around this hazard was found.</Text>
+                        )}
+                      <RoadAlertsMap
+                        driverPosition={{ latitude: position.latitude, longitude: position.longitude }}
+                        hazardPosition={{ latitude: signal.latitude, longitude: signal.longitude }}
+                        rejoinPoint={rerouteReady?.rejoinPoint}
+                        options={rerouteReady?.options}
+                        highlightedIndex={highlightedRouteIndex}
+                      />
+                      {rerouteReady?.options.map((option, index) => (
+                        <Pressable
+                          key={index}
+                          onPress={() =>
+                            setHighlightedRouteIndex((current) => (current === index ? null : index))
+                          }
+                          style={[
+                            styles.optionRow,
+                            styles.spacingSmall,
+                            styles.optionRowTappable,
+                            highlightedRouteIndex === index ? styles.optionRowHighlighted : null,
+                          ]}
+                        >
+                          <View style={styles.optionRowLabel}>
+                            <View
+                              style={[styles.routeSwatch, { backgroundColor: ROUTE_COLORS[index % ROUTE_COLORS.length] }]}
+                            />
+                            <Text style={styles.cardMeta}>
+                              Option {index + 1}:{' '}
+                              {option.distanceMeters !== null ? metersLabel(option.distanceMeters) : '?'}
+                              {option.durationSeconds !== null
+                                ? `, ~${Math.round(option.durationSeconds / 60)} min`
+                                : ''}
+                            </Text>
+                          </View>
+                          <ThemedButton
+                            title="Navigate with Google Maps"
+                            variant="ghost"
+                            onPress={() =>
+                              Linking.openURL(
+                                buildGoogleMapsDirectionsUrl(
+                                  { latitude: position.latitude, longitude: position.longitude },
+                                  rerouteReady.rejoinPoint,
+                                  option
+                                )
+                              )
+                            }
+                          />
+                        </Pressable>
+                      ))}
+                    </>
+                  );
+                })()}
               {expandedSignalId === signal.id && (
                 <View style={styles.commentsPanel}>
                   {(() => {
@@ -1059,11 +1275,16 @@ const styles = StyleSheet.create({
     width: '100%',
     padding: space[4],
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[2],
+    marginBottom: 4,
+  },
   title: {
     fontFamily: 'CormorantGaramond_600SemiBold',
     fontSize: 30,
     color: colors.text,
-    marginBottom: 4,
   },
   subtitle: {
     fontFamily: 'Lora_400Regular',
@@ -1100,6 +1321,25 @@ const styles = StyleSheet.create({
   },
   optionButton: {
     flex: 1,
+  },
+  optionRowTappable: {
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: space[1],
+    borderRadius: radius.sm,
+  },
+  optionRowHighlighted: {
+    backgroundColor: colors.surface,
+  },
+  optionRowLabel: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[1],
+  },
+  routeSwatch: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
   },
   textInput: {
     flex: 1,

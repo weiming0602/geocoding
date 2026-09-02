@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Platform, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 // expo-file-system's new Paths/File API (SDK 57) has a broken internal
@@ -10,7 +10,9 @@ import { batchGeocode, batchGeocodeDownload } from '../../shared/api/client';
 import type { BatchResult, BatchSource } from '../../shared/api/types';
 import { colors, radius, space } from '../../shared/theme';
 import BatchGeocodeMap from './BatchGeocodeMap';
+import { Icon } from './icons';
 import ThemedButton from './ThemedButton';
+import { useMapMarkerCap } from './useMapMarkerCap';
 
 type PickedFile = {
   name: string;
@@ -209,11 +211,12 @@ export default function BatchGeocodeForm({
       return;
     }
 
-    const header = 'ID,Address,Success,Latitude,Longitude,Side,Error';
+    const header = '#,ID,Address,Success,Latitude,Longitude,Side,Error';
     const rows = results.map((result, index) => {
       const id = forwardedIds![index];
       if (result.success) {
         return [
+          String(index + 1),
           id,
           result.address,
           'true',
@@ -225,7 +228,7 @@ export default function BatchGeocodeForm({
           .map(csvField)
           .join(',');
       }
-      return [id, result.address, 'false', '', '', '', result.error].map(csvField).join(',');
+      return [String(index + 1), id, result.address, 'false', '', '', '', result.error].map(csvField).join(',');
     });
     const csv = [header, ...rows].join('\n');
 
@@ -241,15 +244,39 @@ export default function BatchGeocodeForm({
   }, [results, idsMatchResults, forwardedIds]);
 
   const successCount = results ? results.filter((r) => r.success).length : 0;
-  const successMarkers = (results ?? [])
-    .map((r, resultIndex) => ({ r, resultIndex }))
-    .filter((x): x is { r: Extract<BatchResult, { success: true }>; resultIndex: number } => x.r.success)
-    .map(({ r, resultIndex }) => ({
-      address: r.address,
-      latitude: r.coordinates.latitude,
-      longitude: r.coordinates.longitude,
-      resultIndex,
-    }));
+  const successMarkers = useMemo(
+    () =>
+      (results ?? [])
+        .map((r, resultIndex) => ({ r, resultIndex }))
+        .filter((x): x is { r: Extract<BatchResult, { success: true }>; resultIndex: number } => x.r.success)
+        .map(({ r, resultIndex }) => ({
+          address: r.address,
+          latitude: r.coordinates.latitude,
+          longitude: r.coordinates.longitude,
+          resultIndex,
+        })),
+    [results]
+  );
+
+  // Connection-adaptive render cap -- purely a map-rendering performance
+  // guard (see useMapMarkerCap.ts). Never affects the results list or CSV
+  // export, which stay complete and uncapped.
+  const mapMarkerCap = useMapMarkerCap();
+  const mapMarkers = useMemo(() => {
+    if (successMarkers.length <= mapMarkerCap) return successMarkers;
+    const capped = successMarkers.slice(0, mapMarkerCap);
+    // Keep the selected/focused marker visible even if it'd otherwise fall
+    // outside the cap slice -- tapping a list row shouldn't silently show
+    // nothing on the map.
+    if (selectedIndex !== null && !capped.some((m) => m.resultIndex === selectedIndex)) {
+      const selectedMarker = successMarkers.find((m) => m.resultIndex === selectedIndex);
+      if (selectedMarker) {
+        capped[capped.length - 1] = selectedMarker;
+      }
+    }
+    return capped;
+  }, [successMarkers, mapMarkerCap, selectedIndex]);
+  const mapMarkersCapped = mapMarkers.length < successMarkers.length;
 
   // Row tap (list -> map): highlight + pan/zoom + scroll to the map.
   const handleSelectRow = useCallback((index: number) => {
@@ -278,7 +305,10 @@ export default function BatchGeocodeForm({
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Batch geocoding</Text>
+      <View style={styles.titleRow}>
+        <Icon name="batch" size={24} color={colors.accent} />
+        <Text style={styles.title}>Batch geocoding</Text>
+      </View>
       <Text style={styles.subtitle}>One address per line.</Text>
 
       {showBackToImport && (
@@ -394,7 +424,10 @@ export default function BatchGeocodeForm({
           {results.map((result, index) => {
             const rowContent = (
               <>
-                {idsMatchResults && <Text style={styles.cardMeta}>{forwardedIds![index] || '—'}</Text>}
+                <Text style={styles.cardMeta}>
+                  #{index + 1}
+                  {idsMatchResults ? ` · ${forwardedIds![index] || '—'}` : ''}
+                </Text>
                 <Text style={styles.resultAddress}>{result.address}</Text>
                 {result.success ? (
                   <Text style={styles.cardMeta} selectable>
@@ -428,8 +461,14 @@ export default function BatchGeocodeForm({
           })}
           {successMarkers.length > 0 && (
             <View ref={mapWrapperRef}>
+              {mapMarkersCapped && (
+                <Text style={[styles.cardMeta, styles.spacing]}>
+                  Showing {mapMarkerCap.toLocaleString()} of {successMarkers.length.toLocaleString()} results on
+                  the map (based on your connection) — full results are in the list above and any CSV export.
+                </Text>
+              )}
               <BatchGeocodeMap
-                markers={successMarkers}
+                markers={mapMarkers}
                 selectedIndex={selectedIndex}
                 focusRequest={focusRequest}
                 onMarkerClick={handleMarkerClick}
@@ -451,11 +490,16 @@ const styles = StyleSheet.create({
     width: '100%',
     padding: space[4],
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[2],
+    marginBottom: 4,
+  },
   title: {
     fontFamily: 'CormorantGaramond_600SemiBold',
     fontSize: 30,
     color: colors.text,
-    marginBottom: 4,
   },
   subtitle: {
     fontFamily: 'Lora_400Regular',

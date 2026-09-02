@@ -16,6 +16,7 @@ import {
   type ColumnRole,
 } from '../../shared/importAddresses';
 import { colors, radius, space } from '../../shared/theme';
+import { Icon } from './icons';
 import ThemedButton from './ThemedButton';
 
 export type Step = 'upload' | 'map' | 'preview';
@@ -206,7 +207,10 @@ export default function ImportAddressesForm({ state, onChange, onSendToBatch }: 
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Import addresses</Text>
+      <View style={styles.titleRow}>
+        <Icon name="importAddresses" size={24} color={colors.accent} />
+        <Text style={styles.title}>Import addresses</Text>
+      </View>
       <Text style={styles.subtitle}>
         Turn a CSV or Excel export -- even one with street number, name, city, and state/ZIP each
         in their own column -- into a clean address list for Batch geocode.
@@ -389,11 +393,16 @@ const styles = StyleSheet.create({
     width: '100%',
     padding: space[4],
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[2],
+    marginBottom: 4,
+  },
   title: {
     fontFamily: 'CormorantGaramond_600SemiBold',
     fontSize: 30,
     color: colors.text,
-    marginBottom: 4,
   },
   subtitle: {
     fontFamily: 'Lora_400Regular',

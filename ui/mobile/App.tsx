@@ -5,11 +5,12 @@ import {
 import { Lora_400Regular, Lora_600SemiBold, useFonts as useLora } from '@expo-google-fonts/lora';
 import * as SplashScreen from 'expo-splash-screen';
 import { StatusBar } from 'expo-status-bar';
-import React, { useCallback, useEffect, useState } from 'react';
-import { Modal, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import { Animated, Easing, Linking, Modal, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import Svg, { G, Line, Text as SvgText } from 'react-native-svg';
 
 import { getStoredAccount } from './components/roadAlertsStorage';
-import { Icon, type IconName } from './components/icons';
+import { BrandMark, Icon, type IconName } from './components/icons';
 import BatchGeocodeScreen from './screens/BatchGeocodeScreen';
 import FindPlacesScreen from './screens/FindPlacesScreen';
 import HelpScreen from './screens/HelpScreen';
@@ -41,18 +42,127 @@ type Screen =
 // icon values match ui/desktop's NAV_LINKS one-for-one (see
 // components/icons.tsx's port-from-desktop comment) so the two apps'
 // menus read as the same system, not two different icon sets.
+// Order matches ui/desktop's NAV_LINKS one-for-one (Layout.tsx), minus
+// Overview -- mobile has no equivalent landing screen, it opens straight
+// to Single Address -- so the two apps' menus read as the same list.
 const TABS: { key: Screen; label: string; icon: IconName }[] = [
   { key: 'single', label: 'Single Address', icon: 'geocode' },
-  { key: 'batch', label: 'Batch Geocode', icon: 'batch' },
   { key: 'reverse', label: 'Reverse Geocode', icon: 'reverseGeocode' },
   { key: 'findPlaces', label: 'Find Places', icon: 'findPlaces' },
   { key: 'roadAlerts', label: 'Road Alerts', icon: 'roadAlerts' },
   { key: 'import', label: 'Import Addresses', icon: 'importAddresses' },
+  { key: 'batch', label: 'Batch Geocode', icon: 'batch' },
   { key: 'quota', label: 'Plan & Quota', icon: 'planQuota' },
   { key: 'pricing', label: 'Pricing', icon: 'pricing' },
   { key: 'progress', label: 'Progress', icon: 'progress' },
   { key: 'help', label: 'Help', icon: 'help' },
 ];
+
+// A tilted "AI" badge over the header's BrandMark, drawn once with no
+// animation loop -- "AI" leaned over at an angle with three trailing
+// speed lines, the classic cartoon shorthand for "running/moving fast"
+// (manga speed lines behind a dashing character). Same coordinates/idea
+// as desktop's icons.tsx BrandMarkOrbit (a 32x32 viewBox). AI_BADGE_COLOR
+// is a vivid magenta-red deliberately unlike anything else in the
+// palette (golden accent, teal accent2, violet route color) so it reads
+// immediately against the globe instead of blending in. Only used here
+// (the header brandRow), not the giant background watermark above or any
+// per-screen title icon, so BrandMark itself stays untouched and static
+// everywhere else.
+const AI_BADGE_COLOR = '#ff2e6e';
+function BrandMarkOrbit({ size, color }: { size: number; color: string }) {
+  return (
+    <View style={{ width: size, height: size }}>
+      <BrandMark size={size} color={color} />
+      <Svg
+        width={size}
+        height={size}
+        viewBox="0 0 32 32"
+        style={{ position: 'absolute', top: 0, left: 0 }}
+        pointerEvents="none"
+      >
+        <G rotation={-14} origin="16, 16">
+          <Line x1={3} y1={10} x2={9} y2={13} stroke={AI_BADGE_COLOR} strokeWidth={1.8} strokeLinecap="round" opacity={0.85} />
+          <Line x1={1} y1={15} x2={8} y2={17} stroke={AI_BADGE_COLOR} strokeWidth={1.5} strokeLinecap="round" opacity={0.55} />
+          <Line x1={2} y1={21} x2={8} y2={21} stroke={AI_BADGE_COLOR} strokeWidth={1.2} strokeLinecap="round" opacity={0.3} />
+          <SvgText
+            x={16}
+            y={20.5}
+            textAnchor="middle"
+            fontSize={13}
+            fontWeight="800"
+            fill={AI_BADGE_COLOR}
+            stroke="#fff8ea"
+            strokeWidth={0.6}
+          >
+            AI
+          </SvgText>
+        </G>
+      </Svg>
+    </View>
+  );
+}
+
+// Desktop's equivalent (styles.css's nav-item-hop) plays a one-shot hop
+// whenever a nav pill newly becomes .active -- there's no persistent nav
+// bar here to do the same trick on (this menu is a Modal that closes the
+// instant a tab is picked), so instead the tapped row itself hops in
+// place, and the actual navigation (onSelect) waits for the animation to
+// finish rather than firing immediately -- otherwise the modal would
+// close before the bounce was ever visible.
+function MenuItem({
+  tab,
+  active,
+  badge,
+  onSelect,
+}: {
+  tab: { key: Screen; label: string; icon: IconName };
+  active: boolean;
+  badge?: string;
+  onSelect: () => void;
+}) {
+  const bounce = useRef(new Animated.Value(0)).current;
+
+  // 3 decreasing bounces, deliberately more ball-like than desktop's
+  // floaty nav-item-hop keyframes (per feedback -- mobile should read as
+  // an actual bounced ball, not a balloon): each rise eases out (like
+  // gravity decelerating something thrown up) and each fall eases in
+  // (gravity accelerating it back down), asymmetric rather than a
+  // symmetric float, and quicker overall. Each peak targets a fraction of
+  // `bounce`'s 0..1 range rather than a fresh 0..1 climb, so translateY/
+  // scale below (interpolated off that same range) shrink proportionally
+  // without needing separate interpolations per hop.
+  const handlePress = () => {
+    bounce.setValue(0);
+    Animated.sequence([
+      Animated.timing(bounce, { toValue: 1, duration: 130, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0, duration: 110, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0.5, duration: 95, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0, duration: 80, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0.22, duration: 70, easing: Easing.out(Easing.quad), useNativeDriver: true }),
+      Animated.timing(bounce, { toValue: 0, duration: 60, easing: Easing.in(Easing.quad), useNativeDriver: true }),
+    ]).start(() => onSelect());
+  };
+
+  // translateY only -- no scale. This row is wide and short (an icon +
+  // a label in a flexDirection: 'row'), so scaling it stretches width far
+  // more than height in absolute pixels (its transform origin is the
+  // center, and the row is much wider than tall) -- that read as
+  // sideways motion instead of a vertical hop, which is the opposite of
+  // what this is supposed to look like.
+  const translateY = bounce.interpolate({ inputRange: [0, 1], outputRange: [0, -12] });
+
+  return (
+    <TouchableOpacity style={styles.modalOption} onPress={handlePress}>
+      <Animated.View style={[styles.modalOptionRow, { transform: [{ translateY }] }]}>
+        <Icon name={tab.icon} size={16} color={active ? colors.accent : colors.text} />
+        <Text style={[styles.modalOptionText, active && styles.modalOptionTextActive]}>
+          {badge ? `${tab.label} · ${badge}` : tab.label}
+        </Text>
+      </Animated.View>
+    </TouchableOpacity>
+  );
+}
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>('single');
@@ -132,10 +242,37 @@ export default function App() {
     return null;
   }
 
+  // Mirrors ui/desktop's Layout.tsx footer toggle -- an explicit
+  // EXPO_PUBLIC_DESKTOP_APP_URL wins if set; otherwise falls back to the
+  // local Vite dev server, but only in a dev build (__DEV__, Expo/RN's
+  // own always-available global -- stripped in a production/release
+  // build the same way Vite's import.meta.env.DEV is, so this default
+  // can't leak into a real deploy even if the env var is forgotten
+  // there).
+  const desktopAppUrl = process.env.EXPO_PUBLIC_DESKTOP_APP_URL || (__DEV__ ? 'http://localhost:5173' : undefined);
+
   return (
     <SafeAreaView style={styles.container} onLayout={onLayout}>
+      {/* Same giant, half-cropped, tilted BrandMark watermark as desktop's
+          Layout.tsx, scaled down for a phone screen -- sized/positioned
+          relative to this SafeAreaView (RN's `absolute` is always
+          relative to the nearest ancestor View, there's no separate
+          `fixed`), so it stays put as a backdrop behind whichever screen
+          is showing rather than living inside any one screen's own
+          ScrollView. pointerEvents="none" so it never intercepts a touch
+          meant for whatever's drawn over it. */}
+      <View
+        pointerEvents="none"
+        style={{ position: 'absolute', right: -140, bottom: -140, opacity: 0.07, transform: [{ rotate: '-22deg' }] }}
+      >
+        <BrandMark size={380} color={colors.text} />
+      </View>
+
       <View style={styles.header}>
-        <Text style={styles.brand}>Meridian</Text>
+        <View style={styles.brandRow}>
+          <BrandMarkOrbit size={20} color={colors.accent} />
+          <Text style={styles.brand}>Meridian</Text>
+        </View>
         <TouchableOpacity
           onPress={() => setMenuOpen((open) => !open)}
           accessibilityRole="button"
@@ -148,26 +285,25 @@ export default function App() {
       <Modal visible={menuOpen} transparent animationType="fade" onRequestClose={() => setMenuOpen(false)}>
         <TouchableOpacity style={styles.modalBackdrop} activeOpacity={1} onPress={() => setMenuOpen(false)}>
           <View style={styles.modalCard}>
-            {TABS.map((tab) => {
-              const active = screen === tab.key;
-              return (
-                <TouchableOpacity
-                  key={tab.key}
-                  style={[styles.modalOption, styles.modalOptionRow]}
-                  onPress={() => {
-                    goToScreen(tab.key);
-                    setMenuOpen(false);
-                  }}
-                >
-                  <Icon name={tab.icon} size={16} color={active ? colors.accent : colors.text} />
-                  <Text style={[styles.modalOptionText, active && styles.modalOptionTextActive]}>
-                    {tab.key === 'roadAlerts' && roadAlertsReplyCount > 0
-                      ? `${tab.label} · ${roadAlertsReplyCount}`
-                      : tab.label}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+            {TABS.map((tab) => (
+              <MenuItem
+                key={tab.key}
+                tab={tab}
+                active={screen === tab.key}
+                badge={tab.key === 'roadAlerts' && roadAlertsReplyCount > 0 ? String(roadAlertsReplyCount) : undefined}
+                onSelect={() => {
+                  goToScreen(tab.key);
+                  setMenuOpen(false);
+                }}
+              />
+            ))}
+            {desktopAppUrl && (
+              <TouchableOpacity style={styles.modalOption} onPress={() => Linking.openURL(desktopAppUrl)}>
+                <View style={styles.modalOptionRow}>
+                  <Text style={styles.modalOptionText}>💻 Switch to browser app</Text>
+                </View>
+              </TouchableOpacity>
+            )}
           </View>
         </TouchableOpacity>
       </Modal>
@@ -216,6 +352,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: space[4],
     borderBottomWidth: 1,
     borderBottomColor: colors.divider,
+  },
+  brandRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[1],
   },
   brand: {
     fontFamily: 'CormorantGaramond_600SemiBold',

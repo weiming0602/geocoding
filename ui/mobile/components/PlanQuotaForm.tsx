@@ -4,6 +4,7 @@ import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
 import { getQuota } from '../../shared/api/client';
 import type { QuotaStatus } from '../../shared/api/types';
 import { colors, radius, space } from '../../shared/theme';
+import { Icon } from './icons';
 import ThemedButton from './ThemedButton';
 
 // There's no signup/login/session anywhere in this app -- quota is looked
@@ -43,7 +44,10 @@ export default function PlanQuotaForm() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Plan &amp; quota</Text>
+      <View style={styles.titleRow}>
+        <Icon name="planQuota" size={24} color={colors.accent} />
+        <Text style={styles.title}>Plan &amp; quota</Text>
+      </View>
       <Text style={styles.subtitle}>Usage resets on the 1st of each calendar month.</Text>
 
       <Text style={styles.label}>Account email</Text>
@@ -90,11 +94,16 @@ const styles = StyleSheet.create({
     width: '100%',
     padding: space[4],
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[2],
+    marginBottom: 4,
+  },
   title: {
     fontFamily: 'CormorantGaramond_600SemiBold',
     fontSize: 30,
     color: colors.text,
-    marginBottom: 4,
   },
   subtitle: {
     fontFamily: 'Lora_400Regular',

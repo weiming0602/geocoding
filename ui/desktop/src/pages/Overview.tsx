@@ -91,6 +91,39 @@ export default function Overview() {
       </div>
 
       <div
+        className="card elev-sm"
+        style={{
+          background: 'var(--color-accent-100)',
+          border: '1px solid var(--color-accent-300)',
+          marginBottom: 'var(--space-8)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 'var(--space-4)',
+        }}
+      >
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }}>
+          <span className="task-icon-tile" style={{ width: 48, height: 48, flexShrink: 0 }}>
+            <Icon name="roadAlerts" size={26} />
+          </span>
+          <div>
+            <span className="tag tag-accent" style={{ marginBottom: 4 }}>
+              New
+            </span>
+            <h2 style={{ margin: '4px 0 4px' }}>Road Alerts: live hazards, spoken as you drive</h2>
+            <p className="card-body" style={{ margin: 0 }}>
+              Real-time traffic hazards near you, sourced from New England 511 -- with alternate
+              routes and one-tap Google Maps navigation. Free while it's in testing.
+            </p>
+          </div>
+        </div>
+        <Link className="btn btn-primary" to="/road-alerts" style={{ flexShrink: 0 }}>
+          Try Road Alerts
+        </Link>
+      </div>
+
+      <div
         style={{
           display: 'grid',
           gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',

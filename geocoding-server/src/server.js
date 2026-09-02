@@ -15,7 +15,7 @@ const { resultsToCsv } = require('./resultsCsv');
 const { buildZip } = require('./zip');
 const { reverseGeocode } = require('./reverseGeocode');
 const { searchPlaces } = require('./placesSearch');
-const { getRoadSignals } = require('./roadSignals');
+const { getRoadSignals, filterByBbox, sortByFreshness } = require('./roadSignals');
 const { findNextCrossStreet } = require('./nextCrossStreet');
 const { getRoadReroute } = require('./roadReroute');
 const {
@@ -45,6 +45,12 @@ const {
   getTestWeightedPoints,
   clearTestWeightedPoints,
 } = require('./testWeightedPoints');
+const {
+  ensureTestRoadSignalsTable,
+  addTestRoadSignal,
+  getTestRoadSignals,
+  clearTestRoadSignals,
+} = require('./testRoadSignals');
 const { openUsersDb, getUser, ensureCurrentPeriod, addToTier } = require('./users');
 const { ensureFeedbackTable, submitFeedback } = require('./feedback');
 const { checkQuota, useQuota } = require('./quota');
@@ -104,6 +110,15 @@ function allowsTestWeightedPoints() {
   return process.env.ALLOW_TEST_WEIGHTED_POINTS === 'true';
 }
 
+// Gates the /road-alerts/test/signals routes and their merge into
+// GET /road-signals (see testRoadSignals.js) -- off by default, same
+// read-at-request-time spirit as the two gates just above. Never enable
+// this anywhere a real driver could mistake a fake, developer-seeded
+// hazard for an actual live one.
+function allowsTestRoadSignals() {
+  return process.env.ALLOW_TEST_ROAD_SIGNALS === 'true';
+}
+
 // A client with no server-reachable filesystem path (e.g. a phone) sends the
 // picked file's contents directly instead; fileContent takes priority when
 // both are present since the client only sets one or the other.
@@ -123,6 +138,7 @@ const usersDbPromise = openUsersDb(USERS_DSN).then(async (pool) => {
   await ensureRoadAlertsTopicsTable(pool);
   await ensureRoadAlertsStatementsTable(pool);
   await ensureTestWeightedPointsTable(pool);
+  await ensureTestRoadSignalsTable(pool);
   return pool;
 });
 
@@ -856,11 +872,43 @@ app.get('/road-signals', async (req, res) => {
     const usersDb = await usersDbPromise;
     await checkRoadAlertsAccess(usersDb, email, serviceKey);
 
-    const result = await getRoadSignals({
-      latitude: latitude !== undefined ? Number(latitude) : undefined,
-      longitude: longitude !== undefined ? Number(longitude) : undefined,
-      radiusMeters: radiusMeters !== undefined ? Number(radiusMeters) : 8000,
-    });
+    const parsedLatitude = latitude !== undefined ? Number(latitude) : undefined;
+    const parsedLongitude = longitude !== undefined ? Number(longitude) : undefined;
+    const parsedRadiusMeters = radiusMeters !== undefined ? Number(radiusMeters) : 8000;
+
+    // Test-only fake hazards (see testRoadSignals.js) merged in alongside
+    // the real live ones -- off by default (allowsTestRoadSignals()).
+    // Caught separately from the real fetch below: if 511 itself is down,
+    // a developer testing against their own seeded hazard shouldn't also
+    // lose that because of an unrelated upstream outage.
+    let testSignals = [];
+    if (allowsTestRoadSignals()) {
+      try {
+        const allTestSignals = await getTestRoadSignals(usersDb, email);
+        testSignals =
+          parsedLatitude !== undefined && parsedLongitude !== undefined
+            ? filterByBbox(allTestSignals, parsedLatitude, parsedLongitude, parsedRadiusMeters)
+            : allTestSignals;
+      } catch (err) {
+        console.error('Failed to load test road signals:', err);
+      }
+    }
+
+    let result;
+    try {
+      result = await getRoadSignals({
+        latitude: parsedLatitude,
+        longitude: parsedLongitude,
+        radiusMeters: parsedRadiusMeters,
+      });
+    } catch (err) {
+      if (testSignals.length === 0) throw err;
+      result = { signals: [], networks: [], partial: true, failedNetworks: [], generatedAt: new Date().toISOString() };
+    }
+
+    if (testSignals.length > 0) {
+      result = { ...result, signals: sortByFreshness([...result.signals, ...testSignals]) };
+    }
 
     res.json(result);
   } catch (err) {
@@ -1104,6 +1152,102 @@ app.delete('/road-alerts/test/weighted-points', async (req, res) => {
   }
 });
 
+// Test-only fake hazards (see testRoadSignals.js) -- off by default
+// (allowsTestRoadSignals(), checked first so a disabled deployment never
+// even touches the database for these). Gated by the same registered-
+// account check as /road-signals otherwise. Unlike a real 511 incident,
+// a row here never expires on its own -- lets a developer keep testing
+// the map/comments/reroute UI against a stable hazard for as long as
+// they want, across as many days as they want, without depending on a
+// real hazard staying live (or staying in range) that whole time.
+app.post('/road-alerts/test/signals', async (req, res) => {
+  if (!allowsTestRoadSignals()) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  const { email, serviceKey, latitude, longitude, roadway, description, severity } = req.body || {};
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const row = await addTestRoadSignal(usersDb, email, {
+      latitude: typeof latitude === 'number' ? latitude : Number(latitude),
+      longitude: typeof longitude === 'number' ? longitude : Number(longitude),
+      roadway: typeof roadway === 'string' ? roadway : null,
+      description: typeof description === 'string' ? description : null,
+      severity: typeof severity === 'string' ? severity : undefined,
+    });
+
+    res.json(row);
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+app.get('/road-alerts/test/signals', async (req, res) => {
+  if (!allowsTestRoadSignals()) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  const { email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const signals = await getTestRoadSignals(usersDb, email);
+    res.json({ signals });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+app.delete('/road-alerts/test/signals', async (req, res) => {
+  if (!allowsTestRoadSignals()) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  const { email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const deleted = await clearTestRoadSignals(usersDb, email);
+    res.json({ deleted });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
 if (require.main === module) {
   app.listen(PORT, () => {
     console.log(`geocoding-server listening on http://localhost:${PORT}`);
@@ -1120,6 +1264,13 @@ if (require.main === module) {
         '⚠ ALLOW_TEST_WEIGHTED_POINTS is set -- /road-alerts/test/weighted-points is ' +
           'live. These are fake, developer-seeded routine points for testing only, ' +
           'never a real per-user routine store.'
+      );
+    }
+    if (allowsTestRoadSignals()) {
+      console.warn(
+        '⚠ ALLOW_TEST_ROAD_SIGNALS is set -- /road-alerts/test/signals is live and ' +
+          'GET /road-signals will merge in fake, developer-seeded hazards. These never ' +
+          'expire on their own -- never enable this where a real driver could see one.'
       );
     }
   });

@@ -1,4 +1,4 @@
-import { MILESTONES } from '../../../shared/milestones';
+import { MILESTONES_NEWEST_FIRST } from '../../../shared/milestones';
 import PageHeader from '../components/PageHeader';
 
 export default function Progress() {
@@ -10,7 +10,7 @@ export default function Progress() {
       </p>
 
       <div>
-        {MILESTONES.map((milestone, i) => (
+        {MILESTONES_NEWEST_FIRST.map((milestone, i) => (
           <div key={milestone.title} style={{ display: 'flex', gap: 'var(--space-4)' }}>
             <div
               style={{
@@ -30,7 +30,7 @@ export default function Progress() {
                   border: milestone.current ? '2px solid var(--color-accent)' : 'none',
                 }}
               />
-              {i < MILESTONES.length - 1 && (
+              {i < MILESTONES_NEWEST_FIRST.length - 1 && (
                 <div style={{ width: 1, flex: 1, background: 'var(--color-divider)', marginTop: 4 }} />
               )}
             </div>

@@ -78,6 +78,46 @@ function mapSeverity({ raw511Severity, raw511EventType, description }) {
   return 'need_to_know';
 }
 
+// The full set HAZARD_CATEGORY_ICONS (ui/shared/hazardCategories.ts) has
+// an icon for -- kept here, not derived from that file, since this module
+// has no business depending on a UI-layer file; the two are kept in sync
+// by hand, same as ui/shared/api/types.ts already mirrors this server's
+// response shapes by hand elsewhere in the codebase.
+const HAZARD_CATEGORIES = [
+  'hazmat',
+  'accident',
+  'construction',
+  'closure',
+  'congestion',
+  'obstruction',
+  'weather',
+  'other',
+];
+
+/**
+ * Same keyword-matching approach as mapSeverity just above, over the same
+ * `eventType`/`description` text -- 511 has no separate structured
+ * "hazard type" field at all (confirmed by live sampling across all 3
+ * networks, same as every other `raw511*`-prefixed field this module
+ * reads), so free-text keywords are the only signal available. Checked
+ * most-specific/most-dangerous first (a "chemical spill during a road
+ * closure" should read as hazmat, not just a closure) down to the
+ * generic fallback `other`, which is deliberately NOT the same bucket as
+ * a real category guess -- better to show a plain warning icon than a
+ * wrong specific one.
+ */
+function categorizeHazard({ raw511EventType, description }) {
+  const text = `${raw511EventType || ''} ${description || ''}`.toLowerCase();
+  if (/hazmat|hazardous material|chemical|fuel spill|gas leak|toxic/.test(text)) return 'hazmat';
+  if (/accident|crash|collision/.test(text)) return 'accident';
+  if (/construction|road work|roadwork|repav|paving|maintenance/.test(text)) return 'construction';
+  if (/closed|closure/.test(text)) return 'closure';
+  if (/congestion|heavy traffic|backup/.test(text)) return 'congestion';
+  if (/disabled vehicle|debris|stall|obstruction/.test(text)) return 'obstruction';
+  if (/flood|icy|ice|snow|weather|fog/.test(text)) return 'weather';
+  return 'other';
+}
+
 /**
  * 511 has no separate short/long description field -- synthesizes the
  * brief/average/deep tiers the mobile app's detail-level setting reads
@@ -182,6 +222,7 @@ function normalizeIncident(raw, network) {
   };
 
   normalized.severity = mapSeverity(normalized);
+  normalized.hazardCategory = categorizeHazard(normalized);
   normalized.speech = buildSpeech(normalized);
 
   return normalized;
@@ -201,6 +242,28 @@ function boundingBoxDegrees(latitude, longitude, radiusMeters) {
     minLon: longitude - lonDelta,
     maxLon: longitude + lonDelta,
   };
+}
+
+/**
+ * Most-recently-updated first, so a driver re-opening the list sees what's
+ * newest at a glance rather than whatever order 511 happened to return
+ * (observed to be roughly network-grouping, not chronological). Falls
+ * back to `createdAt` when `lastUpdatedAt` is missing (511 doesn't always
+ * carry the latter -- see normalizeIncident's `createdAt` comment) --
+ * `lastUpdatedAt` is still preferred when both exist, since it reflects
+ * how current the information actually is, not just when the incident
+ * was first reported. An incident with neither timestamp sorts last
+ * (treated as oldest/least certain), not first.
+ */
+function freshnessTimestamp(incident) {
+  const raw = incident.lastUpdatedAt || incident.createdAt;
+  if (!raw) return -Infinity;
+  const ms = Date.parse(raw);
+  return Number.isNaN(ms) ? -Infinity : ms;
+}
+
+function sortByFreshness(incidents) {
+  return [...incidents].sort((a, b) => freshnessTimestamp(b) - freshnessTimestamp(a));
 }
 
 function filterByBbox(incidents, latitude, longitude, radiusMeters) {
@@ -285,7 +348,7 @@ async function getRoadSignals({ latitude, longitude, radiusMeters }) {
   }
 
   return {
-    signals: filterByBbox(incidents, latitude, longitude, radiusMeters),
+    signals: sortByFreshness(filterByBbox(incidents, latitude, longitude, radiusMeters)),
     networks: NE511_NETWORKS,
     partial: failedNetworks.length > 0,
     failedNetworks,
@@ -300,10 +363,13 @@ module.exports = {
   extractIncidents,
   normalizeIncident,
   mapSeverity,
+  categorizeHazard,
+  HAZARD_CATEGORIES,
   buildSpeech,
   formatLaneDetail,
   formatWeightRestriction,
   boundingBoxDegrees,
   filterByBbox,
+  sortByFreshness,
   MAX_RADIUS_METERS,
 };

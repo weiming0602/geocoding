@@ -1,37 +1,35 @@
 /// <reference types="geojson" />
 import { GeoJSONSource, LngLatBounds, Map as MapLibreMap, Marker, NavigationControl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import { View } from 'react-native';
 
-import { attachHoverLabel } from '../map/mapHoverLabel';
-import { OSM_RASTER_STYLE } from '../map/osmStyle';
+import type { RerouteOption } from '../../shared/api/types';
+import { attachHoverLabel } from './mapHoverLabel';
+import { OSM_RASTER_STYLE } from './osmStyle';
 
 type Point = { latitude: number; longitude: number };
-
-export type RerouteOption = {
-  geometry: { type: 'LineString'; coordinates: [number, number][] };
-  distanceMeters: number | null;
-  durationSeconds: number | null;
-};
 
 type Props = {
   driverPosition: Point;
   hazardPosition: Point;
-  rejoinPoint: Point;
-  options: RerouteOption[];
+  rejoinPoint?: Point;
+  options?: RerouteOption[];
   // Which option (index into `options`) to visually call out -- e.g. the
-  // one the driver is currently hovering in the option list below the
-  // map. null/undefined draws every route the same as always.
+  // one the driver just tapped in the option list below the map (there's
+  // no hover on a touchscreen, so this is tap-driven here rather than the
+  // hover-driven desktop equivalent). null/undefined draws every route
+  // the same as always.
   highlightedIndex?: number | null;
 };
 
-const SOURCE_ID = 'road-reroute-routes';
-const LAYER_ID = 'road-reroute-routes-lines';
-const HIGHLIGHT_LAYER_ID = 'road-reroute-routes-highlight';
-// One per ROUTE_OPTION_COUNT (roadReroute.js) -- was missing a 3rd color
-// until now, so a genuine 3rd option silently fell through to this
-// layer's own "no match" default (the same gray as the rejoin marker),
-// which is likely a real part of why 3 options could look like fewer.
+const SOURCE_ID = 'road-alerts-routes';
+const LAYER_ID = 'road-alerts-routes-lines';
+const HIGHLIGHT_LAYER_ID = 'road-alerts-routes-highlight';
+// Same route colors as desktop's RoadRerouteMap.tsx -- expo-maps' native
+// side (RoadAlertsMap.tsx, the non-.web version of this component) uses
+// the same pair, so all three surfaces (desktop, mobile native, mobile
+// web) read as one product.
 export const ROUTE_COLORS = ['#1e3a8a', '#f2a52d', '#7c3aed'];
 
 type RouteFeatureCollection = GeoJSON.FeatureCollection<GeoJSON.LineString, { routeIndex: number }>;
@@ -55,25 +53,24 @@ function toGeoJSON(options: RerouteOption[]): RouteFeatureCollection {
   };
 }
 
-// GeoJSON line layer for the route paths (new API surface for this app --
-// see BatchMapView.tsx for the proven source/setData/fitBounds skeleton
-// this otherwise follows) + plain DOM Markers for the three fixed points
-// (driver/hazard/rejoin), same as MapView.tsx's single-marker approach --
-// there are only ever 3 of them, so no need for BatchMapView's
-// WebGL-circle-layer scaling trick.
-export default function RoadRerouteMap({
+// Ported from desktop's RoadRerouteMap.tsx (same maplibre-gl + OSM raster
+// style, same source/layer/marker approach) rather than shared outright --
+// ui/shared deliberately excludes anything with maplibre-gl types (see
+// ui/shared's own README note), so map integration stays duplicated
+// per-app on purpose.
+export default function RoadAlertsMap({
   driverPosition,
   hazardPosition,
   rejoinPoint,
-  options,
+  options = [],
   highlightedIndex = null,
 }: Props) {
-  const containerRef = useRef<HTMLDivElement>(null);
+  const containerRef = useRef<View>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const [ready, setReady] = useState(false);
 
   useEffect(() => {
-    const container = containerRef.current;
+    const container = containerRef.current as unknown as HTMLElement | null;
     if (!container) return;
 
     const map = new MapLibreMap({
@@ -83,6 +80,7 @@ export default function RoadRerouteMap({
       zoom: 13,
     });
     map.addControl(new NavigationControl(), 'top-right');
+    map.on('error', (e) => console.error('RoadAlertsMap: map error', e.error));
     mapRef.current = map;
 
     map.on('load', () => {
@@ -107,13 +105,10 @@ export default function RoadRerouteMap({
           ],
         },
       });
-      // A second layer over the same source, filtered (via setFilter, in
-      // the effect below) to just the hovered option's feature and drawn
-      // wider -- guarantees the hovered route reads as "on top" even
-      // where two options fully coincide, since draw order otherwise
-      // follows the source's fixed feature order (see toGeoJSON's own
-      // comment), not hover state. Filtered to match nothing until a
-      // driver actually hovers an option.
+      // Same "highlight overlay" pattern as desktop's RoadRerouteMap.tsx --
+      // a second layer over the same source, filtered to just the tapped
+      // option and drawn wider, so it reads as "on top" regardless of the
+      // source's fixed feature draw order.
       map.addLayer({
         id: HIGHLIGHT_LAYER_ID,
         type: 'line',
@@ -158,23 +153,23 @@ export default function RoadRerouteMap({
     const driverMarker = new Marker({ color: '#2fd1ac' })
       .setLngLat([driverPosition.longitude, driverPosition.latitude])
       .addTo(map);
-    attachHoverLabel(driverMarker, map, 'Your position');
+    attachHoverLabel(driverMarker, map, 'You');
 
     const hazardMarker = new Marker({ color: '#f2543f' })
       .setLngLat([hazardPosition.longitude, hazardPosition.latitude])
       .addTo(map);
     attachHoverLabel(hazardMarker, map, 'Hazard');
 
-    const rejoinMarker = new Marker({ color: '#9b9797' })
-      .setLngLat([rejoinPoint.longitude, rejoinPoint.latitude])
-      .addTo(map);
-    attachHoverLabel(rejoinMarker, map, 'Estimated rejoin point (not exact)');
+    const rejoinMarker = rejoinPoint
+      ? new Marker({ color: '#9b9797' }).setLngLat([rejoinPoint.longitude, rejoinPoint.latitude]).addTo(map)
+      : null;
+    if (rejoinMarker) attachHoverLabel(rejoinMarker, map, 'Estimated rejoin point (not exact)');
 
     const routePoints: [number, number][] = options.flatMap((option) => option.geometry.coordinates);
     const allPoints: [number, number][] = [
       [driverPosition.longitude, driverPosition.latitude],
       [hazardPosition.longitude, hazardPosition.latitude],
-      [rejoinPoint.longitude, rejoinPoint.latitude],
+      ...(rejoinPoint ? [[rejoinPoint.longitude, rejoinPoint.latitude] as [number, number]] : []),
       ...routePoints,
     ];
     const bounds = allPoints.reduce(
@@ -186,7 +181,7 @@ export default function RoadRerouteMap({
     return () => {
       driverMarker.remove();
       hazardMarker.remove();
-      rejoinMarker.remove();
+      rejoinMarker?.remove();
     };
   }, [ready, driverPosition, hazardPosition, rejoinPoint, options]);
 
@@ -199,8 +194,6 @@ export default function RoadRerouteMap({
       map.setPaintProperty(LAYER_ID, 'line-opacity', 1);
     } else {
       map.setFilter(HIGHLIGHT_LAYER_ID, ['==', ['get', 'routeIndex'], highlightedIndex]);
-      // Other options fade back (not hidden) so the driver can still see
-      // there's more than one path, just not which one is "live" right now.
       map.setPaintProperty(LAYER_ID, 'line-opacity', [
         'case',
         ['==', ['get', 'routeIndex'], highlightedIndex],
@@ -210,15 +203,5 @@ export default function RoadRerouteMap({
     }
   }, [ready, highlightedIndex]);
 
-  return (
-    <div
-      ref={containerRef}
-      style={{
-        height: 360,
-        borderRadius: 'var(--radius-md)',
-        border: '1px solid var(--color-divider)',
-        overflow: 'hidden',
-      }}
-    />
-  );
+  return <View ref={containerRef} style={{ height: 260, borderRadius: 12, overflow: 'hidden', marginTop: 8 }} />;
 }

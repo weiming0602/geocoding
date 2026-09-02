@@ -27,7 +27,7 @@ const MAX_NODE_SNAP_DISTANCE_METERS = 300;
 // How many distinct route options to ask pgr_ksp for -- the "couple of
 // choices" this feature exists to offer, same target_count ORS was
 // asked for previously.
-const ROUTE_OPTION_COUNT = 2;
+const ROUTE_OPTION_COUNT = 3;
 
 /**
  * Bearing from (lat1,lon1) to (lat2,lon2), in degrees [0, 360) clockwise

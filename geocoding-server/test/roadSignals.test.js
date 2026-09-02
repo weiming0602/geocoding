@@ -7,10 +7,12 @@ const {
   extractIncidents,
   normalizeIncident,
   mapSeverity,
+  categorizeHazard,
   buildSpeech,
   formatLaneDetail,
   formatWeightRestriction,
   filterByBbox,
+  sortByFreshness,
 } = require('../src/roadSignals');
 
 function incidentXml(inner) {
@@ -170,6 +172,48 @@ test('mapSeverity conservatively defaults unmatched text to need_to_know, not fu
   );
 });
 
+test('categorizeHazard recognizes a chemical/hazmat incident even when it also mentions a closure', () => {
+  assert.equal(
+    categorizeHazard({ raw511EventType: 'Other', description: 'Road closed due to a chemical spill' }),
+    'hazmat'
+  );
+});
+
+test('categorizeHazard recognizes an accident/crash', () => {
+  assert.equal(categorizeHazard({ raw511EventType: 'Other', description: 'lane reduced due to a crash' }), 'accident');
+  assert.equal(categorizeHazard({ raw511EventType: 'Accident', description: '' }), 'accident');
+});
+
+test('categorizeHazard recognizes construction/road work', () => {
+  assert.equal(
+    categorizeHazard({ raw511EventType: 'Other', description: 'reduced to one lane due to road maintenance' }),
+    'construction'
+  );
+});
+
+test('categorizeHazard recognizes a closure', () => {
+  assert.equal(categorizeHazard({ raw511EventType: 'Other', description: 'Bridge closed until further notice' }), 'closure');
+});
+
+test('categorizeHazard recognizes congestion', () => {
+  assert.equal(
+    categorizeHazard({ raw511EventType: 'AbnormalCongestion', description: 'heavy traffic expect delays' }),
+    'congestion'
+  );
+});
+
+test('categorizeHazard recognizes an obstruction (disabled vehicle/debris)', () => {
+  assert.equal(categorizeHazard({ raw511EventType: 'Other', description: 'disabled vehicle on shoulder' }), 'obstruction');
+});
+
+test('categorizeHazard recognizes weather', () => {
+  assert.equal(categorizeHazard({ raw511EventType: 'Other', description: 'road icy, use caution' }), 'weather');
+});
+
+test('categorizeHazard falls back to other when nothing matches', () => {
+  assert.equal(categorizeHazard({ raw511EventType: 'Something Else', description: '' }), 'other');
+});
+
 test('buildSpeech produces non-empty brief/average/deep, with deep at least as long as brief', () => {
   const normalized = {
     roadway: 'Stillwater Avenue',
@@ -234,4 +278,31 @@ test('filterByBbox includes an incident inside the radius and excludes one clear
 test('filterByBbox excludes incidents with missing coordinates', () => {
   const noCoords = { latitude: null, longitude: null };
   assert.deepEqual(filterByBbox([noCoords], 43.66, -70.26, 5000), []);
+});
+
+test('sortByFreshness orders by lastUpdatedAt descending, most recent first', () => {
+  const oldest = { id: 'a', lastUpdatedAt: '2026-08-01T00:00:00Z' };
+  const newest = { id: 'b', lastUpdatedAt: '2026-08-20T00:00:00Z' };
+  const middle = { id: 'c', lastUpdatedAt: '2026-08-10T00:00:00Z' };
+  assert.deepEqual(sortByFreshness([oldest, newest, middle]), [newest, middle, oldest]);
+});
+
+test('sortByFreshness falls back to createdAt when lastUpdatedAt is missing', () => {
+  const withUpdate = { id: 'a', lastUpdatedAt: '2026-08-05T00:00:00Z', createdAt: '2026-08-01T00:00:00Z' };
+  const createdOnly = { id: 'b', lastUpdatedAt: null, createdAt: '2026-08-20T00:00:00Z' };
+  assert.deepEqual(sortByFreshness([withUpdate, createdOnly]), [createdOnly, withUpdate]);
+});
+
+test('sortByFreshness sorts an incident with neither timestamp to the end', () => {
+  const timestamped = { id: 'a', lastUpdatedAt: '2026-08-01T00:00:00Z' };
+  const untimestamped = { id: 'b', lastUpdatedAt: null, createdAt: null };
+  assert.deepEqual(sortByFreshness([untimestamped, timestamped]), [timestamped, untimestamped]);
+});
+
+test('sortByFreshness does not mutate its input array', () => {
+  const oldest = { id: 'a', lastUpdatedAt: '2026-08-01T00:00:00Z' };
+  const newest = { id: 'b', lastUpdatedAt: '2026-08-20T00:00:00Z' };
+  const original = [oldest, newest];
+  sortByFreshness(original);
+  assert.deepEqual(original, [oldest, newest]);
 });

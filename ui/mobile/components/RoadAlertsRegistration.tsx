@@ -3,6 +3,7 @@ import { StyleSheet, Text, TextInput, View } from 'react-native';
 
 import { registerRoadAlerts } from '../../shared/api/client';
 import { colors, radius, space } from '../../shared/theme';
+import { Icon } from './icons';
 import ThemedButton from './ThemedButton';
 import { setStoredAccount, type StoredRoadAlertsAccount } from './roadAlertsStorage';
 
@@ -40,7 +41,10 @@ export default function RoadAlertsRegistration({ onRegistered, reason }: Props) 
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Road alerts -- register to get started</Text>
+      <View style={styles.titleRow}>
+        <Icon name="roadAlerts" size={20} color={colors.accent} />
+        <Text style={styles.title}>Road alerts -- register to get started</Text>
+      </View>
       <Text style={styles.subtitle}>Free while we're testing this feature -- no payment required.</Text>
 
       {reason && (
@@ -84,11 +88,17 @@ const styles = StyleSheet.create({
     width: '100%',
     padding: space[4],
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: space[2],
+    marginBottom: 4,
+  },
   title: {
+    flex: 1,
     fontFamily: 'CormorantGaramond_600SemiBold',
     fontSize: 26,
     color: colors.text,
-    marginBottom: 4,
   },
   subtitle: {
     fontFamily: 'Lora_400Regular',

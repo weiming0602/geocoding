@@ -143,6 +143,18 @@ export type PlaceSearchResponse = {
 // traffic_hazard only, no weather/public_event types yet.
 export type RoadSignalSeverity = 'serious' | 'need_to_know' | 'proximity' | 'fun_to_know';
 
+// Mirrors HAZARD_CATEGORIES (roadSignals.js) by hand, same as this whole
+// file mirrors the server's response shapes -- keep in sync manually.
+export type HazardCategory =
+  | 'hazmat'
+  | 'accident'
+  | 'construction'
+  | 'closure'
+  | 'congestion'
+  | 'obstruction'
+  | 'weather'
+  | 'other';
+
 export type RoadSignal = {
   id: string;
   type: 'traffic_hazard';
@@ -167,6 +179,7 @@ export type RoadSignal = {
   raw511Severity: string | null;
   raw511EventType: string | null;
   severity: RoadSignalSeverity;
+  hazardCategory: HazardCategory;
   speech: { brief: string; average: string; deep: string };
 };
 

@@ -141,3 +141,44 @@ export function BrandMark({ size = 28 }: { size?: number }) {
     </svg>
   );
 }
+
+// A tilted "AI" badge over BrandMark's globe -- used only at the one place
+// the logo is actually looked at directly (the nav header; see Layout.tsx's
+// nav-brand), not the footer BrandMark or the giant background watermark,
+// where any flourish would be pointless/noisy. BrandMark itself stays
+// untouched and static (it's also rendered at those quieter sizes) -- this
+// wraps it rather than baking the badge into the glyph.
+// Static (no animation loop): "AI" leaned over at an angle with three
+// trailing speed lines, the classic cartoon shorthand for "running/moving
+// fast" (manga speed lines behind a dashing character). AI_BADGE_COLOR is a
+// vivid magenta-red deliberately unlike anything else in the palette
+// (golden accent, teal accent-2, violet route color) so it reads
+// immediately against the globe instead of blending in.
+const AI_BADGE_COLOR = '#ff2e6e';
+export function BrandMarkOrbit({ size = 28 }: { size?: number }) {
+  return (
+    <span className="brand-orbit" style={{ width: size, height: size }}>
+      <BrandMark size={size} />
+      <svg className="brand-orbit__trail" viewBox="0 0 32 32" aria-hidden="true">
+        <g transform="rotate(-14 16 16)">
+          <line x1={3} y1={10} x2={9} y2={13} stroke={AI_BADGE_COLOR} strokeWidth={1.8} strokeLinecap="round" opacity={0.85} />
+          <line x1={1} y1={15} x2={8} y2={17} stroke={AI_BADGE_COLOR} strokeWidth={1.5} strokeLinecap="round" opacity={0.55} />
+          <line x1={2} y1={21} x2={8} y2={21} stroke={AI_BADGE_COLOR} strokeWidth={1.2} strokeLinecap="round" opacity={0.3} />
+          <text
+            x={16}
+            y={20.5}
+            textAnchor="middle"
+            fontSize={13}
+            fontWeight={800}
+            fill={AI_BADGE_COLOR}
+            stroke="#fff8ea"
+            strokeWidth={0.6}
+            style={{ fontFamily: 'var(--font-heading)' }}
+          >
+            AI
+          </text>
+        </g>
+      </svg>
+    </span>
+  );
+}

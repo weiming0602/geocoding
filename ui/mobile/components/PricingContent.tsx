@@ -4,6 +4,7 @@ import { StyleSheet, Text, View } from 'react-native';
 import { PRICING_TIERS, formatUsd, perAddressRate } from '../../shared/pricing';
 import { colors, radius, space } from '../../shared/theme';
 import CheckoutSection from './CheckoutSection';
+import { Icon } from './icons';
 import ThemedButton from './ThemedButton';
 
 export default function PricingContent() {
@@ -15,7 +16,10 @@ export default function PricingContent() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Bulk geocoding pricing</Text>
+      <View style={styles.titleRow}>
+        <Icon name="pricing" size={20} color={colors.accent} />
+        <Text style={styles.title}>Bulk geocoding pricing</Text>
+      </View>
       <Text style={styles.subtitle}>
         One-time packs of additional monthly quota for Batch geocoding. Single-address Geocode and
         Reverse geocode always stay free.
@@ -48,11 +52,16 @@ const styles = StyleSheet.create({
     width: '100%',
     padding: space[4],
   },
+  titleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space[2],
+    marginBottom: 4,
+  },
   title: {
     fontFamily: 'CormorantGaramond_600SemiBold',
     fontSize: 26,
     color: colors.text,
-    marginBottom: 4,
   },
   subtitle: {
     fontFamily: 'Lora_400Regular',
