@@ -22,3 +22,9 @@
 # opted-in Road Alerts account a digest of alerts they explicitly saved
 # since the last digest. Runs daily at 7am.
 0 7 * * * cd /home/my_ai/projects/geocoding/geocoding-server && node scripts/road-alerts-digest.js >> /home/my_ai/projects/geocoding/geocoding-server/road-alerts-digest.log 2>&1
+
+# Alternative to geocoding-weighted-points-cleanup.timer -- deletes Road
+# Alerts weighted points not pinged in 180 days (a route someone stopped
+# driving). Runs weekly (Sunday 5am); adjust the "180" argument to
+# change the retention window.
+0 5 * * 0 cd /home/my_ai/projects/geocoding/geocoding-server && node scripts/cleanup-weighted-points.js 180 >> /home/my_ai/projects/geocoding/geocoding-server/weighted-points-cleanup.log 2>&1

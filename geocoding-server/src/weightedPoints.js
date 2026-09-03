@@ -12,7 +12,21 @@ const PING_INCREMENT = 1;
 // pinged, applied at read time (see getWeightedPoints) -- so a route
 // someone stopped driving fades out of consideration on its own,
 // without needing a background job to actively rewrite stored weights.
+// This governs a point's *ongoing* relevance once it's already
+// qualified (below) -- it's a separate mechanism from the qualifying
+// window, not a replacement for it.
 const DAILY_DECAY = 0.98;
+// A brand-new point only counts as a real weighted point once it's been
+// pinged this many times within a rolling window this many days wide --
+// "the middle of nowhere, but iterated often" means iterated *recently
+// and repeatedly*, not just twice, ever. A point that hasn't cleared
+// this bar yet is never returned by getWeightedPoints, so it can't
+// trigger an alert or be mistaken for a routine route -- matching the
+// original design's "only segments whose weight crosses a threshold are
+// persisted at all" intent, just enforced at serving time rather than
+// by withholding the row.
+const QUALIFYING_WINDOW_DAYS = 7;
+const MIN_PINGS_TO_QUALIFY = 3;
 
 const CREATE_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS road_alerts_weighted_points (
@@ -22,6 +36,9 @@ CREATE TABLE IF NOT EXISTS road_alerts_weighted_points (
   longitude DOUBLE PRECISION NOT NULL,
   weight DOUBLE PRECISION NOT NULL DEFAULT 0,
   tlid TEXT,
+  window_started_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  window_ping_count INTEGER NOT NULL DEFAULT 1,
+  qualified_at TIMESTAMPTZ,
   last_pinged_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -51,9 +68,10 @@ async function ensureWeightedPointsTable(pool) {
  * its own monitoring session) is what knows which pings are endpoints;
  * this function just enforces the exclusion once told.
  *
- * Existing points decay in weight over time (see DAILY_DECAY, applied
- * in getWeightedPoints) rather than accumulating forever, so a route
- * someone used to drive but stopped naturally fades from consideration.
+ * Every point (qualified or not) still gets a row and still accrues
+ * weight/pings from the first ping onward -- qualification (see
+ * QUALIFYING_WINDOW_DAYS/MIN_PINGS_TO_QUALIFY above) only gates whether
+ * getWeightedPoints will ever *return* it, not whether it's tracked.
  */
 async function recordWeightedPointPing(pool, email, { latitude, longitude, tlid, isEndpoint }) {
   if (typeof latitude !== 'number' || Number.isNaN(latitude)) {
@@ -67,7 +85,7 @@ async function recordWeightedPointPing(pool, email, { latitude, longitude, tlid,
   }
 
   const { rows: existing } = await pool.query(
-    `SELECT id, latitude, longitude, weight, last_pinged_at
+    `SELECT id, latitude, longitude, weight, window_started_at, window_ping_count, qualified_at, last_pinged_at
      FROM road_alerts_weighted_points WHERE email = $1`,
     [email]
   );
@@ -83,13 +101,27 @@ async function recordWeightedPointPing(pool, email, { latitude, longitude, tlid,
   }
 
   if (nearest && nearestDistance <= MATCH_RADIUS_METERS) {
-    const daysSinceLastPing = (Date.now() - new Date(nearest.last_pinged_at).getTime()) / 86400000;
+    const now = new Date();
+    const windowAgeDays = (now.getTime() - new Date(nearest.window_started_at).getTime()) / 86400000;
+    // A window older than QUALIFYING_WINDOW_DAYS has expired -- this
+    // ping starts a fresh one rather than extending a stale count, so
+    // "3 times this week" can't be satisfied by e.g. one ping each in
+    // three unrelated months.
+    const windowExpired = windowAgeDays > QUALIFYING_WINDOW_DAYS;
+    const windowStartedAt = windowExpired ? now : nearest.window_started_at;
+    const windowPingCount = windowExpired ? 1 : nearest.window_ping_count + 1;
+    const nowQualifies = windowPingCount >= MIN_PINGS_TO_QUALIFY;
+
+    const daysSinceLastPing = (now.getTime() - new Date(nearest.last_pinged_at).getTime()) / 86400000;
     const decayedWeight = nearest.weight * DAILY_DECAY ** Math.max(daysSinceLastPing, 0);
+
     const { rows } = await pool.query(
       `UPDATE road_alerts_weighted_points
-       SET weight = $1, last_pinged_at = now(), tlid = COALESCE($2, tlid)
-       WHERE id = $3 RETURNING *`,
-      [decayedWeight + PING_INCREMENT, tlid ?? null, nearest.id]
+       SET weight = $1, last_pinged_at = now(), tlid = COALESCE($2, tlid),
+           window_started_at = $3, window_ping_count = $4,
+           qualified_at = COALESCE(qualified_at, CASE WHEN $5 THEN now() ELSE NULL END)
+       WHERE id = $6 RETURNING *`,
+      [decayedWeight + PING_INCREMENT, tlid ?? null, windowStartedAt, windowPingCount, nowQualifies, nearest.id]
     );
     return rows[0];
   }
@@ -103,16 +135,19 @@ async function recordWeightedPointPing(pool, email, { latitude, longitude, tlid,
 }
 
 /**
- * Returns an account's weighted points, each one's weight decayed to
- * its current (not last-write-time) value -- so a point that hasn't
- * been pinged in a while reports a lower weight even without a new
- * ping to trigger recalculation, and roadAlertsMatching.js's minWeight
- * threshold naturally excludes it once it's decayed low enough.
+ * Returns an account's *qualified* weighted points only (see
+ * MIN_PINGS_TO_QUALIFY) -- a point that hasn't earned qualified_at yet
+ * is tracked internally but never surfaced here, so it can't affect
+ * alerting. Each returned point's weight is decayed to its current (not
+ * last-write-time) value, so a point that hasn't been pinged in a while
+ * reports a lower weight even without a new ping to trigger
+ * recalculation, and roadAlertsMatching.js's minWeight threshold
+ * naturally excludes it once it's decayed low enough.
  */
 async function getWeightedPoints(pool, email) {
   const { rows } = await pool.query(
     `SELECT latitude, longitude, weight, tlid, last_pinged_at
-     FROM road_alerts_weighted_points WHERE email = $1`,
+     FROM road_alerts_weighted_points WHERE email = $1 AND qualified_at IS NOT NULL`,
     [email]
   );
 
@@ -129,9 +164,30 @@ async function getWeightedPoints(pool, email) {
     .sort((a, b) => b.weight - a.weight);
 }
 
+/**
+ * Deletes points not pinged in over `days` -- decay alone (see
+ * getWeightedPoints) only lowers a stale point's *reported* weight, it
+ * never removes the row, so without this a table like this one only
+ * grows: every point that never qualified (or qualified once and was
+ * then abandoned) sits there forever. Meant to run periodically -- see
+ * ops/geocoding-weighted-points-cleanup.timer (or ops/crontab.example
+ * for a plain-cron alternative), same pattern as feedback.js's
+ * deleteOldFeedback.
+ */
+async function deleteStalePoints(pool, days) {
+  const { rowCount } = await pool.query(
+    "DELETE FROM road_alerts_weighted_points WHERE last_pinged_at < now() - ($1 * interval '1 day')",
+    [days]
+  );
+  return rowCount;
+}
+
 module.exports = {
   ensureWeightedPointsTable,
   recordWeightedPointPing,
   getWeightedPoints,
+  deleteStalePoints,
   MATCH_RADIUS_METERS,
+  QUALIFYING_WINDOW_DAYS,
+  MIN_PINGS_TO_QUALIFY,
 };

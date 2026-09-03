@@ -92,16 +92,19 @@ test('POST /road-alerts/weighted-points with isEndpoint never creates a point', 
     { seedStreets: false }
   ));
 
-test('GET /road-alerts/weighted-points returns previously recorded points', () =>
+test('GET /road-alerts/weighted-points returns points once qualified (pinged enough times)', () =>
   withTestServer(
     async ({ port, usersDb }) => {
       const serviceKey = await registerTestAccount(usersDb);
 
-      await fetch(`http://127.0.0.1:${port}/road-alerts/weighted-points`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: TEST_EMAIL, serviceKey, latitude: 43.9, longitude: -69.8 }),
-      });
+      // A single ping isn't enough to qualify -- see MIN_PINGS_TO_QUALIFY.
+      for (let i = 0; i < 3; i++) {
+        await fetch(`http://127.0.0.1:${port}/road-alerts/weighted-points`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: TEST_EMAIL, serviceKey, latitude: 43.9, longitude: -69.8 }),
+        });
+      }
 
       const response = await fetch(weightedPointsUrl(port, { serviceKey }));
       assert.equal(response.status, 200);

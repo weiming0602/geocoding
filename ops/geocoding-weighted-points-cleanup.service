@@ -1,0 +1,27 @@
+# systemd service for geocoding-server/scripts/cleanup-weighted-points.js --
+# deletes Road Alerts weighted points not pinged in 180 days (a route
+# someone stopped driving). Triggered by
+# geocoding-weighted-points-cleanup.timer, not meant to be started
+# directly (though `systemctl start` works fine for a manual test run).
+#
+# Install (adjust paths/DSN for the actual box):
+#   sudo cp ops/geocoding-weighted-points-cleanup.service ops/geocoding-weighted-points-cleanup.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now geocoding-weighted-points-cleanup.timer
+#
+# Check status / logs:
+#   systemctl status geocoding-weighted-points-cleanup.timer
+#   journalctl -u geocoding-weighted-points-cleanup.service
+
+[Unit]
+Description=Delete Road Alerts weighted points not pinged in 180 days
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/my_ai/projects/geocoding/geocoding-server
+# USERS_DSN should point at the real production database's connection
+# string, not the local Unix socket used in dev -- see CLAUDE.md's
+# "Environment / data layout".
+Environment=USERS_DSN=postgresql://my_ai@%2Fvar%2Frun%2Fpostgresql/geocoding_users
+# Adjust this path to wherever `which node` resolves on the actual box.
+ExecStart=/home/my_ai/.local/node/bin/node scripts/cleanup-weighted-points.js 180
