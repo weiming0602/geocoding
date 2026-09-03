@@ -17,6 +17,67 @@ function csvField(value: string): string {
   return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 
+// The inverse of csvField -- splits one CSV row into fields, respecting
+// double-quoted fields with embedded commas/escaped quotes. Only used
+// for a directly-picked two-column id,address file (see
+// parsePickedFile below); a real multi-column import still goes
+// through Import Addresses' own (more complete) parser.
+function splitCsvRow(line: string): string[] {
+  const fields: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        current += ch;
+      }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ',') {
+      fields.push(current);
+      current = '';
+    } else {
+      current += ch;
+    }
+  }
+  fields.push(current);
+  return fields;
+}
+
+// A directly-picked file is normally just one address per line (what
+// the server's own parseAddresses expects) -- but since a plain address
+// already contains commas itself ("123 Main St, Standish, ME 04091"),
+// there's no safe way to *infer* an id,address file from commas alone.
+// Instead this only opts into id-parsing when the very first line is
+// exactly the literal header "id,address" (case-insensitive) -- an
+// unambiguous, deliberate opt-in that a plain address list will never
+// collide with, and exactly what a CSV exported for this purpose (e.g.
+// Import Addresses' own id-column export) already looks like. Anything
+// else is treated as a plain address list, unchanged from before.
+function parsePickedFile(raw: string): { content: string; ids: string[] | null } {
+  const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (lines.length === 0 || !/^id\s*,\s*address$/i.test(lines[0])) {
+    return { content: raw, ids: null };
+  }
+
+  const ids: string[] = [];
+  const addresses: string[] = [];
+  for (const line of lines.slice(1)) {
+    const [id, address] = splitCsvRow(line);
+    ids.push((id ?? '').trim());
+    addresses.push((address ?? '').trim());
+  }
+  return { content: addresses.join('\n'), ids };
+}
+
 export default function Batch() {
   const location = useLocation();
   const [email, setEmail] = useState('');
@@ -39,9 +100,15 @@ export default function Batch() {
   const [arrivedFromImport] = useState(() => Boolean((location.state as ForwardedFile | null)?.fileContent));
   // The ID column mapped in Import Addresses (if any), one per selected
   // row, in the same order as the address lines sent in fileContent --
-  // captured once alongside pickedFile/arrivedFromImport, independent of
-  // later state changes for the same reason those are.
-  const [forwardedIds] = useState<string[] | null>(() => (location.state as ForwardedFile | null)?.ids ?? null);
+  // initialized once from that navigation state alongside pickedFile/
+  // arrivedFromImport, but (unlike those) reassigned whenever the user
+  // picks a new file directly (see handleChooseFile) -- both to support
+  // an id,address file picked without going through Import Addresses,
+  // and so a stale id list from an earlier file can't wrongly appear to
+  // "match" a completely different one now loaded.
+  const [forwardedIds, setForwardedIds] = useState<string[] | null>(
+    () => (location.state as ForwardedFile | null)?.ids ?? null
+  );
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [results, setResults] = useState<BatchResult[] | null>(null);
@@ -67,8 +134,10 @@ export default function Batch() {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
-    const content = await file.text();
+    const raw = await file.text();
+    const { content, ids } = parsePickedFile(raw);
     setPickedFile({ name: file.name, content });
+    setForwardedIds(ids);
     setResults(null);
   }, []);
 
