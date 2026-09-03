@@ -229,7 +229,7 @@ export default function Batch() {
         </p>
       )}
 
-      <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 'var(--space-6)', alignItems: 'start' }}>
+      <div className="form-map-layout">
         <div className="card elev-sm">
           <div className="field">
             <label>Account email</label>

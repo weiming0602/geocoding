@@ -126,7 +126,7 @@ export default function FindPlaces() {
         precise, Meridian-computed coordinates.
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 'var(--space-6)', alignItems: 'start' }}>
+      <div className="form-map-layout">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
           <div className="field">
             <label>What are you looking for?</label>

@@ -362,3 +362,19 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
 .dialog-body { font-size: 15px; opacity: 0.85; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: var(--space-2); margin-top: var(--space-2); }
 
+/* — form + map two-column layout (Geocode, ReverseGeocode, FindPlaces) — */
+/* Fixed-width form column beside a flexible map column; below 720px there's
+   no room for both side by side, so the map drops underneath the form
+   instead of overflowing off-screen. */
+.form-map-layout {
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: var(--space-6);
+  align-items: start;
+}
+@media (max-width: 720px) {
+  .form-map-layout {
+    grid-template-columns: 1fr;
+  }
+}
+

@@ -54,7 +54,7 @@ export default function Geocode() {
         Convert a street address to coordinates — matches /geocode.
       </p>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '340px 1fr', gap: 'var(--space-6)', alignItems: 'start' }}>
+      <div className="form-map-layout">
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-4)' }}>
           <div className="field">
             <label>Address or place</label>
