@@ -92,6 +92,14 @@ export default function Batch() {
   const [forwardedIds, setForwardedIds] = useState<string[] | null>(
     () => (location.state as ForwardedFile | null)?.ids ?? null
   );
+  // Set right after picking a file, cleared once the user answers --
+  // 'detected' means parsePickedFile found an id column and is waiting
+  // on permission to actually use it; 'offer' means it found none and
+  // is offering to make one up (sequential 1, 2, 3, ...) instead.
+  // Either way, forwardedIds stays null until the user says yes.
+  const [idPrompt, setIdPrompt] = useState<
+    { kind: 'detected'; ids: string[] } | { kind: 'offer'; lineCount: number } | null
+  >(null);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [results, setResults] = useState<BatchResult[] | null>(null);
@@ -120,9 +128,30 @@ export default function Batch() {
     const raw = await file.text();
     const { content, ids } = parsePickedFile(raw);
     setPickedFile({ name: file.name, content });
-    setForwardedIds(ids);
+    setForwardedIds(null);
     setResults(null);
+    if (ids) {
+      setIdPrompt({ kind: 'detected', ids });
+    } else {
+      const lineCount = content.split(/\r?\n/).filter((line) => line.trim().length > 0).length;
+      setIdPrompt({ kind: 'offer', lineCount });
+    }
   }, []);
+
+  // useIds=false covers both "no, don't use the detected column" and "no
+  // thanks, don't make one up" -- either way forwardedIds just stays
+  // null, falling back to plain row-number position (see idsMatchResults).
+  const resolveIdPrompt = useCallback(
+    (useIds: boolean) => {
+      if (idPrompt?.kind === 'detected' && useIds) {
+        setForwardedIds(idPrompt.ids);
+      } else if (idPrompt?.kind === 'offer' && useIds) {
+        setForwardedIds(Array.from({ length: idPrompt.lineCount }, (_, i) => String(i + 1)));
+      }
+      setIdPrompt(null);
+    },
+    [idPrompt]
+  );
 
   const handleBatchGeocode = useCallback(async () => {
     // No client-side check that email/serviceKey are non-empty -- the
@@ -311,11 +340,55 @@ export default function Batch() {
             <label>Resource file (one address per line)</label>
             <button
               className="btn btn-primary btn-block"
-              onClick={() => (pickedFile ? setPickedFile(null) : fileInputRef.current?.click())}
+              onClick={() => {
+                if (pickedFile) {
+                  setPickedFile(null);
+                  setForwardedIds(null);
+                  setIdPrompt(null);
+                } else {
+                  fileInputRef.current?.click();
+                }
+              }}
             >
               {pickedFile ? `Clear "${pickedFile.name}"` : 'Choose File'}
             </button>
             <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={handleChooseFile} />
+
+            {idPrompt && (
+              <div className="card elev-sm" style={{ padding: 'var(--space-3)', marginTop: 'var(--space-2)' }}>
+                {idPrompt.kind === 'detected' ? (
+                  <>
+                    <p style={{ margin: '0 0 var(--space-2)', fontSize: 13 }}>
+                      This file has a column that looks like a primary key. Use it to identify each
+                      address in your results?
+                    </p>
+                    <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                      <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={() => resolveIdPrompt(true)}>
+                        Yes, use it
+                      </button>
+                      <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => resolveIdPrompt(false)}>
+                        No, just number them
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p style={{ margin: '0 0 var(--space-2)', fontSize: 13 }}>
+                      This file has no ID column of its own. Add a sequential ID (1, 2, 3, ...) to each
+                      address, so it's easier to match up results afterward?
+                    </p>
+                    <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                      <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={() => resolveIdPrompt(true)}>
+                        Yes, add IDs
+                      </button>
+                      <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => resolveIdPrompt(false)}>
+                        No thanks
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
 
             {/* De-emphasized on purpose -- this only works when the app and
                 geocoding-server share a filesystem (a same-host dev/test
@@ -359,10 +432,18 @@ export default function Batch() {
             91 Chestnut St, Portland, ME 04101{'\n'}13 Deerfield Dr, Brunswick, ME 04011{'\n'}997
             Pequawket Trl, Standish, ME 04091
           </div>
-          <button className="btn btn-primary btn-block" onClick={handleBatchGeocode} disabled={loading || downloading}>
+          <button
+            className="btn btn-primary btn-block"
+            onClick={handleBatchGeocode}
+            disabled={loading || downloading || Boolean(idPrompt)}
+          >
             {loading ? 'Geocoding…' : 'Batch geocode'}
           </button>
-          <button className="btn btn-secondary btn-block" onClick={handleDownload} disabled={loading || downloading}>
+          <button
+            className="btn btn-secondary btn-block"
+            onClick={handleDownload}
+            disabled={loading || downloading || Boolean(idPrompt)}
+          >
             {downloading ? 'Preparing…' : 'Download results (ZIP)'}
           </button>
           {quota && (
