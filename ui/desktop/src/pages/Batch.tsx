@@ -3,6 +3,7 @@ import { Link, useLocation } from 'react-router';
 
 import { batchGeocode, batchGeocodeDownload } from '../../../shared/api/client';
 import type { BatchResult, BatchSource } from '../../../shared/api/types';
+import { guessRole } from '../../../shared/importAddresses';
 import BatchMapView from '../components/BatchMapView';
 import PageHeader from '../components/PageHeader';
 import { useMapMarkerCap } from '../useMapMarkerCap';
@@ -17,63 +18,45 @@ function csvField(value: string): string {
   return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
 }
 
-// The inverse of csvField -- splits one CSV row into fields, respecting
-// double-quoted fields with embedded commas/escaped quotes. Only used
-// for a directly-picked two-column id,address file (see
-// parsePickedFile below); a real multi-column import still goes
-// through Import Addresses' own (more complete) parser.
-function splitCsvRow(line: string): string[] {
-  const fields: string[] = [];
-  let current = '';
-  let inQuotes = false;
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i];
-    if (inQuotes) {
-      if (ch === '"') {
-        if (line[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else {
-          inQuotes = false;
-        }
-      } else {
-        current += ch;
-      }
-    } else if (ch === '"') {
-      inQuotes = true;
-    } else if (ch === ',') {
-      fields.push(current);
-      current = '';
-    } else {
-      current += ch;
-    }
-  }
-  fields.push(current);
-  return fields;
+// Splits a line into exactly two fields at its first comma -- the
+// second field is left as one opaque string even when it itself
+// contains more commas, which a real address always does ("123 Main
+// St, Standish, ME 04091"). Deliberately not full CSV-quote parsing:
+// no quoting to type by hand, since the id column is never going to
+// contain a comma itself.
+function splitAtFirstComma(line: string): [string, string] {
+  const index = line.indexOf(',');
+  if (index === -1) return [line, ''];
+  return [line.slice(0, index).trim(), line.slice(index + 1).trim()];
 }
 
 // A directly-picked file is normally just one address per line (what
 // the server's own parseAddresses expects) -- but since a plain address
-// already contains commas itself ("123 Main St, Standish, ME 04091"),
-// there's no safe way to *infer* an id,address file from commas alone.
-// Instead this only opts into id-parsing when the very first line is
-// exactly the literal header "id,address" (case-insensitive) -- an
-// unambiguous, deliberate opt-in that a plain address list will never
-// collide with, and exactly what a CSV exported for this purpose (e.g.
-// Import Addresses' own id-column export) already looks like. Anything
-// else is treated as a plain address list, unchanged from before.
+// already contains commas itself, there's no safe way to *infer* an
+// id,address file from commas alone. Instead this looks at the header
+// row's first field using the same guessRole heuristic Import Addresses
+// already uses ("id", "record id", "customer_id", "uuid", "ref#", etc.,
+// case-insensitive) -- an unambiguous, deliberate opt-in a plain
+// address list will never collide with. Requires id first, address
+// second (rest of the line) -- only handles this simple shape; a file
+// with street/city/state/zip split across separate columns still needs
+// Import Addresses' full mapping step. Anything that doesn't match is
+// treated as a plain address list, unchanged from before.
 function parsePickedFile(raw: string): { content: string; ids: string[] | null } {
   const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.length === 0 || !/^id\s*,\s*address$/i.test(lines[0])) {
+  if (lines.length < 2) return { content: raw, ids: null };
+
+  const [headerId, headerAddress] = splitAtFirstComma(lines[0]);
+  if (guessRole(headerId) !== 'id' || guessRole(headerAddress) === 'id') {
     return { content: raw, ids: null };
   }
 
   const ids: string[] = [];
   const addresses: string[] = [];
   for (const line of lines.slice(1)) {
-    const [id, address] = splitCsvRow(line);
-    ids.push((id ?? '').trim());
-    addresses.push((address ?? '').trim());
+    const [id, address] = splitAtFirstComma(line);
+    ids.push(id);
+    addresses.push(address);
   }
   return { content: addresses.join('\n'), ids };
 }
