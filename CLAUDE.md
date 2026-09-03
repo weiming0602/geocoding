@@ -258,6 +258,24 @@ read-write).
   error) decide.
 
 # Known gaps (don't assume these are done)
+- `ui/desktop` is deployed to DigitalOcean App Platform as a **Static
+  Site** component (source dir `ui/desktop`, build `npm run build`,
+  output `dist`), fronted by `geocoding-server` on a separate droplet
+  behind nginx/Let's Encrypt. Edge caching **cannot be disabled or
+  customized for App Platform's Static Site component at all** — DO's
+  own docs confirm the Control Panel's edge-caching toggle is
+  unconditionally disabled for it, so a Netlify/Vercel-style `_headers`
+  file has no effect (tried and reverted). Concretely: `index.html`
+  gets cached at the CDN edge (Cloudflare-backed) for 24 hours after
+  every deploy, so different visitors/edge locations can keep loading
+  an old JS bundle hash for up to a day post-deploy, independent of any
+  browser cache-busting. When verifying a just-deployed frontend change,
+  load the site with a random query string (`?nocache=<anything>`) to
+  bypass the edge cache and see the real current build. The only real
+  fix, per DO's own docs, is moving the frontend to a Web Service
+  component instead (billed compute, unlike free Static Sites) — not
+  done, since this is a rare-enough annoyance during active development
+  to not yet justify the cost/complexity switch.
 - `geocoding-server/src/emailDelivery.js`'s `sendResultsEmail` (the
   batch-results ZIP attachment) is a **deliberate stub** — logs and
   returns instead of sending; a real ZIP-by-email path needs a raw MIME
