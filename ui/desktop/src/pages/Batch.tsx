@@ -402,8 +402,7 @@ export default function Batch() {
                 <table className="table">
                   <thead>
                     <tr>
-                      <th>#</th>
-                      {idsMatchResults && <th>ID</th>}
+                      {idsMatchResults ? <th>ID</th> : <th>#</th>}
                       <th>Address</th>
                       <th>Result</th>
                     </tr>
@@ -423,8 +422,11 @@ export default function Batch() {
                           background: selectedIndex === index ? 'var(--color-surface)' : undefined,
                         }}
                       >
-                        <td className="text-muted">{index + 1}</td>
-                        {idsMatchResults && forwardedIds && <td className="text-muted">{forwardedIds[index]}</td>}
+                        {idsMatchResults && forwardedIds ? (
+                          <td className="text-muted">{forwardedIds[index]}</td>
+                        ) : (
+                          <td className="text-muted">{index + 1}</td>
+                        )}
                         <td>{result.address}</td>
                         <td>
                           {result.success ? (
