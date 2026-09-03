@@ -80,6 +80,11 @@ export default function BatchMapView({ markers, selectedIndex = null, focusReque
   // the parent never needs the whole map to be torn down and rebuilt.
   const onMarkerClickRef = useRef(onMarkerClick);
   onMarkerClickRef.current = onMarkerClick;
+  // A separate Popup instance from the hover one below -- this one is
+  // driven by selection state (a row click or a marker click), not the
+  // mouse, and stays open until the selection changes, so the selected
+  // row's address is always legible on the map without needing to hover.
+  const selectedPopupRef = useRef<Popup | null>(null);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -184,6 +189,26 @@ export default function BatchMapView({ markers, selectedIndex = null, focusReque
       DEFAULT_COLOR,
     ]);
   }, [selectedIndex, ready]);
+
+  // Keeps the selected row's address labeled on the map at all times
+  // (not just while hovering, unlike the mouseenter/mouseleave popup set
+  // up on 'load' above) -- restores the "always-visible address text"
+  // behavior a single result's own map (MapView.tsx) already has.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+
+    const marker = selectedIndex !== null ? markers.find((m) => m.resultIndex === selectedIndex) : undefined;
+    if (!marker) {
+      selectedPopupRef.current?.remove();
+      return;
+    }
+
+    if (!selectedPopupRef.current) {
+      selectedPopupRef.current = new Popup({ offset: 12, closeButton: false, closeOnClick: false });
+    }
+    selectedPopupRef.current.setLngLat([marker.longitude, marker.latitude]).setText(marker.address).addTo(map);
+  }, [selectedIndex, markers, ready]);
 
   // Row-click direction only -- pans/zooms to the requested marker. Keyed
   // on the whole focusRequest object (not just its index) so clicking the
