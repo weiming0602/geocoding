@@ -46,6 +46,11 @@ const {
   clearTestWeightedPoints,
 } = require('./testWeightedPoints');
 const {
+  ensureWeightedPointsTable,
+  recordWeightedPointPing,
+  getWeightedPoints,
+} = require('./weightedPoints');
+const {
   ensureTestRoadSignalsTable,
   addTestRoadSignal,
   getTestRoadSignals,
@@ -138,6 +143,7 @@ const usersDbPromise = openUsersDb(USERS_DSN).then(async (pool) => {
   await ensureRoadAlertsTopicsTable(pool);
   await ensureRoadAlertsStatementsTable(pool);
   await ensureTestWeightedPointsTable(pool);
+  await ensureWeightedPointsTable(pool);
   await ensureTestRoadSignalsTable(pool);
   return pool;
 });
@@ -1143,6 +1149,67 @@ app.delete('/road-alerts/test/weighted-points', async (req, res) => {
 
     const deleted = await clearTestWeightedPoints(usersDb, email);
     res.json({ deleted });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Real weighted points (see weightedPoints.js) -- unlike the /test/
+// routes above, always on for any registered Road Alerts account, no
+// env-var gate. The mobile app calls this periodically with its current
+// position while a monitoring session is active, *except* for the
+// session's first and last ping (its trip endpoints) -- see
+// weightedPoints.js's own doc comment for why those are excluded rather
+// than just weighted low.
+app.post('/road-alerts/weighted-points', async (req, res) => {
+  const { email, serviceKey, latitude, longitude, tlid, isEndpoint } = req.body || {};
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const point = await recordWeightedPointPing(usersDb, email, {
+      latitude: typeof latitude === 'number' ? latitude : Number(latitude),
+      longitude: typeof longitude === 'number' ? longitude : Number(longitude),
+      tlid: typeof tlid === 'string' ? tlid : null,
+      isEndpoint: Boolean(isEndpoint),
+    });
+
+    res.json({ point });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+app.get('/road-alerts/weighted-points', async (req, res) => {
+  const { email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const weightedPoints = await getWeightedPoints(usersDb, email);
+    res.json({ weightedPoints });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
