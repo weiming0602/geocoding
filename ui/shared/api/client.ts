@@ -21,6 +21,8 @@ import type {
   RoadSignalsResponse,
   TestWeightedPoint,
   TestWeightedPointsResponse,
+  WeightedPointPingResponse,
+  WeightedPointsResponse,
 } from './types';
 
 // On a physical mobile device/simulator, "localhost" means the device
@@ -393,4 +395,31 @@ export function clearTestWeightedPoints(
 ): Promise<{ deleted: number }> {
   const qs = new URLSearchParams({ email: params.email, serviceKey: params.serviceKey });
   return deleteJson<{ deleted: number }>(baseUrl, `/road-alerts/test/weighted-points?${qs.toString()}`);
+}
+
+// The real, always-on weighted-points store (see
+// geocoding-server/src/weightedPoints.js) -- reports one GPS ping from
+// an active Road Alerts monitoring session toward the account's
+// routine-route model. Set isEndpoint for a trip's first/last ping so
+// it's never recorded (see that module's own doc comment for why).
+export function postWeightedPointPing(
+  params: {
+    email: string;
+    serviceKey: string;
+    latitude: number;
+    longitude: number;
+    tlid?: string;
+    isEndpoint?: boolean;
+  },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<WeightedPointPingResponse> {
+  return postJson<WeightedPointPingResponse>(baseUrl, '/road-alerts/weighted-points', params);
+}
+
+export function getWeightedPoints(
+  params: { email: string; serviceKey: string },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<WeightedPointsResponse> {
+  const qs = new URLSearchParams({ email: params.email, serviceKey: params.serviceKey });
+  return getJson<WeightedPointsResponse>(baseUrl, `/road-alerts/weighted-points?${qs.toString()}`);
 }

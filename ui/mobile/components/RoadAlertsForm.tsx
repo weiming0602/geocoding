@@ -12,8 +12,10 @@ import {
   getRoadReroute,
   getRoadSignals,
   getTestWeightedPoints,
+  getWeightedPoints,
   markRoadAlertsNotificationsViewed,
   postRoadAlertsStatement,
+  postWeightedPointPing,
   updateRoadAlertsPreferences,
   updateRoadAlertsUsername,
 } from '../../shared/api/client';
@@ -48,6 +50,14 @@ const RADIUS_METERS = 10000;
 // rather than a separate timer, but still caps how often the free public
 //511 API gets hit if the device reports position rapidly.
 const POLL_MIN_INTERVAL_MS = 15000;
+// Much coarser than POLL_MIN_INTERVAL_MS on purpose -- routine-route
+// learning doesn't need anywhere near hazard-checking's resolution, and
+// a tighter interval would mean more battery/data spent on writes than
+// the feature is worth. Real-world tuning is exactly what
+// geocoding-server/src/weightedPoints.js's QUALIFYING_WINDOW_DAYS/
+// MIN_PINGS_TO_QUALIFY, and this interval, are expected to need once
+// there's real usage data to look at.
+const WEIGHTED_POINT_PING_INTERVAL_MS = 3 * 60 * 1000;
 
 const SEVERITY_LABELS: Record<RoadSignalSeverity, string> = {
   serious: 'Serious',
@@ -124,10 +134,14 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
   // Fake, developer-seeded weighted points from the server's test-only
   // store (geocoding-server/src/testWeightedPoints.js) -- 404s (and stays
   // empty, silently) unless that server has ALLOW_TEST_WEIGHTED_POINTS
-  // set, which is off by default. Merged with the real `weightedPoints`
-  // prop below so both a future real source and this test aid can supply
-  // routine points at once.
+  // set, which is off by default. Merged with the real ones (below) and
+  // the `weightedPoints` prop so a real source and this test aid can
+  // both supply routine points at once.
   const [testWeightedPoints, setTestWeightedPoints] = useState<WeightedPoint[]>([]);
+  // The real, always-on store (geocoding-server/src/weightedPoints.js) --
+  // only ever contains *qualified* points (see that module), built up
+  // from this same session's own pings (below) plus any earlier ones.
+  const [realWeightedPoints, setRealWeightedPoints] = useState<WeightedPoint[]>([]);
   // Spoken alerts default to the shortest form on purpose -- something a
   // driver hears while approaching a hazard should be as small as
   // possible; a fuller account belongs in email (e.g. a future
@@ -213,6 +227,19 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
   const subscriptionRef = useRef<Location.LocationSubscription | null>(null);
   const lastFetchAtRef = useRef(0);
   const spokenIdsRef = useRef<Set<string>>(new Set());
+  // Throttles weighted-point pings independently of lastFetchAtRef's
+  // (much tighter) hazard-check throttle -- see
+  // WEIGHTED_POINT_PING_INTERVAL_MS.
+  const lastWeightedPingAtRef = useRef(0);
+  // True only for the very first position fix after a Start press --
+  // that fix is this trip's origin, reported with isEndpoint so it's
+  // never recorded as a weighted point. Reset in handleStart.
+  const isFirstPositionOfSessionRef = useRef(true);
+  // Latest known fix, read from handleStop to report the trip's actual
+  // endpoint -- a ref (not just the `position` state) so handleStop
+  // doesn't need `position` in its own dependency array, which would
+  // otherwise change identity on every GPS update.
+  const positionRef = useRef<{ latitude: number; longitude: number } | null>(null);
   // Read inside the position-watch callback without re-subscribing every
   // time either setting changes -- watchPositionAsync is only set up once
   // per Start press, not on every render.
@@ -230,8 +257,8 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
     accountRef.current = account;
   }, [account]);
   useEffect(() => {
-    weightedPointsRef.current = [...weightedPoints, ...testWeightedPoints];
-  }, [weightedPoints, testWeightedPoints]);
+    weightedPointsRef.current = [...weightedPoints, ...realWeightedPoints, ...testWeightedPoints];
+  }, [weightedPoints, realWeightedPoints, testWeightedPoints]);
 
   // One-shot fetch of any fake weighted points seeded server-side for
   // this account (see the testWeightedPoints state comment above) --
@@ -266,6 +293,57 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
       cancelled = true;
     };
   }, [account]);
+
+  // One-shot fetch of this account's real, already-qualified weighted
+  // points (see the realWeightedPoints state comment above) -- also
+  // re-fetched from pingWeightedPoint below whenever a new ping might
+  // have just pushed a point past its qualifying threshold, so a route
+  // that becomes routine *during* this same session is usable for
+  // matching without waiting for the next account change/app restart.
+  const refreshRealWeightedPoints = useCallback(async () => {
+    const current = accountRef.current;
+    if (!current) return;
+    try {
+      const response = await getWeightedPoints({ email: current.email, serviceKey: current.serviceKey });
+      setRealWeightedPoints(
+        response.weightedPoints.map((p) => ({
+          latitude: p.latitude,
+          longitude: p.longitude,
+          weight: p.weight,
+          tlid: p.tlid ?? undefined,
+        }))
+      );
+    } catch {
+      // Best-effort, same reasoning as the test-weighted-points fetch --
+      // never allowed to surface an error or block hazard alerting.
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!account) {
+      setRealWeightedPoints([]);
+      return;
+    }
+    refreshRealWeightedPoints();
+  }, [account, refreshRealWeightedPoints]);
+
+  // Reports one GPS ping toward the account's routine-route model (see
+  // geocoding-server/src/weightedPoints.js). Fire-and-forget: a failure
+  // here is background-enhancement noise, never something that should
+  // interrupt or delay hazard alerting.
+  const pingWeightedPoint = useCallback(
+    async (latitude: number, longitude: number, isEndpoint: boolean) => {
+      const current = accountRef.current;
+      if (!current) return;
+      try {
+        await postWeightedPointPing({ email: current.email, serviceKey: current.serviceKey, latitude, longitude, isEndpoint });
+        if (!isEndpoint) refreshRealWeightedPoints();
+      } catch {
+        // best-effort -- see above
+      }
+    },
+    [refreshRealWeightedPoints]
+  );
 
   useEffect(() => {
     (async () => {
@@ -346,7 +424,15 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
     subscriptionRef.current = null;
     Speech.stop();
     setWatching(false);
-  }, []);
+
+    // The last known fix is this trip's destination -- reported with
+    // isEndpoint so it's never recorded as a weighted point, same
+    // reasoning as the origin ping in onPosition below.
+    const lastPosition = positionRef.current;
+    if (lastPosition) {
+      pingWeightedPoint(lastPosition.latitude, lastPosition.longitude, true);
+    }
+  }, [pingWeightedPoint]);
 
   const fetchSignals = useCallback(
     async (latitude: number, longitude: number, heading: number | null) => {
@@ -413,13 +499,29 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
     (location: Location.LocationObject) => {
       const { latitude, longitude, heading } = location.coords;
       setPosition({ latitude, longitude, heading });
+      positionRef.current = { latitude, longitude };
 
       const now = Date.now();
-      if (now - lastFetchAtRef.current < POLL_MIN_INTERVAL_MS) return;
-      lastFetchAtRef.current = now;
-      fetchSignals(latitude, longitude, heading);
+      if (now - lastFetchAtRef.current >= POLL_MIN_INTERVAL_MS) {
+        lastFetchAtRef.current = now;
+        fetchSignals(latitude, longitude, heading);
+      }
+
+      // The first fix after Start is this trip's origin -- reported with
+      // isEndpoint so it's never recorded as a weighted point (see
+      // pingWeightedPoint), and doesn't count against the throttle below
+      // since it's not a routine-route sample at all.
+      if (isFirstPositionOfSessionRef.current) {
+        isFirstPositionOfSessionRef.current = false;
+        pingWeightedPoint(latitude, longitude, true);
+        return;
+      }
+
+      if (now - lastWeightedPingAtRef.current < WEIGHTED_POINT_PING_INTERVAL_MS) return;
+      lastWeightedPingAtRef.current = now;
+      pingWeightedPoint(latitude, longitude, false);
     },
-    [fetchSignals]
+    [fetchSignals, pingWeightedPoint]
   );
 
   const handleStart = useCallback(async () => {
@@ -429,6 +531,7 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
       if (status !== 'granted') {
         throw new Error('Location permission was not granted.');
       }
+      isFirstPositionOfSessionRef.current = true;
       const subscription = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 25 },
         onPosition

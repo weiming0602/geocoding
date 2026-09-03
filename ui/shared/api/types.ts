@@ -277,10 +277,13 @@ export type RoadAlertsNotificationsViewedResponse = {
   viewedAt: string;
 };
 
-// /road-alerts/test/weighted-points -- fake, developer-seeded stand-ins
-// for docs/ROAD_ALERTS_DESIGN.md's real (on-device, never server-side)
-// routine subgraph, gated server-side behind ALLOW_TEST_WEIGHTED_POINTS
-// and off by default. See geocoding-server/src/testWeightedPoints.js.
+// /road-alerts/test/weighted-points -- fake, developer-seeded stand-ins,
+// gated server-side behind ALLOW_TEST_WEIGHTED_POINTS and off by
+// default. See geocoding-server/src/testWeightedPoints.js. The real,
+// always-on, server-side store is WeightedPointRecord below (see
+// docs/ROAD_ALERTS_DESIGN.md's "Revised" privacy-model note for why
+// this ended up server-side rather than on-device as originally
+// sketched).
 export type TestWeightedPoint = {
   id: number;
   email: string;
@@ -294,6 +297,41 @@ export type TestWeightedPoint = {
 
 export type TestWeightedPointsResponse = {
   weightedPoints: TestWeightedPoint[];
+};
+
+// /road-alerts/weighted-points -- the real, production weighted-points
+// store (see geocoding-server/src/weightedPoints.js), always on for any
+// registered account, no env-var gate. GET only ever returns *qualified*
+// points (pinged enough times within a rolling window) -- a point still
+// being tracked but not yet qualified never appears here.
+export type WeightedPointRecord = {
+  latitude: number;
+  longitude: number;
+  weight: number;
+  tlid: string | null;
+};
+
+export type WeightedPointsResponse = {
+  weightedPoints: WeightedPointRecord[];
+};
+
+// `point` is null when the ping was a trip endpoint (isEndpoint: true)
+// -- deliberately never recorded, see weightedPoints.js's own doc
+// comment for why.
+export type WeightedPointPingResponse = {
+  point: {
+    id: number;
+    email: string;
+    latitude: number;
+    longitude: number;
+    weight: number;
+    tlid: string | null;
+    window_started_at: string;
+    window_ping_count: number;
+    qualified_at: string | null;
+    last_pinged_at: string;
+    created_at: string;
+  } | null;
 };
 
 // POST /road-alerts/email-alert -- always sends to the authenticated
