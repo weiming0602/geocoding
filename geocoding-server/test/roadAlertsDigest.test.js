@@ -19,17 +19,15 @@ const SAMPLE_SIGNAL = {
 
 // withTestServer's env-var clearing (see helpers.js) doesn't apply here --
 // this test calls runDailyDigest directly, not through the HTTP server --
-// so clear SES vars explicitly to force emailDelivery.js's stub path,
+// so clear Resend vars explicitly to force emailDelivery.js's stub path,
 // same rationale as withTestServer's own comment for why this matters.
-function withStubbedSes(fn) {
+function withStubbedEmail(fn) {
   const saved = {
-    AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
-    AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
-    SES_FROM_EMAIL: process.env.SES_FROM_EMAIL,
+    RESEND_API_KEY: process.env.RESEND_API_KEY,
+    RESEND_FROM_EMAIL: process.env.RESEND_FROM_EMAIL,
   };
-  delete process.env.AWS_ACCESS_KEY_ID;
-  delete process.env.AWS_SECRET_ACCESS_KEY;
-  delete process.env.SES_FROM_EMAIL;
+  delete process.env.RESEND_API_KEY;
+  delete process.env.RESEND_FROM_EMAIL;
   return Promise.resolve(fn()).finally(() => {
     for (const [key, value] of Object.entries(saved)) {
       if (value !== undefined) process.env[key] = value;
@@ -38,7 +36,7 @@ function withStubbedSes(fn) {
 }
 
 test('runDailyDigest sends a stubbed digest per opted-in account with pending alerts and clears them', () =>
-  withStubbedSes(async () => {
+  withStubbedEmail(async () => {
     const db = await makeUsersDb();
     await ensureRoadAlertsSurfacedLogTable(db);
 
@@ -57,7 +55,7 @@ test('runDailyDigest sends a stubbed digest per opted-in account with pending al
   }));
 
 test('runDailyDigest skips an account with nothing pending', () =>
-  withStubbedSes(async () => {
+  withStubbedEmail(async () => {
     const db = await makeUsersDb();
     await ensureRoadAlertsSurfacedLogTable(db);
 

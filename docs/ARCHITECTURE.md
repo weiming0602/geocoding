@@ -51,7 +51,7 @@ flowchart TB
     feedback --> usersdb
 
     paypal[["PayPal API"]] <--> billing
-    ses[["AWS SES"]] -.service-key email.-> billing
+    resend[["Resend"]] -.service-key email.-> billing
     osm[["Nominatim / Overpass\n(OpenStreetMap)"]] <--> places
 
     api --> shared["ui/shared\n(API client, types, pricing,\nmilestones, theme tokens)"]

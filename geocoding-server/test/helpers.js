@@ -324,14 +324,12 @@ async function withTestServer(callback, { seedStreets = true, geoOptions = {}, g
   delete process.env.PAYPAL_CLIENT_SECRET;
 
   // Same rationale as the PayPal vars just above, for
-  // emailDelivery.js's sendServiceKeyEmail -- a real .env's AWS/SES
-  // credentials should never cause a test to attempt a real SES call.
-  const savedAwsAccessKeyId = process.env.AWS_ACCESS_KEY_ID;
-  const savedAwsSecretAccessKey = process.env.AWS_SECRET_ACCESS_KEY;
-  const savedSesFromEmail = process.env.SES_FROM_EMAIL;
-  delete process.env.AWS_ACCESS_KEY_ID;
-  delete process.env.AWS_SECRET_ACCESS_KEY;
-  delete process.env.SES_FROM_EMAIL;
+  // emailDelivery.js's sendServiceKeyEmail -- a real .env's Resend
+  // credentials should never cause a test to attempt a real send.
+  const savedResendApiKey = process.env.RESEND_API_KEY;
+  const savedResendFromEmail = process.env.RESEND_FROM_EMAIL;
+  delete process.env.RESEND_API_KEY;
+  delete process.env.RESEND_FROM_EMAIL;
 
   // Same rationale again -- a real .env with ALLOW_TEST_EMPTY_SERVICE_KEY
   // set (see quota.js) should never make the "empty key is rejected by
@@ -356,10 +354,8 @@ async function withTestServer(callback, { seedStreets = true, geoOptions = {}, g
     delete process.env.USERS_DSN;
     if (savedPaypalClientId !== undefined) process.env.PAYPAL_CLIENT_ID = savedPaypalClientId;
     if (savedPaypalClientSecret !== undefined) process.env.PAYPAL_CLIENT_SECRET = savedPaypalClientSecret;
-    if (savedAwsAccessKeyId !== undefined) process.env.AWS_ACCESS_KEY_ID = savedAwsAccessKeyId;
-    if (savedAwsSecretAccessKey !== undefined)
-      process.env.AWS_SECRET_ACCESS_KEY = savedAwsSecretAccessKey;
-    if (savedSesFromEmail !== undefined) process.env.SES_FROM_EMAIL = savedSesFromEmail;
+    if (savedResendApiKey !== undefined) process.env.RESEND_API_KEY = savedResendApiKey;
+    if (savedResendFromEmail !== undefined) process.env.RESEND_FROM_EMAIL = savedResendFromEmail;
     if (savedAllowTestEmptyServiceKey !== undefined)
       process.env.ALLOW_TEST_EMPTY_SERVICE_KEY = savedAllowTestEmptyServiceKey;
     if (savedAllowTestWeightedPoints !== undefined)

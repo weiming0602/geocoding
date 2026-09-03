@@ -1,21 +1,19 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { SESClient } = require('@aws-sdk/client-ses');
 const { sendServiceKeyEmail, sendRoadAlertEmail, sendFeedbackNotification } = require('../src/emailDelivery');
 
-// sendServiceKeyEmail only calls real SES when all three env vars are
+// sendServiceKeyEmail only calls Resend's API when both env vars are
 // set; each test sets/restores them directly (there's no shared
 // withTestServer here since this doesn't touch either Postgres
-// database) and mocks SESClient.prototype.send via the test context,
-// which node:test automatically restores when the test ends.
+// database) and mocks the global fetch via the test context, which
+// node:test automatically restores when the test ends.
 
-function withSesConfigured(env, fn) {
+function withResendConfigured(env, fn) {
   return async (t) => {
     const defaults = {
-      AWS_ACCESS_KEY_ID: 'test-key',
-      AWS_SECRET_ACCESS_KEY: 'test-secret',
-      SES_FROM_EMAIL: 'no-reply@example.com',
+      RESEND_API_KEY: 'test-key',
+      RESEND_FROM_EMAIL: 'no-reply@example.com',
     };
     const overrides = { ...defaults, ...env };
     const saved = {};
@@ -33,9 +31,9 @@ function withSesConfigured(env, fn) {
 }
 
 test(
-  'sendServiceKeyEmail sends via SES when configured',
-  withSesConfigured({}, async (t) => {
-    const sendMock = t.mock.method(SESClient.prototype, 'send', async () => ({}));
+  'sendServiceKeyEmail sends via Resend when configured',
+  withResendConfigured({}, async (t) => {
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 200 }));
 
     const result = await sendServiceKeyEmail('alice@example.com', {
       serviceKey: 'mk_abc123',
@@ -45,27 +43,28 @@ test(
     });
 
     assert.deepEqual(result, { delivered: true, stubbed: false });
-    assert.equal(sendMock.mock.callCount(), 1);
+    assert.equal(fetchMock.mock.callCount(), 1);
 
-    const command = sendMock.mock.calls[0].arguments[0];
-    assert.equal(command.input.Source, 'no-reply@example.com');
-    assert.deepEqual(command.input.Destination.ToAddresses, ['alice@example.com']);
-    assert.match(command.input.Message.Body.Text.Data, /mk_abc123/);
+    const [url, options] = fetchMock.mock.calls[0].arguments;
+    assert.equal(url, 'https://api.resend.com/emails');
+    assert.equal(options.headers.Authorization, 'Bearer test-key');
+    const body = JSON.parse(options.body);
+    assert.equal(body.from, 'no-reply@example.com');
+    assert.deepEqual(body.to, ['alice@example.com']);
+    assert.match(body.text, /mk_abc123/);
   })
 );
 
 test(
-  'sendServiceKeyEmail falls back to the stub when SES env vars are missing',
+  'sendServiceKeyEmail falls back to the stub when Resend env vars are missing',
   async (t) => {
     const saved = {
-      AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
-      AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
-      SES_FROM_EMAIL: process.env.SES_FROM_EMAIL,
+      RESEND_API_KEY: process.env.RESEND_API_KEY,
+      RESEND_FROM_EMAIL: process.env.RESEND_FROM_EMAIL,
     };
-    delete process.env.AWS_ACCESS_KEY_ID;
-    delete process.env.AWS_SECRET_ACCESS_KEY;
-    delete process.env.SES_FROM_EMAIL;
-    const sendMock = t.mock.method(SESClient.prototype, 'send', async () => ({}));
+    delete process.env.RESEND_API_KEY;
+    delete process.env.RESEND_FROM_EMAIL;
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 200 }));
 
     try {
       const result = await sendServiceKeyEmail('alice@example.com', {
@@ -75,7 +74,7 @@ test(
         priceCents: 1500,
       });
       assert.deepEqual(result, { delivered: false, stubbed: true });
-      assert.equal(sendMock.mock.callCount(), 0);
+      assert.equal(fetchMock.mock.callCount(), 0);
     } finally {
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[key];
@@ -86,11 +85,9 @@ test(
 );
 
 test(
-  'sendServiceKeyEmail reports failure instead of throwing when SES errors',
-  withSesConfigured({}, async (t) => {
-    t.mock.method(SESClient.prototype, 'send', async () => {
-      throw new Error('SES rejected the request');
-    });
+  'sendServiceKeyEmail reports failure instead of throwing when Resend errors',
+  withResendConfigured({}, async (t) => {
+    t.mock.method(globalThis, 'fetch', async () => new Response('rate limited', { status: 429 }));
 
     const result = await sendServiceKeyEmail('alice@example.com', {
       serviceKey: 'mk_abc123',
@@ -101,7 +98,7 @@ test(
 
     assert.equal(result.delivered, false);
     assert.equal(result.stubbed, false);
-    assert.match(result.error, /SES rejected the request/);
+    assert.match(result.error, /Resend responded 429/);
   })
 );
 
@@ -118,39 +115,38 @@ const SAMPLE_SIGNAL = {
 
 test(
   'sendRoadAlertEmail sends the signal to the account\'s own email when configured',
-  withSesConfigured({}, async (t) => {
-    const sendMock = t.mock.method(SESClient.prototype, 'send', async () => ({}));
+  withResendConfigured({}, async (t) => {
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 200 }));
 
     const result = await sendRoadAlertEmail('alice@example.com', SAMPLE_SIGNAL);
 
     assert.deepEqual(result, { delivered: true, stubbed: false });
-    assert.equal(sendMock.mock.callCount(), 1);
+    assert.equal(fetchMock.mock.callCount(), 1);
 
-    const command = sendMock.mock.calls[0].arguments[0];
-    assert.deepEqual(command.input.Destination.ToAddresses, ['alice@example.com']);
-    assert.match(command.input.Message.Subject.Data, /I-95/);
-    assert.match(command.input.Message.Body.Text.Data, /Slow traffic on I-95 southbound near York/);
-    assert.match(command.input.Message.Body.Text.Data, /43\.168363/);
+    const [, options] = fetchMock.mock.calls[0].arguments;
+    const body = JSON.parse(options.body);
+    assert.deepEqual(body.to, ['alice@example.com']);
+    assert.match(body.subject, /I-95/);
+    assert.match(body.text, /Slow traffic on I-95 southbound near York/);
+    assert.match(body.text, /43\.168363/);
   })
 );
 
 test(
-  'sendRoadAlertEmail falls back to the stub when SES env vars are missing',
+  'sendRoadAlertEmail falls back to the stub when Resend env vars are missing',
   async (t) => {
     const saved = {
-      AWS_ACCESS_KEY_ID: process.env.AWS_ACCESS_KEY_ID,
-      AWS_SECRET_ACCESS_KEY: process.env.AWS_SECRET_ACCESS_KEY,
-      SES_FROM_EMAIL: process.env.SES_FROM_EMAIL,
+      RESEND_API_KEY: process.env.RESEND_API_KEY,
+      RESEND_FROM_EMAIL: process.env.RESEND_FROM_EMAIL,
     };
-    delete process.env.AWS_ACCESS_KEY_ID;
-    delete process.env.AWS_SECRET_ACCESS_KEY;
-    delete process.env.SES_FROM_EMAIL;
-    const sendMock = t.mock.method(SESClient.prototype, 'send', async () => ({}));
+    delete process.env.RESEND_API_KEY;
+    delete process.env.RESEND_FROM_EMAIL;
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 200 }));
 
     try {
       const result = await sendRoadAlertEmail('alice@example.com', SAMPLE_SIGNAL);
       assert.deepEqual(result, { delivered: false, stubbed: true });
-      assert.equal(sendMock.mock.callCount(), 0);
+      assert.equal(fetchMock.mock.callCount(), 0);
     } finally {
       for (const [key, value] of Object.entries(saved)) {
         if (value === undefined) delete process.env[key];
@@ -162,8 +158,8 @@ test(
 
 test(
   'sendFeedbackNotification sends to FEEDBACK_NOTIFY_EMAIL when configured',
-  withSesConfigured({ FEEDBACK_NOTIFY_EMAIL: 'owner@example.com' }, async (t) => {
-    const sendMock = t.mock.method(SESClient.prototype, 'send', async () => ({}));
+  withResendConfigured({ FEEDBACK_NOTIFY_EMAIL: 'owner@example.com' }, async (t) => {
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 200 }));
 
     const result = await sendFeedbackNotification({
       name: 'Vasily',
@@ -172,22 +168,23 @@ test(
     });
 
     assert.deepEqual(result, { delivered: true, stubbed: false });
-    assert.equal(sendMock.mock.callCount(), 1);
+    assert.equal(fetchMock.mock.callCount(), 1);
 
-    const command = sendMock.mock.calls[0].arguments[0];
-    assert.deepEqual(command.input.Destination.ToAddresses, ['owner@example.com']);
-    assert.match(command.input.Message.Body.Text.Data, /Vasily/);
-    assert.match(command.input.Message.Body.Text.Data, /Vermont/);
-    assert.match(command.input.Message.Body.Text.Data, /commenter@example\.com/);
+    const [, options] = fetchMock.mock.calls[0].arguments;
+    const body = JSON.parse(options.body);
+    assert.deepEqual(body.to, ['owner@example.com']);
+    assert.match(body.text, /Vasily/);
+    assert.match(body.text, /Vermont/);
+    assert.match(body.text, /commenter@example\.com/);
   })
 );
 
 test(
   'sendFeedbackNotification falls back to the stub when FEEDBACK_NOTIFY_EMAIL is missing',
-  withSesConfigured({}, async (t) => {
+  withResendConfigured({}, async (t) => {
     const savedNotifyEmail = process.env.FEEDBACK_NOTIFY_EMAIL;
     delete process.env.FEEDBACK_NOTIFY_EMAIL;
-    const sendMock = t.mock.method(SESClient.prototype, 'send', async () => ({}));
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 200 }));
 
     try {
       const result = await sendFeedbackNotification({
@@ -197,7 +194,7 @@ test(
       });
 
       assert.deepEqual(result, { delivered: false, stubbed: true });
-      assert.equal(sendMock.mock.callCount(), 0);
+      assert.equal(fetchMock.mock.callCount(), 0);
     } finally {
       if (savedNotifyEmail !== undefined) process.env.FEEDBACK_NOTIFY_EMAIL = savedNotifyEmail;
     }

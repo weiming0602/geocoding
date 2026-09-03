@@ -161,7 +161,7 @@ fired during a drive, useful as a record or for reviewing "fun to know"
 items at leisure rather than while driving), or a fallback log of what
 was surfaced. This reuses infrastructure that already exists rather
 than needing anything new — `geocoding-server/src/emailDelivery.js`'s
-AWS SES setup (currently used for the service-key purchase email) is
+Resend setup (currently used for the service-key purchase email) is
 the same mechanism this would ride on.
 
 ## Real-time matching

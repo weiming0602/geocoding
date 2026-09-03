@@ -132,11 +132,14 @@ read-write).
   the page *says* and which PayPal app it talks to -- keep them in sync
   with the server's own `PAYPAL_CLIENT_ID`/`PAYPAL_API_BASE`, which is
   what actually decides sandbox vs. live.
-- `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY`/`AWS_REGION`/`SES_FROM_EMAIL`
-  (all optional -- unset = `emailDelivery.js`'s stub) email the service
-  key after `/billing/purchase`, via AWS SES. Use an IAM user scoped to
-  only `ses:SendEmail`; `SES_FROM_EMAIL` must be a verified identity, and
-  while the SES account is in its sandbox, so must the recipient.
+- `RESEND_API_KEY`/`RESEND_FROM_EMAIL` (both optional -- unset =
+  `emailDelivery.js`'s stub) email the service key after
+  `/billing/purchase`, via Resend (`https://api.resend.com/emails`, a
+  plain authenticated `fetch` call -- no SDK dependency). Not AWS SES:
+  SES's manual "request production access" review kept getting denied
+  for reasons that were never made clear, so this uses a provider that
+  sends real mail as soon as `RESEND_FROM_EMAIL`'s domain is DNS-verified
+  in the Resend dashboard, no approval queue to get stuck in.
 - `VITE_MOBILE_APP_URL` (`ui/desktop` only, optional, unset by default --
   no mobile deployment exists yet) -- when set, a mobile visitor to
   `ui/desktop` sees a banner prompting them to `ui/mobile` instead of the
@@ -260,7 +263,7 @@ read-write).
   returns instead of sending; a real ZIP-by-email path needs a raw MIME
   message, not just the plain-text send `sendServiceKeyEmail` uses.
   `sendServiceKeyEmail` (the purchase service-key email) is wired up for
-  real via AWS SES, falling back to the same stub pattern when SES env
+  real via Resend, falling back to the same stub pattern when its env
   vars aren't set.
 - No signup/login flow — `users.js`'s `upsertUser()` is a manual admin
   operation, and account creation itself (via `/billing/purchase` or
