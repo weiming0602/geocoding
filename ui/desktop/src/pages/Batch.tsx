@@ -30,35 +30,61 @@ function splitAtFirstComma(line: string): [string, string] {
   return [line.slice(0, index).trim(), line.slice(index + 1).trim()];
 }
 
+// A real address's first comma-segment is always "<house number> <street
+// name>" ("63 Blackberry Place") -- digits followed by words, never bare
+// digits alone. So a line whose first field is *only* digits can't be a
+// plain address; it can only be an unlabeled id column that never named
+// itself with a header. Whitespace-trimmed, no sign/decimal (a service's
+// own primary key is never negative or fractional).
+function looksLikeBareNumericId(field: string): boolean {
+  return /^\d+$/.test(field.trim());
+}
+
 // A directly-picked file is normally just one address per line (what
 // the server's own parseAddresses expects) -- but since a plain address
 // already contains commas itself, there's no safe way to *infer* an
-// id,address file from commas alone. Instead this looks at the header
-// row's first field using the same guessRole heuristic Import Addresses
-// already uses ("id", "record id", "customer_id", "uuid", "ref#", etc.,
-// case-insensitive) -- an unambiguous, deliberate opt-in a plain
-// address list will never collide with. Requires id first, address
-// second (rest of the line) -- only handles this simple shape; a file
-// with street/city/state/zip split across separate columns still needs
-// Import Addresses' full mapping step. Anything that doesn't match is
-// treated as a plain address list, unchanged from before.
+// id,address file from commas alone. Two ways this still gets detected
+// unambiguously without ever misreading a plain address list:
+//
+// 1. A header row whose first field guesses as 'id' via the same
+//    heuristic Import Addresses already uses ("id", "record id",
+//    "customer_id", "uuid", "ref#", etc., case-insensitive).
+// 2. No header at all, but *every* line's first field is bare digits
+//    (see looksLikeBareNumericId) -- a file whose id column just never
+//    got a header row of its own.
+//
+// Either way this only handles the simple two-column shape (id + one
+// combined address column); a file with street/city/state/zip split
+// across separate columns still needs Import Addresses' full mapping
+// step. Anything that matches neither is treated as a plain address
+// list, unchanged from before.
 function parsePickedFile(raw: string): { content: string; ids: string[] | null } {
   const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.length < 2) return { content: raw, ids: null };
+  if (lines.length === 0) return { content: raw, ids: null };
 
-  const [headerId, headerAddress] = splitAtFirstComma(lines[0]);
-  if (guessRole(headerId) !== 'id' || guessRole(headerAddress) === 'id') {
-    return { content: raw, ids: null };
+  if (lines.length >= 2) {
+    const [headerId, headerAddress] = splitAtFirstComma(lines[0]);
+    if (guessRole(headerId) === 'id' && guessRole(headerAddress) !== 'id') {
+      const ids: string[] = [];
+      const addresses: string[] = [];
+      for (const line of lines.slice(1)) {
+        const [id, address] = splitAtFirstComma(line);
+        ids.push(id);
+        addresses.push(address);
+      }
+      return { content: addresses.join('\n'), ids };
+    }
   }
 
-  const ids: string[] = [];
-  const addresses: string[] = [];
-  for (const line of lines.slice(1)) {
-    const [id, address] = splitAtFirstComma(line);
-    ids.push(id);
-    addresses.push(address);
+  const rows = lines.map(splitAtFirstComma);
+  if (rows.every(([id]) => looksLikeBareNumericId(id))) {
+    return {
+      content: rows.map(([, address]) => address).join('\n'),
+      ids: rows.map(([id]) => id),
+    };
   }
-  return { content: addresses.join('\n'), ids };
+
+  return { content: raw, ids: null };
 }
 
 export default function Batch() {
