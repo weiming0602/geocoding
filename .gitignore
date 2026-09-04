@@ -6,6 +6,14 @@ venv/
 build/
 dist/
 
+# Real credentials (PayPal keys, SES/AWS keys, DSNs, etc.) -- every
+# subproject's own .env (geocoding-server, ui/desktop, ui/mobile) and
+# local override files. Never actually enforced before now; discovered
+# a real live PayPal secret sitting unprotected in geocoding-server/.env.
+.env
+.env.local
+.env.*.local
+
 # Ingested databases and raw shapefile inputs are large/local artifacts
 data/*
 !data/.gitkeep

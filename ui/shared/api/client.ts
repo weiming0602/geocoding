@@ -18,7 +18,9 @@ import type {
   RoadAlertsUsernameResponse,
   RoadRerouteResponse,
   RoadSignal,
+  RoadSignalSeverity,
   RoadSignalsResponse,
+  TestRoadSignalsResponse,
   TestWeightedPoint,
   TestWeightedPointsResponse,
   WeightedPointPingResponse,
@@ -422,4 +424,35 @@ export function getWeightedPoints(
 ): Promise<WeightedPointsResponse> {
   const qs = new URLSearchParams({ email: params.email, serviceKey: params.serviceKey });
   return getJson<WeightedPointsResponse>(baseUrl, `/road-alerts/weighted-points?${qs.toString()}`);
+}
+
+export function addTestRoadSignal(
+  params: {
+    email: string;
+    serviceKey: string;
+    latitude: number;
+    longitude: number;
+    roadway?: string;
+    description?: string;
+    severity?: RoadSignalSeverity;
+  },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<RoadSignal> {
+  return postJson<RoadSignal>(baseUrl, '/road-alerts/test/signals', params);
+}
+
+export function getTestRoadSignals(
+  params: { email: string; serviceKey: string },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<TestRoadSignalsResponse> {
+  const qs = new URLSearchParams({ email: params.email, serviceKey: params.serviceKey });
+  return getJson<TestRoadSignalsResponse>(baseUrl, `/road-alerts/test/signals?${qs.toString()}`);
+}
+
+export function clearTestRoadSignals(
+  params: { email: string; serviceKey: string },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<{ deleted: number }> {
+  const qs = new URLSearchParams({ email: params.email, serviceKey: params.serviceKey });
+  return deleteJson<{ deleted: number }>(baseUrl, `/road-alerts/test/signals?${qs.toString()}`);
 }

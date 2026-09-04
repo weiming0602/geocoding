@@ -14,6 +14,7 @@ import Pricing from './pages/Pricing';
 import Progress from './pages/Progress';
 import ReverseGeocode from './pages/ReverseGeocode';
 import RoadAlerts from './pages/RoadAlerts';
+import RoadAlertsSandbox from './pages/RoadAlertsSandbox';
 import { ImportAddressesStateProvider } from './state/ImportAddressesState';
 import { RecentLookupsProvider } from './state/RecentLookups';
 
@@ -30,6 +31,10 @@ export default function App() {
               <Route path="/reverse-geocode" element={<ReverseGeocode />} />
               <Route path="/find-places" element={<FindPlaces />} />
               <Route path="/road-alerts" element={<RoadAlerts />} />
+              {/* Hidden, same as /owner -- not in Layout's nav, reachable
+                  by direct URL only. A test-only console; see the page's
+                  own explainer for why. */}
+              <Route path="/road-alerts-sandbox" element={<RoadAlertsSandbox />} />
               <Route path="/import-addresses" element={<ImportAddresses />} />
               <Route path="/batch" element={<Batch />} />
               <Route path="/plan-quota" element={<PlanQuota />} />
