@@ -10,30 +10,40 @@ function rowsToCsv(rows) {
   return rows.map((row) => row.map(csvEscape).join(',')).join('\r\n') + '\r\n';
 }
 
-/** Splits geocodeBatch() results into a successes CSV and a failures CSV. */
-function resultsToCsv(results) {
+/**
+ * Splits geocodeBatch() results into a successes CSV and a failures CSV.
+ * `ids` (optional) is the client's own per-row identifier list -- from a
+ * picked file's id column, or the "add sequential IDs?" prompt (see
+ * ui/desktop's Batch.tsx) -- included as a leading `id` column only when
+ * it's an array whose length matches `results` exactly; a missing or
+ * mismatched array (e.g. a stale one from a previously-loaded file)
+ * silently omits the column entirely rather than risk attaching a wrong
+ * ID to a row.
+ */
+function resultsToCsv(results, ids) {
+  const idsMatch = Array.isArray(ids) && ids.length === results.length;
   const successRows = [
-    ['address', 'latitude', 'longitude', 'source', 'rangeSide', 'matchFullname'],
+    idsMatch
+      ? ['id', 'address', 'latitude', 'longitude', 'source', 'matchFullname']
+      : ['address', 'latitude', 'longitude', 'source', 'matchFullname'],
   ];
-  const errorRows = [['address', 'error']];
+  const errorRows = [idsMatch ? ['id', 'address', 'error'] : ['address', 'error']];
 
-  for (const result of results) {
+  results.forEach((result, i) => {
+    const idCell = idsMatch ? [ids[i]] : [];
     if (result.success) {
       successRows.push([
+        ...idCell,
         result.address,
         result.coordinates.latitude,
         result.coordinates.longitude,
         result.source,
-        // rangeSide only exists on an interpolation result -- an exact
-        // address_point match has no "side" to report, so this cell is
-        // blank rather than misleadingly guessed at.
-        result.source === 'interpolation' ? result.rangeSide : '',
         result.match.fullname,
       ]);
     } else {
-      errorRows.push([result.address, result.error]);
+      errorRows.push([...idCell, result.address, result.error]);
     }
-  }
+  });
 
   return { successCsv: rowsToCsv(successRows), errorCsv: rowsToCsv(errorRows) };
 }

@@ -100,6 +100,14 @@ export type BatchGeocodeResponse = {
 export type BatchSource = ({ filePath: string } | { fileContent: string }) & {
   email: string;
   serviceKey: string;
+  // Client-tracked per-row identifiers (a picked file's own id column, or
+  // the "add sequential IDs?" prompt) -- only meaningful to
+  // /geocode/batch/download (resultsCsv.js includes a leading `id`
+  // column only when this array's length matches the address count
+  // exactly); /geocode/batch itself ignores it, since the JSON results
+  // list is already zipped back together with the client's own id array
+  // positionally, client-side.
+  ids?: string[];
 };
 
 // GET /quota?email=...

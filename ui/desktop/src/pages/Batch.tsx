@@ -10,14 +10,6 @@ import { useMapMarkerCap } from '../useMapMarkerCap';
 
 type ForwardedFile = { fileContent: string; fileName?: string; ids?: string[] };
 
-// Minimal RFC 4180 quoting -- wraps a field in quotes (doubling any
-// quotes inside it) whenever it contains a comma, quote, or newline;
-// left alone otherwise. Good enough for values coming out of a CSV/
-// Excel import in the first place.
-function csvField(value: string): string {
-  return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-}
-
 // Splits a line into exactly two fields at its first comma -- the
 // second field is left as one opaque string even when it itself
 // contains more commas, which a real address always does ("123 Main
@@ -30,35 +22,61 @@ function splitAtFirstComma(line: string): [string, string] {
   return [line.slice(0, index).trim(), line.slice(index + 1).trim()];
 }
 
+// A real address's first comma-segment is always "<house number> <street
+// name>" ("63 Blackberry Place") -- digits followed by words, never bare
+// digits alone. So a line whose first field is *only* digits can't be a
+// plain address; it can only be an unlabeled id column that never named
+// itself with a header. Whitespace-trimmed, no sign/decimal (a service's
+// own primary key is never negative or fractional).
+function looksLikeBareNumericId(field: string): boolean {
+  return /^\d+$/.test(field.trim());
+}
+
 // A directly-picked file is normally just one address per line (what
 // the server's own parseAddresses expects) -- but since a plain address
 // already contains commas itself, there's no safe way to *infer* an
-// id,address file from commas alone. Instead this looks at the header
-// row's first field using the same guessRole heuristic Import Addresses
-// already uses ("id", "record id", "customer_id", "uuid", "ref#", etc.,
-// case-insensitive) -- an unambiguous, deliberate opt-in a plain
-// address list will never collide with. Requires id first, address
-// second (rest of the line) -- only handles this simple shape; a file
-// with street/city/state/zip split across separate columns still needs
-// Import Addresses' full mapping step. Anything that doesn't match is
-// treated as a plain address list, unchanged from before.
+// id,address file from commas alone. Two ways this still gets detected
+// unambiguously without ever misreading a plain address list:
+//
+// 1. A header row whose first field guesses as 'id' via the same
+//    heuristic Import Addresses already uses ("id", "record id",
+//    "customer_id", "uuid", "ref#", etc., case-insensitive).
+// 2. No header at all, but *every* line's first field is bare digits
+//    (see looksLikeBareNumericId) -- a file whose id column just never
+//    got a header row of its own.
+//
+// Either way this only handles the simple two-column shape (id + one
+// combined address column); a file with street/city/state/zip split
+// across separate columns still needs Import Addresses' full mapping
+// step. Anything that matches neither is treated as a plain address
+// list, unchanged from before.
 function parsePickedFile(raw: string): { content: string; ids: string[] | null } {
   const lines = raw.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
-  if (lines.length < 2) return { content: raw, ids: null };
+  if (lines.length === 0) return { content: raw, ids: null };
 
-  const [headerId, headerAddress] = splitAtFirstComma(lines[0]);
-  if (guessRole(headerId) !== 'id' || guessRole(headerAddress) === 'id') {
-    return { content: raw, ids: null };
+  if (lines.length >= 2) {
+    const [headerId, headerAddress] = splitAtFirstComma(lines[0]);
+    if (guessRole(headerId) === 'id' && guessRole(headerAddress) !== 'id') {
+      const ids: string[] = [];
+      const addresses: string[] = [];
+      for (const line of lines.slice(1)) {
+        const [id, address] = splitAtFirstComma(line);
+        ids.push(id);
+        addresses.push(address);
+      }
+      return { content: addresses.join('\n'), ids };
+    }
   }
 
-  const ids: string[] = [];
-  const addresses: string[] = [];
-  for (const line of lines.slice(1)) {
-    const [id, address] = splitAtFirstComma(line);
-    ids.push(id);
-    addresses.push(address);
+  const rows = lines.map(splitAtFirstComma);
+  if (rows.every(([id]) => looksLikeBareNumericId(id))) {
+    return {
+      content: rows.map(([, address]) => address).join('\n'),
+      ids: rows.map(([id]) => id),
+    };
   }
-  return { content: addresses.join('\n'), ids };
+
+  return { content: raw, ids: null };
 }
 
 export default function Batch() {
@@ -92,6 +110,14 @@ export default function Batch() {
   const [forwardedIds, setForwardedIds] = useState<string[] | null>(
     () => (location.state as ForwardedFile | null)?.ids ?? null
   );
+  // Set right after picking a file, cleared once the user answers --
+  // 'detected' means parsePickedFile found an id column and is waiting
+  // on permission to actually use it; 'offer' means it found none and
+  // is offering to make one up (sequential 1, 2, 3, ...) instead.
+  // Either way, forwardedIds stays null until the user says yes.
+  const [idPrompt, setIdPrompt] = useState<
+    { kind: 'detected'; ids: string[] } | { kind: 'offer'; lineCount: number } | null
+  >(null);
   const [loading, setLoading] = useState(false);
   const [downloading, setDownloading] = useState(false);
   const [results, setResults] = useState<BatchResult[] | null>(null);
@@ -108,10 +134,21 @@ export default function Batch() {
   const mapWrapperRef = useRef<HTMLDivElement>(null);
 
   const hasSource = Boolean(pickedFile) || filePath.trim().length > 0;
+  // Only trust forwardedIds if it lines up 1:1 with results -- a
+  // mismatch shouldn't ever happen (results come back in the same order
+  // addresses were sent), but silently zipping mismatched arrays would
+  // attach the wrong ID to a row, which is worse than just not showing
+  // one at all.
+  const idsMatchResults = forwardedIds !== null && results !== null && forwardedIds.length === results.length;
   const buildSource = useCallback((): BatchSource => {
     const base = pickedFile ? { fileContent: pickedFile.content } : { filePath: filePath.trim() };
-    return { ...base, email: email.trim(), serviceKey: serviceKey.trim() };
-  }, [pickedFile, filePath, email, serviceKey]);
+    return {
+      ...base,
+      email: email.trim(),
+      serviceKey: serviceKey.trim(),
+      ids: idsMatchResults && forwardedIds ? forwardedIds : undefined,
+    };
+  }, [pickedFile, filePath, email, serviceKey, idsMatchResults, forwardedIds]);
 
   const handleChooseFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -120,9 +157,30 @@ export default function Batch() {
     const raw = await file.text();
     const { content, ids } = parsePickedFile(raw);
     setPickedFile({ name: file.name, content });
-    setForwardedIds(ids);
+    setForwardedIds(null);
     setResults(null);
+    if (ids) {
+      setIdPrompt({ kind: 'detected', ids });
+    } else {
+      const lineCount = content.split(/\r?\n/).filter((line) => line.trim().length > 0).length;
+      setIdPrompt({ kind: 'offer', lineCount });
+    }
   }, []);
+
+  // useIds=false covers both "no, don't use the detected column" and "no
+  // thanks, don't make one up" -- either way forwardedIds just stays
+  // null, falling back to plain row-number position (see idsMatchResults).
+  const resolveIdPrompt = useCallback(
+    (useIds: boolean) => {
+      if (idPrompt?.kind === 'detected' && useIds) {
+        setForwardedIds(idPrompt.ids);
+      } else if (idPrompt?.kind === 'offer' && useIds) {
+        setForwardedIds(Array.from({ length: idPrompt.lineCount }, (_, i) => String(i + 1)));
+      }
+      setIdPrompt(null);
+    },
+    [idPrompt]
+  );
 
   const handleBatchGeocode = useCallback(async () => {
     // No client-side check that email/serviceKey are non-empty -- the
@@ -227,43 +285,6 @@ export default function Batch() {
     rowRefs.current[index]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, []);
 
-  // Only trust forwardedIds if it lines up 1:1 with results -- a
-  // mismatch shouldn't ever happen (results come back in the same order
-  // addresses were sent), but silently zipping mismatched arrays would
-  // attach the wrong ID to a row, which is worse than just not showing
-  // one at all.
-  const idsMatchResults = forwardedIds !== null && results !== null && forwardedIds.length === results.length;
-
-  const handleDownloadCsv = useCallback(() => {
-    if (!results || !idsMatchResults || !forwardedIds) return;
-    const header = ['#', 'ID', 'Address', 'Success', 'Latitude', 'Longitude', 'Side', 'Error'];
-    const lines = [header.join(',')];
-    results.forEach((result, i) => {
-      const row = result.success
-        ? [
-            String(i + 1),
-            forwardedIds[i],
-            result.address,
-            'true',
-            String(result.coordinates.latitude),
-            String(result.coordinates.longitude),
-            result.source === 'interpolation' ? result.rangeSide : '',
-            '',
-          ]
-        : [String(i + 1), forwardedIds[i], result.address, 'false', '', '', '', result.error];
-      lines.push(row.map(csvField).join(','));
-    });
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
-    const objectUrl = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = objectUrl;
-    link.download = 'batch-geocode-results.csv';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(objectUrl);
-  }, [results, idsMatchResults, forwardedIds]);
-
   return (
     <div>
       <PageHeader icon="batch">Batch geocoding</PageHeader>
@@ -311,11 +332,55 @@ export default function Batch() {
             <label>Resource file (one address per line)</label>
             <button
               className="btn btn-primary btn-block"
-              onClick={() => (pickedFile ? setPickedFile(null) : fileInputRef.current?.click())}
+              onClick={() => {
+                if (pickedFile) {
+                  setPickedFile(null);
+                  setForwardedIds(null);
+                  setIdPrompt(null);
+                } else {
+                  fileInputRef.current?.click();
+                }
+              }}
             >
               {pickedFile ? `Clear "${pickedFile.name}"` : 'Choose File'}
             </button>
             <input ref={fileInputRef} type="file" style={{ display: 'none' }} onChange={handleChooseFile} />
+
+            {idPrompt && (
+              <div className="card elev-sm" style={{ padding: 'var(--space-3)', marginTop: 'var(--space-2)' }}>
+                {idPrompt.kind === 'detected' ? (
+                  <>
+                    <p style={{ margin: '0 0 var(--space-2)', fontSize: 13 }}>
+                      This file has a column that looks like a primary key. Use it to identify each
+                      address in your results?
+                    </p>
+                    <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                      <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={() => resolveIdPrompt(true)}>
+                        Yes, use it
+                      </button>
+                      <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => resolveIdPrompt(false)}>
+                        No, just number them
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p style={{ margin: '0 0 var(--space-2)', fontSize: 13 }}>
+                      This file has no ID column of its own. Add a sequential ID (1, 2, 3, ...) to each
+                      address, so it's easier to match up results afterward?
+                    </p>
+                    <div style={{ display: 'flex', gap: 'var(--space-2)' }}>
+                      <button className="btn btn-primary" style={{ fontSize: 12 }} onClick={() => resolveIdPrompt(true)}>
+                        Yes, add IDs
+                      </button>
+                      <button className="btn btn-secondary" style={{ fontSize: 12 }} onClick={() => resolveIdPrompt(false)}>
+                        No thanks
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
 
             {/* De-emphasized on purpose -- this only works when the app and
                 geocoding-server share a filesystem (a same-host dev/test
@@ -359,10 +424,18 @@ export default function Batch() {
             91 Chestnut St, Portland, ME 04101{'\n'}13 Deerfield Dr, Brunswick, ME 04011{'\n'}997
             Pequawket Trl, Standish, ME 04091
           </div>
-          <button className="btn btn-primary btn-block" onClick={handleBatchGeocode} disabled={loading || downloading}>
+          <button
+            className="btn btn-primary btn-block"
+            onClick={handleBatchGeocode}
+            disabled={loading || downloading || Boolean(idPrompt)}
+          >
             {loading ? 'Geocoding…' : 'Batch geocode'}
           </button>
-          <button className="btn btn-secondary btn-block" onClick={handleDownload} disabled={loading || downloading}>
+          <button
+            className="btn btn-secondary btn-block"
+            onClick={handleDownload}
+            disabled={loading || downloading || Boolean(idPrompt)}
+          >
             {downloading ? 'Preparing…' : 'Download results (ZIP)'}
           </button>
           {quota && (
@@ -382,15 +455,8 @@ export default function Batch() {
         <div>
           {results && (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-3)' }}>
-                <div className="card-title" style={{ marginBottom: 0 }}>
-                  {successCount} of {results.length} succeeded
-                </div>
-                {idsMatchResults && (
-                  <button className="btn btn-secondary" onClick={handleDownloadCsv}>
-                    Download results as CSV (with ID)
-                  </button>
-                )}
+              <div className="card-title" style={{ marginBottom: 'var(--space-3)' }}>
+                {successCount} of {results.length} succeeded
               </div>
               {forwardedIds && !idsMatchResults && (
                 <p className="card-body" style={{ color: '#a4402a', marginBottom: 'var(--space-3)' }}>

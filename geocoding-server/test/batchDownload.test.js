@@ -57,6 +57,40 @@ test('POST /geocode/batch/download streams a ZIP with results.csv and errors.csv
     }
   }));
 
+test('POST /geocode/batch/download includes an id column when ids matches the address count', () =>
+  withTestServer(async ({ port, usersDb }) => {
+    const user = await upsertUser(usersDb, 'alice@example.com', 100);
+    const addressFile = writeTempAddressFile(
+      ['997 Pequawket Trl, Standish, ME 04091', '1 Nonexistent Way, Nowhere, ME 00000'].join('\n')
+    );
+
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/geocode/batch/download`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: 'alice@example.com',
+          serviceKey: user.service_key,
+          filePath: addressFile,
+          ids: ['CUST-1', 'CUST-2'],
+        }),
+      });
+
+      assert.equal(response.status, 200);
+      const buffer = Buffer.from(await response.arrayBuffer());
+      const entries = parseZipEntries(buffer);
+      const resultsCsv = entries.find((e) => e.name === 'results.csv').content;
+      const errorsCsv = entries.find((e) => e.name === 'errors.csv').content;
+
+      assert.match(resultsCsv, /^id,address,latitude,longitude,source,matchFullname/);
+      assert.match(resultsCsv, /^CUST-1,/m);
+      assert.match(errorsCsv, /^id,address,error/);
+      assert.match(errorsCsv, /^CUST-2,/m);
+    } finally {
+      fs.unlinkSync(addressFile);
+    }
+  }));
+
 test('POST /geocode/batch/download with a missing file returns JSON 404', () =>
   withTestServer(async ({ port }) => {
     const missingPath = path.join(os.tmpdir(), `batch-download-missing-${Date.now()}-${Math.random()}.txt`);

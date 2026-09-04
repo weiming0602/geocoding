@@ -124,6 +124,13 @@ function GeocodingHelp() {
         rest of the batch. Results can be downloaded as a ZIP. Note: quota is only checked and recorded
         for email delivery, not for a plain batch run or ZIP download.
       </p>
+      <p>
+        If your file's first line is a header like <code>id,address</code> (or <code>customer_id</code>,
+        <code>record id</code>, <code>uuid</code>, and similar), Batch geocoding notices and asks whether
+        to use that column to identify each row in your results — handy for matching a result back to
+        your own records. If your file has no ID column at all, it offers to add a simple sequential one
+        (1, 2, 3, ...) instead, for the same reason. Either way, nothing is applied without asking first.
+      </p>
 
       <h2>Plan &amp; quota</h2>
       <p>
