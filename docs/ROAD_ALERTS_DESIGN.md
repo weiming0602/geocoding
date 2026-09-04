@@ -30,36 +30,48 @@ needs a new *layer* on top of the one that's already there.
 
 ## Privacy model
 
-The core design decision: **store which streets a user drives, not where
-they've been or when.**
+**Revised 2026-09-03: weighted points are stored server-side, in
+`geocoding_users`, not on-device.** The original design below called for on-device-only storage
+specifically because a person's *routine sequence* of segments (home →
+... → work) is close to as re-identifying as raw coordinates. The
+decision to move server-side rests on deliberately excluding exactly
+that identifying part: a weighted point is only ever a location driven
+*through* repeatedly — often literally unremarkable, "the middle of
+nowhere, but iterated often" — never a trip's start or end. Recording an
+`isEndpoint` ping is a no-op (see `weightedPoints.js`) specifically so a
+destination (home, work, a specific store) never becomes a stored point,
+however often it's visited. That exclusion is what makes server-side
+storage acceptable here; it would not make the *original* home→work
+sequence problem go away on its own.
 
-- No raw GPS trace is retained. Positions are map-matched to `streets`
-  segments (by `tlid`) as they're observed, and only the *aggregate*
-  (how often a segment is used) is kept — not the individual trip that
-  produced it.
-- A segment's weight is **recency-weighted, not a flat lifetime count** —
+The core design decision remains: **store which streets a user drives
+routinely, not where they've been, when, or where they started/ended.**
+
+- No raw trip trace is retained, and no destination (a session's first or
+  last ping) is ever recorded — only points strictly between them.
+- A point's weight is **recency-weighted, not a flat lifetime count** —
   old driving patterns fade out (e.g. a former commute) rather than
-  staying "routine" forever just because it once was.
-- Only segments whose weight crosses a threshold are persisted at all;
-  everything else (a one-off trip, a detour, anywhere driven once) is
-  discarded outright, not just down-weighted.
-- **Recompute cadence: roughly every 3–4 months, not continuously.**
-  Individual trips don't need to trigger a live weight update — the
-  routine subgraph is batch-recomputed from recent trip data on that
-  cycle instead. This matches what the model is actually for (slow-
-  moving life patterns, not day-to-day variation), and keeps the update
-  itself cheap and infrequent rather than something running per-trip.
-- **Why segment-level storage isn't full anonymization on its own**,
-  worth remembering when this gets built: coarsening a trace to
-  street-level precision removes exact position-along-the-street, but a
-  person's *routine sequence* of segments (home segment → ... → work
-  segment) is still close to as re-identifying as raw coordinates would
-  be — the same reason a handful of GPS points is enough to fingerprint
-  most people in mobility research. The real privacy protection has to
-  come from **keeping the personal routine model itself access-controlled
-  — on-device by default** — not from the segment representation alone.
-  Segment-level storage is good data minimization on top of that, not a
-  substitute for it.
+  staying "routine" forever just because it once was. Implemented as an
+  exponential decay applied at *read* time (`getWeightedPoints`), not a
+  periodic rewrite of stored rows.
+- **Cadence: continuous, not batch.** The original design called for a
+  batch recompute every 3-4 months rather than a live per-trip update.
+  The shipped implementation instead updates a point's weight on every
+  matching ping, immediately. This is a real, deliberate deviation from
+  the original plan, made for simplicity (no separate scheduled job,
+  no distinction between "recorded" and "not yet reflected" data) — worth
+  revisiting if per-ping writes ever become a real cost at scale, but not
+  a concern at current usage.
+- Points are persisted starting from their very first ping (weight 1),
+  not held back until they cross a threshold — unlike the original design
+  ("only segments whose weight crosses a threshold are persisted at all").
+  A one-off visit still creates a row; it just decays away (and stays
+  below `roadAlertsMatching.ts`'s `minWeight` threshold for alerting)
+  rather than never having been written. Simpler to reason about, at the
+  cost of some low-weight noise sitting in the table.
+- Storage is by raw coordinate (`latitude`/`longitude`) with an optional
+  `tlid`, matching the existing `WeightedPoint` shape `roadAlertsMatching.ts`
+  already expects — not a `tlid`-only segment model as sketched below.
 - Outbound network calls for hazard data are **anonymous by construction**
   — "what's in this bounding box right now" reveals nothing about a
   specific user, since it's the same query shape regardless of who's
@@ -209,8 +221,11 @@ Informal, matching the existing convention of no DB-enforced foreign
 keys (see [DATA_MODEL.md](DATA_MODEL.md)) — matched by shared identifier,
 not a schema-level constraint.
 
-**`user_routine_segments`** — the per-user weighted subgraph.
-`user_id`, `tlid` (references `streets.tlid`), `weight`, `last_traveled_at`.
+**`road_alerts_weighted_points`** (as shipped, in `geocoding_users` — see
+"Revised" note under Privacy model above; supersedes this section's
+originally-sketched on-device `user_routine_segments`) — the per-user
+weighted set. `email`, `latitude`, `longitude`, `weight`, `tlid`
+(optional, references `streets.tlid` when known), `last_pinged_at`.
 
 **`road_signals`** — the hazard/weather/event content itself.
 `id`, `type` (`traffic_hazard` / `weather` / `public_event` / ...),
