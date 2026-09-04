@@ -15,6 +15,7 @@ import PrivacyPolicy from './pages/PrivacyPolicy';
 import Progress from './pages/Progress';
 import ReverseGeocode from './pages/ReverseGeocode';
 import RoadAlerts from './pages/RoadAlerts';
+import RoadAlertsSandbox from './pages/RoadAlertsSandbox';
 import RoadAlertsTest from './pages/RoadAlertsTest';
 import SiteMap from './pages/SiteMap';
 import TermsOfUse from './pages/TermsOfUse';
@@ -35,6 +36,10 @@ export default function App() {
               <Route path="/find-places" element={<FindPlaces />} />
               <Route path="/road-alerts" element={<RoadAlerts />} />
               <Route path="/road-alert-test" element={<RoadAlertsTest />} />
+              {/* Hidden, same as /owner -- not in Layout's nav, reachable
+                  by direct URL only. A test-only console; see the page's
+                  own explainer for why. */}
+              <Route path="/road-alerts-sandbox" element={<RoadAlertsSandbox />} />
               <Route path="/import-addresses" element={<ImportAddresses />} />
               <Route path="/batch" element={<Batch />} />
               <Route path="/plan-quota" element={<PlanQuota />} />
