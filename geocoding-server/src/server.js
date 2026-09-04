@@ -259,7 +259,7 @@ app.post('/geocode/batch/download', async (req, res) => {
     return res.status(500).json({ error: 'internal error' });
   }
 
-  const { successCsv, errorCsv } = resultsToCsv(results);
+  const { successCsv, errorCsv } = resultsToCsv(results, req.body && req.body.ids);
   const zipBuffer = buildZip([
     { name: 'results.csv', content: successCsv },
     { name: 'errors.csv', content: errorCsv },

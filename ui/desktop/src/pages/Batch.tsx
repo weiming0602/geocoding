@@ -10,14 +10,6 @@ import { useMapMarkerCap } from '../useMapMarkerCap';
 
 type ForwardedFile = { fileContent: string; fileName?: string; ids?: string[] };
 
-// Minimal RFC 4180 quoting -- wraps a field in quotes (doubling any
-// quotes inside it) whenever it contains a comma, quote, or newline;
-// left alone otherwise. Good enough for values coming out of a CSV/
-// Excel import in the first place.
-function csvField(value: string): string {
-  return /[",\n]/.test(value) ? `"${value.replace(/"/g, '""')}"` : value;
-}
-
 // Splits a line into exactly two fields at its first comma -- the
 // second field is left as one opaque string even when it itself
 // contains more commas, which a real address always does ("123 Main
@@ -142,10 +134,21 @@ export default function Batch() {
   const mapWrapperRef = useRef<HTMLDivElement>(null);
 
   const hasSource = Boolean(pickedFile) || filePath.trim().length > 0;
+  // Only trust forwardedIds if it lines up 1:1 with results -- a
+  // mismatch shouldn't ever happen (results come back in the same order
+  // addresses were sent), but silently zipping mismatched arrays would
+  // attach the wrong ID to a row, which is worse than just not showing
+  // one at all.
+  const idsMatchResults = forwardedIds !== null && results !== null && forwardedIds.length === results.length;
   const buildSource = useCallback((): BatchSource => {
     const base = pickedFile ? { fileContent: pickedFile.content } : { filePath: filePath.trim() };
-    return { ...base, email: email.trim(), serviceKey: serviceKey.trim() };
-  }, [pickedFile, filePath, email, serviceKey]);
+    return {
+      ...base,
+      email: email.trim(),
+      serviceKey: serviceKey.trim(),
+      ids: idsMatchResults && forwardedIds ? forwardedIds : undefined,
+    };
+  }, [pickedFile, filePath, email, serviceKey, idsMatchResults, forwardedIds]);
 
   const handleChooseFile = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -281,43 +284,6 @@ export default function Batch() {
     setSelectedIndex(index);
     rowRefs.current[index]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
   }, []);
-
-  // Only trust forwardedIds if it lines up 1:1 with results -- a
-  // mismatch shouldn't ever happen (results come back in the same order
-  // addresses were sent), but silently zipping mismatched arrays would
-  // attach the wrong ID to a row, which is worse than just not showing
-  // one at all.
-  const idsMatchResults = forwardedIds !== null && results !== null && forwardedIds.length === results.length;
-
-  const handleDownloadCsv = useCallback(() => {
-    if (!results || !idsMatchResults || !forwardedIds) return;
-    const header = ['#', 'ID', 'Address', 'Success', 'Latitude', 'Longitude', 'Side', 'Error'];
-    const lines = [header.join(',')];
-    results.forEach((result, i) => {
-      const row = result.success
-        ? [
-            String(i + 1),
-            forwardedIds[i],
-            result.address,
-            'true',
-            String(result.coordinates.latitude),
-            String(result.coordinates.longitude),
-            result.source === 'interpolation' ? result.rangeSide : '',
-            '',
-          ]
-        : [String(i + 1), forwardedIds[i], result.address, 'false', '', '', '', result.error];
-      lines.push(row.map(csvField).join(','));
-    });
-    const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
-    const objectUrl = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = objectUrl;
-    link.download = 'batch-geocode-results.csv';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(objectUrl);
-  }, [results, idsMatchResults, forwardedIds]);
 
   return (
     <div>
@@ -489,15 +455,8 @@ export default function Batch() {
         <div>
           {results && (
             <>
-              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-3)' }}>
-                <div className="card-title" style={{ marginBottom: 0 }}>
-                  {successCount} of {results.length} succeeded
-                </div>
-                {idsMatchResults && (
-                  <button className="btn btn-secondary" onClick={handleDownloadCsv}>
-                    Download results as CSV (with ID)
-                  </button>
-                )}
+              <div className="card-title" style={{ marginBottom: 'var(--space-3)' }}>
+                {successCount} of {results.length} succeeded
               </div>
               {forwardedIds && !idsMatchResults && (
                 <p className="card-body" style={{ color: '#a4402a', marginBottom: 'var(--space-3)' }}>

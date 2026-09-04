@@ -349,7 +349,10 @@ describe('ImportAddresses ID column (forwarded through to Batch results)', () =>
       const resultsTable = within(screen.getAllByRole('table').slice(-1)[0]);
       expect(resultsTable.getByText('CUST-1')).toBeInTheDocument();
       expect(resultsTable.getByText('CUST-2')).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Download results as CSV (with ID)' })).toBeInTheDocument();
+      // A single, integrated download now covers the ID case too --
+      // ids ride along inside the same ZIP request (see BatchSource's
+      // ids field), no separate CSV-with-ID button anymore.
+      expect(screen.getByRole('button', { name: 'Download results (ZIP)' })).toBeInTheDocument();
     } finally {
       globalThis.fetch = savedFetch;
     }
