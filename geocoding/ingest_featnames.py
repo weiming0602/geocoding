@@ -33,6 +33,13 @@ def sync_street_names_zip_state(conn: psycopg.Connection) -> int:
     """Backfills street_names.zipl/zipr/state/state_abbr from the matching
     streets row, for any street_names rows that don't have it yet.
 
+    Checks zipl and state_abbr independently (not just zipl) because
+    streets.state_abbr/state went unpopulated for a long time after zipl
+    already was (see ingest.py) -- a row synced before that fix has zipl
+    set but state_abbr still NULL, and would otherwise never get resynced
+    since it no longer matches a "hasn't been synced yet" check that only
+    looks at zipl.
+
     Denormalized on purpose: geocode.js needs to filter candidates by
     name *and* zip *and* state together, and doing that via a runtime
     JOIN from street_names back to streets -- once per zip-matched
@@ -63,7 +70,7 @@ def sync_street_names_zip_state(conn: psycopg.Connection) -> int:
             state_abbr = streets.state_abbr
         FROM streets
         WHERE streets.tlid = street_names.tlid
-          AND street_names.zipl IS NULL
+          AND (street_names.zipl IS NULL OR street_names.state_abbr IS NULL)
         """
     )
     conn.commit()
