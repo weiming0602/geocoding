@@ -2,7 +2,7 @@ import { Link, NavLink } from 'react-router';
 import type { ReactNode } from 'react';
 
 import { isMobileDevice } from '../deviceDetection';
-import { BrandMark, BrandMarkOrbit, Icon, type IconName } from './icons';
+import { BrandMark, Icon, type IconName } from './icons';
 import InstallAppBanner from './InstallAppBanner';
 import MobileRedirectBanner, { MOBILE_APP_URL } from './MobileRedirectBanner';
 
@@ -85,7 +85,7 @@ export default function Layout({ children }: { children: ReactNode }) {
       {showMobileRedirect ? <MobileRedirectBanner /> : <InstallAppBanner />}
       <nav className="nav">
         <div className="nav-brand">
-          <BrandMarkOrbit size={32} />
+          <BrandMark size={32} />
           Meridian
         </div>
         <div className="nav-links">
