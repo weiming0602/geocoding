@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from 'react';
 import { Link, NavLink, useLocation } from 'react-router';
 import type { ReactNode } from 'react';
 
@@ -7,120 +6,35 @@ import { BrandMark, Icon, type IconName } from './icons';
 import InstallAppBanner from './InstallAppBanner';
 import MobileRedirectBanner, { MOBILE_APP_URL } from './MobileRedirectBanner';
 
-type NavSubLink = { to: string; label: string; icon: IconName };
-type NavEntry =
-  // matchPrefixes: extra routes (beyond `to` itself) that should still
-  // highlight this entry -- only Batch needs this, since Import
-  // addresses/Find places moved from a nav dropdown (see BATCH_ROUTES
-  // below) to BatchTabs.tsx's page-level tab strip, but the single
-  // "Batch" nav entry should still read as active from any of the three.
-  | { kind: 'link'; to: string; label: string; icon: IconName; end?: boolean; matchPrefixes?: string[] }
-  | { kind: 'group'; label: string; icon: IconName; items: NavSubLink[] };
+// matchPrefixes: extra routes (beyond `to` itself) that should still
+// highlight this entry -- Batch and Account both cover several pages
+// that link to each other via their own page-level tab strip
+// (BatchTabs.tsx/AccountTabs.tsx) rather than a nav dropdown, so the
+// single nav entry for each needs to read as active from any of them.
+type NavEntry = { to: string; label: string; icon: IconName; end?: boolean; matchPrefixes?: string[] };
 
-// Kept in sync with BatchTabs.tsx's own TABS list by hand -- both are
-// short and change rarely enough that a shared import would be more
-// indirection than it's worth.
+// Kept in sync with BatchTabs.tsx/AccountTabs.tsx's own TABS lists by
+// hand -- both pairs are short and change rarely enough that a shared
+// import would be more indirection than it's worth.
 const BATCH_ROUTES = ['/batch', '/import-addresses', '/find-places'];
+const ACCOUNT_ROUTES = ['/plan-quota', '/pricing', '/progress', '/help'];
 
 // Find places and Import addresses both exist to feed Batch geocode an
-// address list (their own "Send to Batch" actions), not standalone
-// destinations -- switching between all three lives in BatchTabs.tsx's
-// page-level tab strip (rendered at the top of each of the three pages)
-// rather than a nav dropdown, so this is a single link, not a group.
-// The account/info pages still get the dropdown treatment: none of them
-// are a core geocoding tool, so they don't need equal billing with
-// Geocode/Reverse geocode/Batch/Road Alerts in the primary nav, and
-// (unlike Batch's three pages) they don't already link to each other.
+// address list (their own "Send to Batch" actions); Plan & quota/
+// Pricing/Progress/Help are account/info pages, not core geocoding
+// tools. Neither needed a full nav dropdown -- both groups' pages
+// already/now link to each other via a page-level tab strip, so the
+// primary nav only needs one entry per group (matchPrefixes keeps it
+// highlighted from any page in the group).
 const NAV_ENTRIES: NavEntry[] = [
-  { kind: 'link', to: '/', label: 'Overview', icon: 'overview', end: true },
-  { kind: 'link', to: '/geocode', label: 'Geocode', icon: 'geocode' },
-  { kind: 'link', to: '/reverse-geocode', label: 'Reverse geocode', icon: 'reverseGeocode' },
-  { kind: 'link', to: '/batch', label: 'Batch', icon: 'batch', matchPrefixes: BATCH_ROUTES },
-  { kind: 'link', to: '/road-alerts', label: 'Road Alerts', icon: 'roadAlerts' },
-  { kind: 'link', to: '/road-alert-test', label: 'Road Alert Test', icon: 'roadAlerts' },
-  {
-    kind: 'group',
-    label: 'Account',
-    icon: 'planQuota',
-    items: [
-      { to: '/plan-quota', label: 'Plan & quota', icon: 'planQuota' },
-      { to: '/pricing', label: 'Pricing', icon: 'pricing' },
-      { to: '/progress', label: 'Progress', icon: 'progress' },
-      { to: '/help', label: 'Help', icon: 'help' },
-    ],
-  },
+  { to: '/', label: 'Overview', icon: 'overview', end: true },
+  { to: '/geocode', label: 'Geocode', icon: 'geocode' },
+  { to: '/reverse-geocode', label: 'Reverse geocode', icon: 'reverseGeocode' },
+  { to: '/batch', label: 'Batch', icon: 'batch', matchPrefixes: BATCH_ROUTES },
+  { to: '/road-alerts', label: 'Road Alerts', icon: 'roadAlerts' },
+  { to: '/road-alert-test', label: 'Road Alert Test', icon: 'roadAlerts' },
+  { to: '/plan-quota', label: 'Account', icon: 'planQuota', matchPrefixes: ACCOUNT_ROUTES },
 ];
-
-// A single nav entry covering several related pages (e.g. every page
-// that feeds into Batch geocode) -- a trigger button styled like a
-// plain nav-item plus a floating panel of the real sub-page links.
-// Stays highlighted whenever the current route matches any of its
-// items, closes on an outside click/Escape/navigating, so collapsing
-// three-plus pages into one nav entry doesn't cost the "you are here"
-// signal a plain top-level link gives for free.
-function NavGroup({ label, icon, items }: { label: string; icon: IconName; items: NavSubLink[] }) {
-  const [open, setOpen] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const location = useLocation();
-  const isActive = items.some((item) => location.pathname === item.to);
-
-  useEffect(() => {
-    setOpen(false);
-  }, [location.pathname]);
-
-  useEffect(() => {
-    if (!open) return;
-    const onPointerDown = (e: MouseEvent) => {
-      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
-    };
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setOpen(false);
-    };
-    document.addEventListener('mousedown', onPointerDown);
-    document.addEventListener('keydown', onKeyDown);
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown);
-      document.removeEventListener('keydown', onKeyDown);
-    };
-  }, [open]);
-
-  return (
-    <div className="nav-dropdown" ref={containerRef}>
-      <button
-        type="button"
-        className={`nav-item nav-item-dropdown-trigger${isActive ? ' active' : ''}`}
-        aria-haspopup="true"
-        aria-expanded={open}
-        onClick={() => setOpen((o) => !o)}
-      >
-        <span className="nav-item-tile">
-          <Icon name={icon} size={12} />
-        </span>
-        {label}
-        <span className="nav-caret" aria-hidden="true">
-          ▾
-        </span>
-      </button>
-      {open && (
-        <div className="nav-dropdown-panel" role="menu">
-          {items.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              role="menuitem"
-              className={({ isActive }) => `nav-dropdown-item${isActive ? ' active' : ''}`}
-            >
-              <span className="nav-item-tile">
-                <Icon name={item.icon} size={12} />
-              </span>
-              {item.label}
-            </NavLink>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
 
 export default function Layout({ children }: { children: ReactNode }) {
   // Showing both banners would be a contradictory pitch to the same
@@ -192,26 +106,22 @@ export default function Layout({ children }: { children: ReactNode }) {
           Meridian
         </div>
         <div className="nav-links">
-          {NAV_ENTRIES.map((entry) =>
-            entry.kind === 'group' ? (
-              <NavGroup key={entry.label} label={entry.label} icon={entry.icon} items={entry.items} />
-            ) : (
-              <NavLink
-                key={entry.to}
-                to={entry.to}
-                end={entry.end}
-                className={({ isActive }) => {
-                  const active = isActive || Boolean(entry.matchPrefixes?.includes(location.pathname));
-                  return `nav-item${active ? ' active' : ''}`;
-                }}
-              >
-                <span className="nav-item-tile">
-                  <Icon name={entry.icon} size={12} />
-                </span>
-                {entry.label}
-              </NavLink>
-            )
-          )}
+          {NAV_ENTRIES.map((entry) => (
+            <NavLink
+              key={entry.to}
+              to={entry.to}
+              end={entry.end}
+              className={({ isActive }) => {
+                const active = isActive || Boolean(entry.matchPrefixes?.includes(location.pathname));
+                return `nav-item${active ? ' active' : ''}`;
+              }}
+            >
+              <span className="nav-item-tile">
+                <Icon name={entry.icon} size={12} />
+              </span>
+              {entry.label}
+            </NavLink>
+          ))}
         </div>
       </nav>
       <div

@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 
 import { getQuota } from '../../../shared/api/client';
 import type { QuotaStatus } from '../../../shared/api/types';
+import AccountTabs from '../components/AccountTabs';
 import PageHeader from '../components/PageHeader';
 
 export default function PlanQuota() {
@@ -34,6 +35,7 @@ export default function PlanQuota() {
   return (
     <div>
       <PageHeader icon="planQuota">Plan &amp; quota</PageHeader>
+      <AccountTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
         Usage resets on the 1st of each calendar month, per account email.
       </p>

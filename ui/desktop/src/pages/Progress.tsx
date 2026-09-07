@@ -1,10 +1,12 @@
 import { MILESTONES_NEWEST_FIRST } from '../../../shared/milestones';
+import AccountTabs from '../components/AccountTabs';
 import PageHeader from '../components/PageHeader';
 
 export default function Progress() {
   return (
     <div style={{ maxWidth: 720, margin: '0 auto' }}>
       <PageHeader icon="progress">Progress</PageHeader>
+      <AccountTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
         A running record of what's shipped so far, and what's next.
       </p>
