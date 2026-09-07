@@ -9,31 +9,33 @@ import MobileRedirectBanner, { MOBILE_APP_URL } from './MobileRedirectBanner';
 
 type NavSubLink = { to: string; label: string; icon: IconName };
 type NavEntry =
-  | { kind: 'link'; to: string; label: string; icon: IconName; end?: boolean }
+  // matchPrefixes: extra routes (beyond `to` itself) that should still
+  // highlight this entry -- only Batch needs this, since Import
+  // addresses/Find places moved from a nav dropdown (see BATCH_ROUTES
+  // below) to BatchTabs.tsx's page-level tab strip, but the single
+  // "Batch" nav entry should still read as active from any of the three.
+  | { kind: 'link'; to: string; label: string; icon: IconName; end?: boolean; matchPrefixes?: string[] }
   | { kind: 'group'; label: string; icon: IconName; items: NavSubLink[] };
 
+// Kept in sync with BatchTabs.tsx's own TABS list by hand -- both are
+// short and change rarely enough that a shared import would be more
+// indirection than it's worth.
+const BATCH_ROUTES = ['/batch', '/import-addresses', '/find-places'];
+
 // Find places and Import addresses both exist to feed Batch geocode an
-// address list (their own "Send to Batch" actions), not as standalone
-// destinations -- grouping them under one "Batch" nav entry instead of
-// three top-level items each. Same reasoning groups the account/info
-// pages under "Account": none of them are a core geocoding tool, so
-// they don't need equal billing with Geocode/Reverse geocode/Batch/Road
-// Alerts in the primary nav. Both groups' pages are unchanged; this is
-// purely a navigation-level regrouping.
+// address list (their own "Send to Batch" actions), not standalone
+// destinations -- switching between all three lives in BatchTabs.tsx's
+// page-level tab strip (rendered at the top of each of the three pages)
+// rather than a nav dropdown, so this is a single link, not a group.
+// The account/info pages still get the dropdown treatment: none of them
+// are a core geocoding tool, so they don't need equal billing with
+// Geocode/Reverse geocode/Batch/Road Alerts in the primary nav, and
+// (unlike Batch's three pages) they don't already link to each other.
 const NAV_ENTRIES: NavEntry[] = [
   { kind: 'link', to: '/', label: 'Overview', icon: 'overview', end: true },
   { kind: 'link', to: '/geocode', label: 'Geocode', icon: 'geocode' },
   { kind: 'link', to: '/reverse-geocode', label: 'Reverse geocode', icon: 'reverseGeocode' },
-  {
-    kind: 'group',
-    label: 'Batch',
-    icon: 'batch',
-    items: [
-      { to: '/batch', label: 'Batch geocode', icon: 'batch' },
-      { to: '/import-addresses', label: 'Import addresses', icon: 'importAddresses' },
-      { to: '/find-places', label: 'Find places', icon: 'findPlaces' },
-    ],
-  },
+  { kind: 'link', to: '/batch', label: 'Batch', icon: 'batch', matchPrefixes: BATCH_ROUTES },
   { kind: 'link', to: '/road-alerts', label: 'Road Alerts', icon: 'roadAlerts' },
   { kind: 'link', to: '/road-alert-test', label: 'Road Alert Test', icon: 'roadAlerts' },
   {
@@ -138,6 +140,8 @@ export default function Layout({ children }: { children: ReactNode }) {
   // and try the other app while both are running locally.
   const mobileAppUrl = MOBILE_APP_URL || (import.meta.env.DEV ? 'http://localhost:8081' : undefined);
 
+  const location = useLocation();
+
   return (
     <div
       style={{
@@ -196,7 +200,10 @@ export default function Layout({ children }: { children: ReactNode }) {
                 key={entry.to}
                 to={entry.to}
                 end={entry.end}
-                className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+                className={({ isActive }) => {
+                  const active = isActive || Boolean(entry.matchPrefixes?.includes(location.pathname));
+                  return `nav-item${active ? ' active' : ''}`;
+                }}
               >
                 <span className="nav-item-tile">
                   <Icon name={entry.icon} size={12} />

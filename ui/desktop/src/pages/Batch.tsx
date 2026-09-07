@@ -5,6 +5,7 @@ import { batchGeocode, batchGeocodeDownload } from '../../../shared/api/client';
 import type { BatchResult, BatchSource } from '../../../shared/api/types';
 import { guessRole } from '../../../shared/importAddresses';
 import BatchMapView from '../components/BatchMapView';
+import BatchTabs from '../components/BatchTabs';
 import PageHeader from '../components/PageHeader';
 import { useMapMarkerCap } from '../useMapMarkerCap';
 
@@ -288,6 +289,7 @@ export default function Batch() {
   return (
     <div>
       <PageHeader icon="batch">Batch geocoding</PageHeader>
+      <BatchTabs />
       <p className="text-muted" style={{ marginBottom: arrivedFromImport ? 'var(--space-3)' : 'var(--space-6)' }}>
         Matches /geocode/batch — one address per line, checked against your account's monthly quota.
         Upload a file, or (if this app and geocoding-server share a filesystem) point at a
