@@ -2,6 +2,7 @@ import psycopg
 import shapefile
 
 from geocoding.ingest import ingest
+from geocoding.schema import CREATE_INDEXES_SQL, CREATE_TABLE_SQL
 
 
 def _write_sample_edges_shapefile(path):
@@ -175,6 +176,88 @@ def test_ingest_backfills_tnidf_tnidt_on_an_already_ingested_row(tmp_path, dsn):
     # (the WHERE ... IS DISTINCT FROM guard should skip a no-op update).
     third_count = ingest(second_shp.with_suffix(".shp"), dsn)
     assert third_count == 0
+
+
+def test_ingest_sets_state_abbr_and_state_from_statefp(tmp_path, dsn):
+    shp_path = tmp_path / "edges"
+
+    writer = shapefile.Writer(str(shp_path), shapeType=shapefile.POLYLINE)
+    writer.field("TLID", "C")
+    writer.field("FULLNAME", "C")
+    writer.field("LFROMADD", "C")
+    writer.field("LTOADD", "C")
+    writer.field("RFROMADD", "C")
+    writer.field("RTOADD", "C")
+    writer.field("ZIPL", "C")
+    writer.field("ZIPR", "C")
+    writer.field("MTFCC", "C")
+    writer.field("STATEFP", "C")
+    writer.field("COUNTYFP", "C")
+    writer.line([[(-70.5, 43.5), (-70.4, 43.6)]])
+    writer.record("101", "Main St", "100", "198", "101", "199", "04101", "04101", "S1400", "23", "005")
+    writer.close()
+
+    ingest(shp_path.with_suffix(".shp"), dsn)
+
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT state_abbr, state FROM streets WHERE tlid = '101'"
+        ).fetchone()
+
+    assert row == ("ME", "Maine")
+
+
+def test_ingest_leaves_state_abbr_null_for_unregistered_statefp(tmp_path, dsn):
+    shp_path = tmp_path / "edges"
+    _write_sample_edges_shapefile(shp_path)  # uses STATEFP "06" (California), not in STATES
+
+    ingest(shp_path.with_suffix(".shp"), dsn)
+
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT state_abbr, state FROM streets WHERE tlid = '101'"
+        ).fetchone()
+
+    assert row == (None, None)
+
+
+def test_ingest_backfills_state_abbr_on_an_already_ingested_row_missing_it(tmp_path, dsn):
+    # Simulates a row ingested before this fix existed: present, but with
+    # state_abbr/state never set.
+    with psycopg.connect(dsn) as conn:
+        conn.execute(CREATE_TABLE_SQL)
+        conn.execute(CREATE_INDEXES_SQL)
+        conn.execute(
+            "INSERT INTO streets (tlid, fullname, state_abbr, state) VALUES ('101', 'Main St', NULL, NULL)"
+        )
+        conn.commit()
+
+    shp_path = tmp_path / "edges"
+    writer = shapefile.Writer(str(shp_path), shapeType=shapefile.POLYLINE)
+    writer.field("TLID", "C")
+    writer.field("FULLNAME", "C")
+    writer.field("LFROMADD", "C")
+    writer.field("LTOADD", "C")
+    writer.field("RFROMADD", "C")
+    writer.field("RTOADD", "C")
+    writer.field("ZIPL", "C")
+    writer.field("ZIPR", "C")
+    writer.field("MTFCC", "C")
+    writer.field("STATEFP", "C")
+    writer.field("COUNTYFP", "C")
+    writer.line([[(-70.5, 43.5), (-70.4, 43.6)]])
+    writer.record("101", "Main St", "100", "198", "101", "199", "04101", "04101", "S1400", "23", "005")
+    writer.close()
+
+    count = ingest(shp_path.with_suffix(".shp"), dsn)
+    assert count == 1  # backfilled, not skipped
+
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT state_abbr, state FROM streets WHERE tlid = '101'"
+        ).fetchone()
+
+    assert row == ("ME", "Maine")
 
 
 def test_ingest_skips_only_overlapping_rows(tmp_path, dsn):

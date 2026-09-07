@@ -40,3 +40,8 @@ STATES = {
         },
     },
 }
+
+# Reverse lookup used by ingest.py to fill in streets.state_abbr/state from
+# a shapefile row's own STATEFP -- TIGER/Line's edges layer carries no state
+# abbreviation or name field, only the numeric FIPS code.
+FIPS_TO_ABBR = {state["fips"]: abbr for abbr, state in STATES.items()}
