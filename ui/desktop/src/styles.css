@@ -217,7 +217,11 @@ textarea.input { min-height: 90px; resize: vertical; }
   transition: color var(--transition-fast), border-color var(--transition-fast);
 }
 .page-tab:hover:not(.active) { color: var(--color-text); }
-.page-tab.active { color: var(--color-accent); border-bottom-color: var(--color-accent); font-weight: 600; }
+/* Same nav-item-hop keyframes as the primary nav (.nav-item.active) --
+   the sub-tab that was just switched to should bounce the same way a
+   top-level nav item does when you land on it, not feel like a
+   different, quieter control living one level down. */
+.page-tab.active { color: var(--color-accent); border-bottom-color: var(--color-accent); font-weight: 600; animation: nav-item-hop 0.545s; }
 
 /* — cards — */
 .card {
