@@ -4,7 +4,7 @@ import PageHeader from '../components/PageHeader';
 
 export default function Progress() {
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto' }}>
+    <div style={{ maxWidth: 720 }}>
       <PageHeader icon="progress">Progress</PageHeader>
       <AccountTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
