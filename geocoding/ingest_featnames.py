@@ -122,7 +122,14 @@ def ingest_featnames(dbf_path: Path, dsn: str) -> int:
                 if "MTFCC" in field_names and not (data.get("MTFCC") or "").startswith("S"):
                     continue
                 rows.append([data.get(name) for name in available])
-                tlids.append(data.get("TLID"))
+                # str(): real TIGER/Line shapefiles type TLID as numeric,
+                # not character (unlike this module's own test shapefiles),
+                # so pyshp hands back an int here -- ANY(%(tlids)s) below
+                # needs a homogeneous text[] to compare against the text
+                # tlid column (Postgres won't implicitly cast a bound
+                # integer[] parameter the way a plain positional
+                # int-into-text INSERT gets coerced).
+                tlids.append(str(data.get("TLID")))
 
         inserted = insert_ignore_count(conn, insert_sql, rows)
         conn.commit()

@@ -87,6 +87,55 @@ def test_ingest_featnames_is_idempotent(tmp_path, dsn):
     assert total == 1
 
 
+def test_ingest_featnames_handles_numeric_tlid_field(tmp_path, dsn):
+    # Real TIGER/Line featnames files type TLID as numeric ("N"), not
+    # character ("C") like this module's other tests use for convenience
+    # -- pyshp hands back a Python int for a numeric field, unlike the str
+    # every other test here gets from a "C" field. Confirmed directly: a
+    # real Texas ingest crashed with "operator does not exist: text =
+    # integer" from sync_street_names_zip_state's ANY(%(tlids)s) once real
+    # TLIDs (ints) reached it, something a "C"-field test TLID could never
+    # catch.
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            """
+            CREATE TABLE streets (
+                id BIGSERIAL PRIMARY KEY,
+                tlid TEXT,
+                zipl TEXT,
+                zipr TEXT,
+                state TEXT,
+                state_abbr TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO streets (tlid, zipl, zipr, state, state_abbr) "
+            "VALUES ('101', '04101', '04101', 'Maine', 'ME')"
+        )
+        conn.commit()
+
+    dbf_path = tmp_path / "featnames.dbf"
+    writer = shapefile.Writer(str(dbf_path.with_suffix("")), shapeType=shapefile.NULL)
+    writer.field("TLID", "N", 20, 0)
+    writer.field("FULLNAME", "C")
+    writer.field("PAFLAG", "C")
+    writer.field("MTFCC", "C")
+    writer.null()
+    writer.record(101, "Main St", "P", "S1400")
+    writer.close()
+
+    count = ingest_featnames(dbf_path, dsn)
+    assert count == 1
+
+    with psycopg.connect(dsn) as conn:
+        row = conn.execute(
+            "SELECT tlid, zipl, state_abbr FROM street_names WHERE tlid = '101'"
+        ).fetchone()
+
+    assert row == ("101", "04101", "ME")
+
+
 def test_ingest_featnames_backfills_zip_state_from_streets(tmp_path, dsn):
     with psycopg.connect(dsn) as conn:
         conn.execute(
