@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { Link } from 'react-router';
 
 import { getQuota } from '../../../shared/api/client';
 import type { QuotaStatus } from '../../../shared/api/types';
@@ -84,15 +85,13 @@ export default function PlanQuota() {
               />
             </div>
             <div className="card-meta">Resets {quota.periodStart}</div>
-            <button
+            <Link
+              to="/pricing"
               className="btn btn-secondary"
-              style={{ marginTop: 'var(--space-2)' }}
-              onClick={() =>
-                alert('There is no self-service upgrade yet — contact your administrator to request a higher tier.')
-              }
+              style={{ marginTop: 'var(--space-2)', display: 'inline-block', textAlign: 'center' }}
             >
-              Request quota increase
-            </button>
+              Add more quota
+            </Link>
           </>
         )}
       </div>
