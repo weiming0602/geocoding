@@ -1,5 +1,6 @@
 import { useState } from 'react';
 
+import AccountTabs from '../components/AccountTabs';
 import FeedbackForm from '../components/FeedbackForm';
 import PageHeader from '../components/PageHeader';
 import RoadAlertsDiagram from '../components/RoadAlertsDiagram';
@@ -12,6 +13,7 @@ export default function Help() {
   return (
     <div style={{ maxWidth: 720, margin: '0 auto' }}>
       <PageHeader icon="help">Help</PageHeader>
+      <AccountTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         A short guide to how Meridian's two features actually work.
       </p>
