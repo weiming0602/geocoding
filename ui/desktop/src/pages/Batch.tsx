@@ -304,7 +304,14 @@ export default function Batch() {
         </p>
       )}
 
-      <div className="form-map-layout">
+      {/* Only the two-column form-map-layout grid once there's something
+          for the right column to show -- before that, its 1fr track was
+          just empty space next to the form, not actual whitespace (the
+          grid still reserves it), which read as an unfinished half-empty
+          page. A plain left-aligned card (same pattern as Plan & quota,
+          Pricing, the Road Alerts sign-in card) doesn't reserve that
+          space at all. */}
+      <div className={results ? 'form-map-layout' : undefined} style={results ? undefined : { maxWidth: 480 }}>
         <div className="card elev-sm">
           <div className="field">
             <label>Account email</label>
