@@ -329,7 +329,7 @@ export default function App() {
       {screen === 'import' && (
         <ImportAddressesScreen state={importState} onChange={updateImportState} onSendToBatch={handleSendToBatch} />
       )}
-      {screen === 'quota' && <PlanQuotaScreen />}
+      {screen === 'quota' && <PlanQuotaScreen onGoToPricing={() => goToScreen('pricing')} />}
       {screen === 'pricing' && <PricingScreen />}
       {screen === 'progress' && <ProgressScreen />}
       {screen === 'help' && <HelpScreen />}

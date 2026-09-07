@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 
 import { searchPlaces } from '../../../shared/api/client';
 import type { PlaceResult } from '../../../shared/api/types';
+import BatchTabs from '../components/BatchTabs';
 import FindPlacesMapView from '../components/FindPlacesMapView';
 import PageHeader from '../components/PageHeader';
 
@@ -111,6 +112,7 @@ export default function FindPlaces() {
   return (
     <div>
       <PageHeader icon="findPlaces">Find places</PageHeader>
+      <BatchTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         Search for a kind of place (via OpenStreetMap) near a point you click on the map -- or
         just type where, e.g. "barber shop near Brunswick, Maine" -- then download the results as

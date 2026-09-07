@@ -11,10 +11,13 @@ import Overview from './pages/Overview';
 import OwnerDashboard from './pages/OwnerDashboard';
 import PlanQuota from './pages/PlanQuota';
 import Pricing from './pages/Pricing';
+import PrivacyPolicy from './pages/PrivacyPolicy';
 import Progress from './pages/Progress';
 import ReverseGeocode from './pages/ReverseGeocode';
 import RoadAlerts from './pages/RoadAlerts';
 import RoadAlertsSandbox from './pages/RoadAlertsSandbox';
+import SiteMap from './pages/SiteMap';
+import TermsOfUse from './pages/TermsOfUse';
 import { ImportAddressesStateProvider } from './state/ImportAddressesState';
 import { RecentLookupsProvider } from './state/RecentLookups';
 
@@ -42,6 +45,9 @@ export default function App() {
               <Route path="/checkout" element={<Checkout />} />
               <Route path="/progress" element={<Progress />} />
               <Route path="/help" element={<Help />} />
+              <Route path="/privacy" element={<PrivacyPolicy />} />
+              <Route path="/terms" element={<TermsOfUse />} />
+              <Route path="/sitemap" element={<SiteMap />} />
             </Routes>
           </Layout>
         </ImportAddressesStateProvider>

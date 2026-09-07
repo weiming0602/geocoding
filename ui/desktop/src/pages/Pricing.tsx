@@ -1,12 +1,14 @@
 import { Link } from 'react-router';
 
 import { PRICING_TIERS, formatUsd, perAddressRate } from '../../../shared/pricing';
+import AccountTabs from '../components/AccountTabs';
 import PageHeader from '../components/PageHeader';
 
 export default function Pricing() {
   return (
     <div>
       <PageHeader icon="pricing">Bulk geocoding pricing</PageHeader>
+      <AccountTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
         One-time packs of additional monthly quota — applies to Batch geocoding. Single-address
         Geocode and Reverse geocode always stay free.
@@ -15,7 +17,15 @@ export default function Pricing() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 'var(--space-4)' }}>
         {PRICING_TIERS.map((tier) => (
           <div key={tier.addressCount} className="card elev-sm">
-            {tier.popular && <span className="tag tag-accent">Most popular</span>}
+            {/* Rendered (with visibility: hidden, not display: none) on every
+                card, not just the popular one -- otherwise the badge's extra
+                line only exists in one card's flex column, and every "Buy"
+                button below it ends up at a different height than its
+                siblings. Reserving the same space on all four keeps the row
+                of buttons aligned regardless of which tier is marked popular. */}
+            <span className="tag tag-accent" style={{ visibility: tier.popular ? 'visible' : 'hidden' }}>
+              Most popular
+            </span>
             <div className="card-kicker">{tier.label}</div>
             <div
               style={{

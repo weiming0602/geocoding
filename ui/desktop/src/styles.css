@@ -202,6 +202,31 @@ textarea.input { min-height: 90px; resize: vertical; }
 .seg-opt:not(:has(input:checked)):hover { background: color-mix(in srgb, var(--color-text) 7%, transparent); }
 .seg-opt:has(input:focus-visible) { outline: 2px solid var(--color-accent); outline-offset: -2px; }
 
+/* Page-level tabs -- switches between real routes (unlike .seg, which
+   toggles in-page state), e.g. Batch geocode/Import addresses/Find
+   places: three separate pages that feed one another, reached from a
+   single "Batch" nav entry and then switched between via these tabs
+   rather than needing a nav dropdown for the choice. */
+/* --space-5 doesn't exist in the token scale (only 1/2/3/4/6/8 do) --
+   var() with an undefined custom property and no fallback resolves gap
+   to its initial value (0), so the tabs had no real spacing at all
+   until this was caught. --space-6 is the next real token up. */
+.page-tabs { display: flex; gap: var(--space-6); border-bottom: 1px solid var(--color-divider); margin-bottom: var(--space-6); }
+.page-tab {
+  display: flex; align-items: center; gap: 6px;
+  padding: 9px 2px 10px; margin-bottom: -1px;
+  color: color-mix(in srgb, var(--color-text) 55%, transparent);
+  text-decoration: none; font-size: 14px; white-space: nowrap;
+  border-bottom: 2px solid transparent;
+  transition: color var(--transition-fast), border-color var(--transition-fast);
+}
+.page-tab:hover:not(.active) { color: var(--color-text); }
+/* Same nav-item-hop keyframes as the primary nav (.nav-item.active) --
+   the sub-tab that was just switched to should bounce the same way a
+   top-level nav item does when you land on it, not feel like a
+   different, quieter control living one level down. */
+.page-tab.active { color: var(--color-accent); border-bottom-color: var(--color-accent); font-weight: 600; animation: nav-item-hop 0.545s; }
+
 /* — cards — */
 .card {
   display: flex; flex-direction: column; gap: var(--space-2);
@@ -289,18 +314,6 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
   88.99% { transform: translateY(-2.64px); animation-timing-function: ease-in; }
   100% { transform: translateY(0); }
 }
-
-/* — comet-trail cursor on the header BrandMark — a static (no animation
-   loop) afterimage trail: a bright dot plus three fading, shrinking
-   "ghost" dots along the globe's outer edge, drawn frozen mid-swoosh --
-   the classic cartoon shorthand for something moving very fast (Sonic/
-   Flash-style motion dots), rather than an actually-animating spinner.
-   Only where the logo is looked at directly (nav-brand, via icons.tsx's
-   BrandMarkOrbit); the footer mark and the giant background watermark
-   stay untouched. Color matches .nav-brand svg's own --color-icon-active
-   so the trail reads as part of the same logo, not a separate accent. */
-.brand-orbit { position: relative; display: inline-flex; flex: none; }
-.brand-orbit__trail { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
 
 /* Overview's task cards link to other pages, so their tiles stay the
    default teal -- amber is reserved for wherever you already are. */
