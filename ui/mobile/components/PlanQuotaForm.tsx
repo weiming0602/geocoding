@@ -10,7 +10,7 @@ import ThemedButton from './ThemedButton';
 // There's no signup/login/session anywhere in this app -- quota is looked
 // up by email per request (see users.js), not by a logged-in account, so
 // this screen has to ask for the email it's checking rather than assume one.
-export default function PlanQuotaForm() {
+export default function PlanQuotaForm({ onGoToPricing }: { onGoToPricing: () => void }) {
   const [email, setEmail] = useState('');
   const [loading, setLoading] = useState(false);
   const [quota, setQuota] = useState<QuotaStatus | null>(null);
@@ -77,10 +77,9 @@ export default function PlanQuotaForm() {
             <View style={[styles.usageBarFill, { width: `${usedFraction * 100}%` }]} />
           </View>
           <Text style={styles.cardMeta}>Resets {quota.periodStart}</Text>
-          <Text style={[styles.spacing, styles.noteText]}>
-            There's no self-service upgrade yet — contact your administrator to request a higher
-            tier.
-          </Text>
+          <View style={styles.spacing}>
+            <ThemedButton title="Add more quota" onPress={onGoToPricing} variant="secondary" block />
+          </View>
         </View>
       )}
 
@@ -168,12 +167,6 @@ const styles = StyleSheet.create({
   usageBarFill: {
     height: '100%',
     backgroundColor: colors.accent500,
-  },
-  noteText: {
-    fontFamily: 'Lora_400Regular',
-    fontSize: 12,
-    color: colors.text,
-    opacity: 0.65,
   },
   errorText: {
     fontFamily: 'Lora_400Regular',
