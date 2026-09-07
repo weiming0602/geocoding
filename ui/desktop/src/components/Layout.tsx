@@ -1,4 +1,5 @@
-import { Link, NavLink } from 'react-router';
+import { useEffect, useRef, useState } from 'react';
+import { Link, NavLink, useLocation } from 'react-router';
 import type { ReactNode } from 'react';
 
 import { isMobileDevice } from '../deviceDetection';
@@ -6,20 +7,118 @@ import { BrandMark, Icon, type IconName } from './icons';
 import InstallAppBanner from './InstallAppBanner';
 import MobileRedirectBanner, { MOBILE_APP_URL } from './MobileRedirectBanner';
 
-const NAV_LINKS: { to: string; label: string; icon: IconName; end?: boolean }[] = [
-  { to: '/', label: 'Overview', icon: 'overview', end: true },
-  { to: '/geocode', label: 'Geocode', icon: 'geocode' },
-  { to: '/reverse-geocode', label: 'Reverse geocode', icon: 'reverseGeocode' },
-  { to: '/find-places', label: 'Find places', icon: 'findPlaces' },
-  { to: '/road-alerts', label: 'Road Alerts', icon: 'roadAlerts' },
-  { to: '/road-alert-test', label: 'Road Alert Test', icon: 'roadAlerts' },
-  { to: '/import-addresses', label: 'Import addresses', icon: 'importAddresses' },
-  { to: '/batch', label: 'Batch', icon: 'batch' },
-  { to: '/plan-quota', label: 'Plan & quota', icon: 'planQuota' },
-  { to: '/pricing', label: 'Pricing', icon: 'pricing' },
-  { to: '/progress', label: 'Progress', icon: 'progress' },
-  { to: '/help', label: 'Help', icon: 'help' },
+type NavSubLink = { to: string; label: string; icon: IconName };
+type NavEntry =
+  | { kind: 'link'; to: string; label: string; icon: IconName; end?: boolean }
+  | { kind: 'group'; label: string; icon: IconName; items: NavSubLink[] };
+
+// Find places and Import addresses both exist to feed Batch geocode an
+// address list (their own "Send to Batch" actions), not as standalone
+// destinations -- grouping them under one "Batch" nav entry instead of
+// three top-level items each. Same reasoning groups the account/info
+// pages under "Account": none of them are a core geocoding tool, so
+// they don't need equal billing with Geocode/Reverse geocode/Batch/Road
+// Alerts in the primary nav. Both groups' pages are unchanged; this is
+// purely a navigation-level regrouping.
+const NAV_ENTRIES: NavEntry[] = [
+  { kind: 'link', to: '/', label: 'Overview', icon: 'overview', end: true },
+  { kind: 'link', to: '/geocode', label: 'Geocode', icon: 'geocode' },
+  { kind: 'link', to: '/reverse-geocode', label: 'Reverse geocode', icon: 'reverseGeocode' },
+  {
+    kind: 'group',
+    label: 'Batch',
+    icon: 'batch',
+    items: [
+      { to: '/batch', label: 'Batch geocode', icon: 'batch' },
+      { to: '/import-addresses', label: 'Import addresses', icon: 'importAddresses' },
+      { to: '/find-places', label: 'Find places', icon: 'findPlaces' },
+    ],
+  },
+  { kind: 'link', to: '/road-alerts', label: 'Road Alerts', icon: 'roadAlerts' },
+  { kind: 'link', to: '/road-alert-test', label: 'Road Alert Test', icon: 'roadAlerts' },
+  {
+    kind: 'group',
+    label: 'Account',
+    icon: 'planQuota',
+    items: [
+      { to: '/plan-quota', label: 'Plan & quota', icon: 'planQuota' },
+      { to: '/pricing', label: 'Pricing', icon: 'pricing' },
+      { to: '/progress', label: 'Progress', icon: 'progress' },
+      { to: '/help', label: 'Help', icon: 'help' },
+    ],
+  },
 ];
+
+// A single nav entry covering several related pages (e.g. every page
+// that feeds into Batch geocode) -- a trigger button styled like a
+// plain nav-item plus a floating panel of the real sub-page links.
+// Stays highlighted whenever the current route matches any of its
+// items, closes on an outside click/Escape/navigating, so collapsing
+// three-plus pages into one nav entry doesn't cost the "you are here"
+// signal a plain top-level link gives for free.
+function NavGroup({ label, icon, items }: { label: string; icon: IconName; items: NavSubLink[] }) {
+  const [open, setOpen] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
+  const location = useLocation();
+  const isActive = items.some((item) => location.pathname === item.to);
+
+  useEffect(() => {
+    setOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div className="nav-dropdown" ref={containerRef}>
+      <button
+        type="button"
+        className={`nav-item nav-item-dropdown-trigger${isActive ? ' active' : ''}`}
+        aria-haspopup="true"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+      >
+        <span className="nav-item-tile">
+          <Icon name={icon} size={12} />
+        </span>
+        {label}
+        <span className="nav-caret" aria-hidden="true">
+          ▾
+        </span>
+      </button>
+      {open && (
+        <div className="nav-dropdown-panel" role="menu">
+          {items.map((item) => (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              role="menuitem"
+              className={({ isActive }) => `nav-dropdown-item${isActive ? ' active' : ''}`}
+            >
+              <span className="nav-item-tile">
+                <Icon name={item.icon} size={12} />
+              </span>
+              {item.label}
+            </NavLink>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function Layout({ children }: { children: ReactNode }) {
   // Showing both banners would be a contradictory pitch to the same
@@ -89,19 +188,23 @@ export default function Layout({ children }: { children: ReactNode }) {
           Meridian
         </div>
         <div className="nav-links">
-          {NAV_LINKS.map((link) => (
-            <NavLink
-              key={link.to}
-              to={link.to}
-              end={link.end}
-              className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
-            >
-              <span className="nav-item-tile">
-                <Icon name={link.icon} size={12} />
-              </span>
-              {link.label}
-            </NavLink>
-          ))}
+          {NAV_ENTRIES.map((entry) =>
+            entry.kind === 'group' ? (
+              <NavGroup key={entry.label} label={entry.label} icon={entry.icon} items={entry.items} />
+            ) : (
+              <NavLink
+                key={entry.to}
+                to={entry.to}
+                end={entry.end}
+                className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+              >
+                <span className="nav-item-tile">
+                  <Icon name={entry.icon} size={12} />
+                </span>
+                {entry.label}
+              </NavLink>
+            )
+          )}
         </div>
       </nav>
       <div
