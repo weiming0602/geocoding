@@ -939,10 +939,10 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
       <View style={styles.noteCard}>
         <Text style={styles.noteText}>
           Traffic data from New England 511 (Maine, New Hampshire, and Vermont DOTs). Provided
-          as-is, with no accuracy or uptime guarantee. Your location is sent for one live check at
-          a time and isn't stored -- this is the first slice of a larger design (see
-          docs/ROAD_ALERTS_DESIGN.md): only live traffic hazards near your current position and
-          heading, not yet weather, events, or your own routine streets.
+          as-is, with no accuracy or uptime guarantee. Each hazard check sends your location for
+          one live lookup, not stored. Separately, while watching is on, occasional pings (every
+          few minutes, excluding trip start/end) help build a routine-route model for smarter
+          future alerts -- never your destinations, only points visited often enough to qualify.
         </Text>
       </View>
 

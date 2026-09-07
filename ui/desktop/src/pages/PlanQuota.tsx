@@ -1,4 +1,5 @@
 import { useCallback, useState } from 'react';
+import { Link } from 'react-router';
 
 import { getQuota } from '../../../shared/api/client';
 import type { QuotaStatus } from '../../../shared/api/types';
@@ -37,74 +38,62 @@ export default function PlanQuota() {
         Usage resets on the 1st of each calendar month, per account email.
       </p>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1.4fr', gap: 'var(--space-6)', marginBottom: 'var(--space-6)' }}>
-        <div className="card elev-sm">
-          <div className="field">
-            <label>Account email</label>
-            <input
-              className="input"
-              placeholder="you@company.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleCheck();
-              }}
-            />
-          </div>
-          <button className="btn btn-primary btn-block" onClick={handleCheck} disabled={loading}>
-            {loading ? 'Checking…' : 'Check quota'}
-          </button>
-          {error && (
-            <p className="card-body" style={{ color: '#a4402a', margin: 0 }}>
-              {error}
-            </p>
-          )}
+      <div className="card elev-sm" style={{ maxWidth: 480, marginBottom: 'var(--space-6)' }}>
+        <div className="field">
+          <label>Account email</label>
+          <input
+            className="input"
+            placeholder="you@company.com"
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleCheck();
+            }}
+          />
+        </div>
+        <button className="btn btn-primary btn-block" onClick={handleCheck} disabled={loading}>
+          {loading ? 'Checking…' : 'Check quota'}
+        </button>
+        {error && (
+          <p className="card-body" style={{ color: '#a4402a', margin: 0 }}>
+            {error}
+          </p>
+        )}
 
-          {quota && (
-            <>
-              <div className="hr" />
-              <div className="card-kicker">Current period</div>
-              <div className="card-title">
-                {quota.usedThisPeriod.toLocaleString()} / {quota.tier.toLocaleString()} requests
-              </div>
+        {quota && (
+          <>
+            <div className="hr" />
+            <div className="card-kicker">Current period</div>
+            <div className="card-title">
+              {quota.usedThisPeriod.toLocaleString()} / {quota.tier.toLocaleString()} requests
+            </div>
+            <div
+              style={{
+                height: 6,
+                borderRadius: 3,
+                background: 'var(--color-divider)',
+                margin: 'var(--space-2) 0',
+                overflow: 'hidden',
+              }}
+            >
               <div
                 style={{
-                  height: 6,
-                  borderRadius: 3,
-                  background: 'var(--color-divider)',
-                  margin: 'var(--space-2) 0',
-                  overflow: 'hidden',
+                  height: '100%',
+                  width: `${usedFraction * 100}%`,
+                  background: 'var(--color-accent-500)',
                 }}
-              >
-                <div
-                  style={{
-                    height: '100%',
-                    width: `${usedFraction * 100}%`,
-                    background: 'var(--color-accent-500)',
-                  }}
-                />
-              </div>
-              <div className="card-meta">Resets {quota.periodStart}</div>
-              <button
-                className="btn btn-secondary"
-                style={{ marginTop: 'var(--space-2)' }}
-                onClick={() =>
-                  alert('There is no self-service upgrade yet — contact your administrator to request a higher tier.')
-                }
-              >
-                Request quota increase
-              </button>
-            </>
-          )}
-        </div>
-
-        <div className="card elev-sm">
-          <div className="card-kicker">Requests, last 7 days</div>
-          <p className="card-body" style={{ marginTop: 'var(--space-2)' }}>
-            Not tracked yet — geocoding-server doesn't log per-day request history, so this chart
-            can't be shown honestly. Only the current-period total (left) is real data.
-          </p>
-        </div>
+              />
+            </div>
+            <div className="card-meta">Resets {quota.periodStart}</div>
+            <Link
+              to="/pricing"
+              className="btn btn-secondary"
+              style={{ marginTop: 'var(--space-2)', display: 'inline-block', textAlign: 'center' }}
+            >
+              Add more quota
+            </Link>
+          </>
+        )}
       </div>
 
       <div className="card" style={{ background: 'var(--color-surface)' }}>
