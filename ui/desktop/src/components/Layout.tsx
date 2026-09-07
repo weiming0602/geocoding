@@ -181,6 +181,39 @@ export default function Layout({ children }: { children: ReactNode }) {
             )}
           </div>
         </div>
+
+        {/* Legal strip -- separate row from the brand/tool links above,
+            same convention most business sites use to keep copyright/
+            privacy/terms links visually distinct from primary navigation. */}
+        <div
+          style={{
+            maxWidth: '1240px',
+            width: '100%',
+            margin: 'var(--space-4) auto 0',
+            paddingTop: 'var(--space-3)',
+            borderTop: '1px solid var(--color-divider)',
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            flexWrap: 'wrap',
+            gap: 'var(--space-3)',
+          }}
+        >
+          <span className="text-muted" style={{ fontSize: 12 }}>
+            &copy; {new Date().getFullYear()} Meridian. All rights reserved.
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)', fontSize: 12 }}>
+            <Link to="/privacy" className="text-muted">
+              Privacy Policy
+            </Link>
+            <Link to="/terms" className="text-muted">
+              Terms of Use
+            </Link>
+            <Link to="/sitemap" className="text-muted">
+              Site Map
+            </Link>
+          </div>
+        </div>
       </footer>
     </div>
   );
