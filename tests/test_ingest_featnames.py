@@ -1,7 +1,7 @@
 import psycopg
 import shapefile
 
-from geocoding.ingest_featnames import ingest_featnames
+from geocoding.ingest_featnames import ingest_featnames, sync_street_names_zip_state
 from geocoding.schema import CREATE_STREET_NAMES_INDEXES_SQL, CREATE_STREET_NAMES_TABLE_SQL
 
 
@@ -117,6 +117,52 @@ def test_ingest_featnames_backfills_zip_state_from_streets(tmp_path, dsn):
         ).fetchone()
 
     assert row == ("04101", "04101", "Maine", "ME")
+
+
+def test_sync_street_names_zip_state_with_tlids_only_touches_those_rows(dsn):
+    # This is the actual fix for a real production incident: a table-wide
+    # scan on every call (once per county -- ingest_featnames() calls this
+    # automatically) turned a one-time backfill into O(counties * table
+    # size), which measured >15 minutes per county when re-running
+    # update_state.py to backfill an already-ingested state, and deadlocked
+    # entirely when two states' backfills ran concurrently against the
+    # same table. Passing `tlids` must restrict the UPDATE to just those
+    # rows -- proven here by a row NOT in the list staying unsynced.
+    with psycopg.connect(dsn) as conn:
+        conn.execute(
+            """
+            CREATE TABLE streets (
+                id BIGSERIAL PRIMARY KEY,
+                tlid TEXT,
+                zipl TEXT,
+                zipr TEXT,
+                state TEXT,
+                state_abbr TEXT
+            )
+            """
+        )
+        conn.execute(
+            "INSERT INTO streets (tlid, zipl, zipr, state, state_abbr) VALUES "
+            "('101', '04101', '04101', 'Maine', 'ME'), "
+            "('102', '04102', '04102', 'Maine', 'ME')"
+        )
+        conn.execute(CREATE_STREET_NAMES_TABLE_SQL)
+        conn.execute(CREATE_STREET_NAMES_INDEXES_SQL)
+        conn.execute(
+            "INSERT INTO street_names (tlid, fullname) VALUES ('101', 'Main St'), ('102', 'Elm St')"
+        )
+        conn.commit()
+
+        updated = sync_street_names_zip_state(conn, ["101"])
+        assert updated == 1
+
+        rows = {
+            row[0]: row[1:]
+            for row in conn.execute("SELECT tlid, zipl, state_abbr FROM street_names ORDER BY tlid")
+        }
+
+    assert rows["101"] == ("04101", "ME")
+    assert rows["102"] == (None, None)  # not in the tlids list -- left untouched
 
 
 def test_ingest_featnames_backfills_state_even_when_zip_already_synced(tmp_path, dsn):
