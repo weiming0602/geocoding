@@ -15,6 +15,7 @@ sync_street_names_zip_state()'s docstring for why.
 """
 
 from pathlib import Path
+from typing import Optional
 
 import psycopg
 import shapefile
@@ -29,20 +30,29 @@ FIELD_MAP = {
 }
 
 
-def sync_street_names_zip_state(conn: psycopg.Connection) -> int:
+def sync_street_names_zip_state(conn: psycopg.Connection, tlids: Optional[list] = None) -> int:
     """Backfills street_names.zipl/zipr/state/state_abbr from the matching
     streets row, for any street_names rows that don't have it yet.
 
-    Denormalized on purpose: geocode.js needs to filter candidates by
-    name *and* zip *and* state together, and doing that via a runtime
-    JOIN from street_names back to streets -- once per zip-matched
-    streets row -- measured ~15x slower at batch scale than querying a
-    single table directly (the nested per-row lookup cost dominates for
-    ZIP codes with many segments). Copying these columns lets
-    street_names carry its own composite index
-    (UPPER(fullname), zip*, state, state_abbr), mirroring the one on
-    streets, so filtering never needs the join at query time -- streets
-    is only joined in afterwards, for the few rows that actually matched.
+    Checks zipl and state_abbr independently (not just zipl) because
+    streets.state_abbr/state went unpopulated for a long time after zipl
+    already was (see ingest.py) -- a row synced before that fix has zipl
+    set but state_abbr still NULL, and would otherwise never get resynced
+    since it no longer matches a "hasn't been synced yet" check that only
+    looks at zipl.
+
+    `tlids`, when given, restricts the scan to just those TLIDs -- without
+    it, a table-wide "state_abbr IS NULL" scan costs the same on every
+    single call, so calling this once per county (as ingest_featnames()
+    does) turns an O(table size) backfill into O(counties * table size).
+    Measured directly: re-running update_state.py to backfill an already-
+    ingested state after this state_abbr/state fix landed took >15 minutes
+    per county instead of the usual few seconds, and running more than one
+    state's backfill concurrently deadlocked on the resulting table-wide
+    locks. ingest_featnames() always passes the current file's own TLIDs;
+    the unrestricted form remains for a genuine one-off full-table pass
+    (e.g. run by hand after this fix first landed, before any per-county
+    call had a scoped list to work with).
 
     Returns the number of rows updated. A no-op (returns 0) if streets
     doesn't exist yet -- ingest_featnames() can run standalone, e.g. in
@@ -54,8 +64,9 @@ def sync_street_names_zip_state(conn: psycopg.Connection) -> int:
     if not has_streets:
         return 0
 
+    tlid_clause = "street_names.tlid = ANY(%(tlids)s) AND" if tlids is not None else ""
     cursor = conn.execute(
-        """
+        f"""
         UPDATE street_names
         SET zipl = streets.zipl,
             zipr = streets.zipr,
@@ -63,8 +74,10 @@ def sync_street_names_zip_state(conn: psycopg.Connection) -> int:
             state_abbr = streets.state_abbr
         FROM streets
         WHERE streets.tlid = street_names.tlid
-          AND street_names.zipl IS NULL
-        """
+          AND {tlid_clause}
+          (street_names.zipl IS NULL OR street_names.state_abbr IS NULL)
+        """,
+        {"tlids": tlids} if tlids is not None else {},
     )
     conn.commit()
     return cursor.rowcount
@@ -101,6 +114,7 @@ def ingest_featnames(dbf_path: Path, dsn: str) -> int:
             )
 
             rows = []
+            tlids = []
             for record in reader.iterRecords():
                 data = record.as_dict()
                 if not data.get("FULLNAME"):
@@ -108,9 +122,17 @@ def ingest_featnames(dbf_path: Path, dsn: str) -> int:
                 if "MTFCC" in field_names and not (data.get("MTFCC") or "").startswith("S"):
                     continue
                 rows.append([data.get(name) for name in available])
+                # str(): real TIGER/Line shapefiles type TLID as numeric,
+                # not character (unlike this module's own test shapefiles),
+                # so pyshp hands back an int here -- ANY(%(tlids)s) below
+                # needs a homogeneous text[] to compare against the text
+                # tlid column (Postgres won't implicitly cast a bound
+                # integer[] parameter the way a plain positional
+                # int-into-text INSERT gets coerced).
+                tlids.append(str(data.get("TLID")))
 
         inserted = insert_ignore_count(conn, insert_sql, rows)
         conn.commit()
 
-        sync_street_names_zip_state(conn)
+        sync_street_names_zip_state(conn, tlids)
         return inserted

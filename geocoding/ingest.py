@@ -16,6 +16,7 @@ import shapefile
 
 from .db import insert_ignore_count
 from .schema import CREATE_INDEXES_SQL, CREATE_TABLE_SQL
+from .states import FIPS_TO_ABBR, STATES
 
 # Maps TIGER/Line field names to our column names.
 FIELD_MAP = {
@@ -83,21 +84,36 @@ def ingest(shp_path: Path, dsn: str) -> int:
         value_exprs = ["%s", "%s", "%s", "%s", "%s", "ST_GeomFromText(%s, 4326)"]
         value_exprs += ["%s" for _ in available]
 
-        # tnidf/tnidt are the one exception to "re-ingesting skips rows
-        # that already exist": this schema change landed after ~499K rows
-        # were already ingested without them, and re-downloading every
-        # state's shapefile just to run a one-off migration is wasteful
-        # when a normal update_state re-run already walks every row. If
-        # this particular shapefile doesn't carry TNIDF/TNIDT (e.g. an
-        # older cached file), the WHERE guard's EXCLUDED reference would
-        # be to a column not in this INSERT -- skip the upsert clause
-        # entirely in that case and fall back to plain DO NOTHING.
+        # state_abbr/state: TIGER/Line's edges layer carries no state
+        # abbreviation or name field, only the numeric STATEFP -- derive
+        # both from that via the STATES registry (geocoding/states.py) and
+        # set them as literal columns, not shapefile-sourced ones. An
+        # unrecognized STATEFP (a state not yet in the registry) leaves
+        # both NULL rather than failing the ingest.
+        has_statefp = "STATEFP" in available
+        if has_statefp:
+            columns += ["state_abbr", "state"]
+            value_exprs += ["%s", "%s"]
+
+        # tnidf/tnidt/state_abbr/state are exceptions to "re-ingesting
+        # skips rows that already exist": tnidf/tnidt's schema change
+        # landed after ~499K rows were already ingested without them, and
+        # state_abbr/state were never populated at all until this fix --
+        # re-downloading every state's shapefile just to run a one-off
+        # migration is wasteful when a normal update_state re-run already
+        # walks every row, and this backfills existing rows for free. If
+        # this particular shapefile doesn't carry TNIDF/TNIDT/STATEFP
+        # (e.g. an older cached file), the WHERE guard's EXCLUDED
+        # reference would be to a column not in this INSERT -- skip that
+        # part of the upsert clause entirely in that case.
         topology_fields = [name for name in ("TNIDF", "TNIDT") if name in available]
-        if topology_fields:
-            topology_columns = [FIELD_MAP[name] for name in topology_fields]
-            set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in topology_columns)
+        backfill_columns = [FIELD_MAP[name] for name in topology_fields]
+        if has_statefp:
+            backfill_columns += ["state_abbr", "state"]
+        if backfill_columns:
+            set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in backfill_columns)
             where_clause = " OR ".join(
-                f"streets.{col} IS DISTINCT FROM EXCLUDED.{col}" for col in topology_columns
+                f"streets.{col} IS DISTINCT FROM EXCLUDED.{col}" for col in backfill_columns
             )
             conflict_clause = f"DO UPDATE SET {set_clause} WHERE {where_clause}"
         else:
@@ -121,6 +137,10 @@ def ingest(shp_path: Path, dsn: str) -> int:
             wkt = _shape_to_wkt(shape)
             bbox = list(shape.bbox) if shape.points else [None, None, None, None]
             row = [wkt, *bbox, wkt, *(record.get(name) for name in available)]
+            if has_statefp:
+                state_abbr = FIPS_TO_ABBR.get(record.get("STATEFP"))
+                state_name = STATES[state_abbr]["name"] if state_abbr else None
+                row += [state_abbr, state_name]
             rows.append(row)
 
         count = insert_ignore_count(conn, insert_sql, rows)
