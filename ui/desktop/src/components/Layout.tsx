@@ -1,4 +1,4 @@
-import { Link, NavLink } from 'react-router';
+import { Link, NavLink, useLocation } from 'react-router';
 import type { ReactNode } from 'react';
 
 import { isMobileDevice } from '../deviceDetection';
@@ -6,19 +6,34 @@ import { BrandMark, Icon, type IconName } from './icons';
 import InstallAppBanner from './InstallAppBanner';
 import MobileRedirectBanner, { MOBILE_APP_URL } from './MobileRedirectBanner';
 
-const NAV_LINKS: { to: string; label: string; icon: IconName; end?: boolean }[] = [
+// matchPrefixes: extra routes (beyond `to` itself) that should still
+// highlight this entry -- Batch and Account both cover several pages
+// that link to each other via their own page-level tab strip
+// (BatchTabs.tsx/AccountTabs.tsx) rather than a nav dropdown, so the
+// single nav entry for each needs to read as active from any of them.
+type NavEntry = { to: string; label: string; icon: IconName; end?: boolean; matchPrefixes?: string[] };
+
+// Kept in sync with BatchTabs.tsx/AccountTabs.tsx's own TABS lists by
+// hand -- both pairs are short and change rarely enough that a shared
+// import would be more indirection than it's worth.
+const BATCH_ROUTES = ['/batch', '/import-addresses', '/find-places'];
+const ACCOUNT_ROUTES = ['/plan-quota', '/pricing', '/progress', '/help'];
+
+// Find places and Import addresses both exist to feed Batch geocode an
+// address list (their own "Send to Batch" actions); Plan & quota/
+// Pricing/Progress/Help are account/info pages, not core geocoding
+// tools. Neither needed a full nav dropdown -- both groups' pages
+// already/now link to each other via a page-level tab strip, so the
+// primary nav only needs one entry per group (matchPrefixes keeps it
+// highlighted from any page in the group).
+const NAV_ENTRIES: NavEntry[] = [
   { to: '/', label: 'Overview', icon: 'overview', end: true },
   { to: '/geocode', label: 'Geocode', icon: 'geocode' },
   { to: '/reverse-geocode', label: 'Reverse geocode', icon: 'reverseGeocode' },
-  { to: '/find-places', label: 'Find places', icon: 'findPlaces' },
+  { to: '/batch', label: 'Batch', icon: 'batch', matchPrefixes: BATCH_ROUTES },
   { to: '/road-alerts', label: 'Road Alerts', icon: 'roadAlerts' },
   { to: '/road-alert-test', label: 'Road Alert Test', icon: 'roadAlerts' },
-  { to: '/import-addresses', label: 'Import addresses', icon: 'importAddresses' },
-  { to: '/batch', label: 'Batch', icon: 'batch' },
-  { to: '/plan-quota', label: 'Plan & quota', icon: 'planQuota' },
-  { to: '/pricing', label: 'Pricing', icon: 'pricing' },
-  { to: '/progress', label: 'Progress', icon: 'progress' },
-  { to: '/help', label: 'Help', icon: 'help' },
+  { to: '/plan-quota', label: 'Account', icon: 'planQuota', matchPrefixes: ACCOUNT_ROUTES },
 ];
 
 export default function Layout({ children }: { children: ReactNode }) {
@@ -38,6 +53,8 @@ export default function Layout({ children }: { children: ReactNode }) {
   // Anyone, not just a detected mobile device, can use it to jump over
   // and try the other app while both are running locally.
   const mobileAppUrl = MOBILE_APP_URL || (import.meta.env.DEV ? 'http://localhost:8081' : undefined);
+
+  const location = useLocation();
 
   return (
     <div
@@ -89,17 +106,20 @@ export default function Layout({ children }: { children: ReactNode }) {
           Meridian
         </div>
         <div className="nav-links">
-          {NAV_LINKS.map((link) => (
+          {NAV_ENTRIES.map((entry) => (
             <NavLink
-              key={link.to}
-              to={link.to}
-              end={link.end}
-              className={({ isActive }) => `nav-item${isActive ? ' active' : ''}`}
+              key={entry.to}
+              to={entry.to}
+              end={entry.end}
+              className={({ isActive }) => {
+                const active = isActive || Boolean(entry.matchPrefixes?.includes(location.pathname));
+                return `nav-item${active ? ' active' : ''}`;
+              }}
             >
               <span className="nav-item-tile">
-                <Icon name={link.icon} size={12} />
+                <Icon name={entry.icon} size={12} />
               </span>
-              {link.label}
+              {entry.label}
             </NavLink>
           ))}
         </div>
