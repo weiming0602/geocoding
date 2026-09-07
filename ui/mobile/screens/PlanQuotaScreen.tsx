@@ -3,10 +3,10 @@ import { ScrollView, StyleSheet } from 'react-native';
 
 import PlanQuotaForm from '../components/PlanQuotaForm';
 
-export default function PlanQuotaScreen() {
+export default function PlanQuotaScreen({ onGoToPricing }: { onGoToPricing: () => void }) {
   return (
     <ScrollView contentContainerStyle={styles.content}>
-      <PlanQuotaForm />
+      <PlanQuotaForm onGoToPricing={onGoToPricing} />
     </ScrollView>
   );
 }
