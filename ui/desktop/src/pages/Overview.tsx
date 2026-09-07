@@ -164,14 +164,21 @@ export default function Overview() {
       </p>
       <div
         style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',
+          // flexbox + wrap, not CSS grid -- TASKS has an odd count (5), and
+          // a grid's auto-fit tracks leave a lone last-row card flush left
+          // against empty column space. Flexbox naturally centers a
+          // half-empty last row instead, which reads as intentional rather
+          // than cut off. Each card gets the same basis/max-width grid gave
+          // it, just via flex-grow instead of a fixed track.
+          display: 'flex',
+          flexWrap: 'wrap',
+          justifyContent: 'center',
           gap: 'var(--space-4)',
           marginBottom: 'var(--space-6)',
         }}
       >
         {TASKS.map((task) => (
-          <div key={task.to} className="card elev-sm">
+          <div key={task.to} className="card elev-sm" style={{ flex: '1 1 240px', maxWidth: 320 }}>
             <div className="card-title" style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)' }}>
               <span className="task-icon-tile">
                 <Icon name={task.icon} size={19} />
