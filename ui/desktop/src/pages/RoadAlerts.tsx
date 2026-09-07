@@ -9,8 +9,10 @@ import {
   getRoadAlertsUsername,
   getRoadReroute,
   getRoadSignals,
+  getWeightedPoints,
   markRoadAlertsNotificationsViewed,
   postRoadAlertsStatement,
+  postWeightedPointPing,
   updateRoadAlertsPreferences,
   updateRoadAlertsUsername,
 } from '../../../shared/api/client';
@@ -43,6 +45,9 @@ const RADIUS_METERS = 10000;
 // than a separate timer, but still caps how often the free public 511
 // API gets hit if the browser reports position rapidly.
 const POLL_MIN_INTERVAL_MS = 15000;
+// Mirrors ui/mobile's RoadAlertsForm.tsx exactly -- see that file's own
+// comment for why this is much coarser than POLL_MIN_INTERVAL_MS.
+const WEIGHTED_POINT_PING_INTERVAL_MS = 3 * 60 * 1000;
 
 const SEVERITY_LABELS: Record<RoadSignalSeverity, string> = {
   serious: 'Serious',
@@ -174,6 +179,18 @@ export default function RoadAlerts() {
   const voiceEnabledRef = useRef(voiceEnabled);
   const detailLevelRef = useRef(detailLevel);
   const accountRef = useRef(account);
+  // Throttles weighted-point pings independently of lastFetchAtRef's
+  // (much tighter) hazard-check throttle -- see WEIGHTED_POINT_PING_INTERVAL_MS.
+  const lastWeightedPingAtRef = useRef(0);
+  // True only for the very first position fix after a Start press -- that
+  // fix is this trip's origin, reported with isEndpoint so it's never
+  // recorded as a weighted point. Reset in handleStart. Mirrors
+  // ui/mobile's RoadAlertsForm.tsx exactly.
+  const isFirstPositionOfSessionRef = useRef(true);
+  // Latest known fix, read from handleStop to report the trip's actual
+  // endpoint -- a ref (not just the `position` state) so handleStop
+  // doesn't need `position` in its own dependency array.
+  const positionRef = useRef<{ latitude: number; longitude: number } | null>(null);
   useEffect(() => {
     voiceEnabledRef.current = voiceEnabled;
   }, [voiceEnabled]);
@@ -183,6 +200,41 @@ export default function RoadAlerts() {
   useEffect(() => {
     accountRef.current = account;
   }, [account]);
+
+  // One-shot fetch of this account's real, already-qualified weighted
+  // points -- re-fetched from pingWeightedPoint below whenever a new ping
+  // might have just pushed a point past its qualifying threshold. Not
+  // otherwise used on this page yet (unlike ui/mobile's route-matching);
+  // fetched here only so a ping's own refresh call has a home and this
+  // page's data stays consistent with what pinging is actually building.
+  const refreshRealWeightedPoints = useCallback(async () => {
+    const current = accountRef.current;
+    if (!current) return;
+    try {
+      await getWeightedPoints({ email: current.email, serviceKey: current.serviceKey });
+    } catch {
+      // Best-effort -- see pingWeightedPoint's own comment below.
+    }
+  }, []);
+
+  // Reports one GPS ping toward the account's routine-route model (see
+  // geocoding-server/src/weightedPoints.js). Fire-and-forget: a failure
+  // here is background-enhancement noise, never something that should
+  // interrupt or delay hazard alerting. Mirrors ui/mobile's
+  // RoadAlertsForm.tsx's pingWeightedPoint exactly.
+  const pingWeightedPoint = useCallback(
+    async (latitude: number, longitude: number, isEndpoint: boolean) => {
+      const current = accountRef.current;
+      if (!current) return;
+      try {
+        await postWeightedPointPing({ email: current.email, serviceKey: current.serviceKey, latitude, longitude, isEndpoint });
+        if (!isEndpoint) refreshRealWeightedPoints();
+      } catch {
+        // best-effort -- see above
+      }
+    },
+    [refreshRealWeightedPoints]
+  );
 
   // Digest opt-in, username, and the notifications-viewed mark are all
   // best-effort, fetch-fresh-on-account-change: a failure just leaves a
@@ -250,7 +302,15 @@ export default function RoadAlerts() {
     }
     window.speechSynthesis?.cancel();
     setWatching(false);
-  }, []);
+
+    // The last known fix is this trip's destination -- reported with
+    // isEndpoint so it's never recorded as a weighted point, same
+    // reasoning as the origin ping in onPosition below.
+    const lastPosition = positionRef.current;
+    if (lastPosition) {
+      pingWeightedPoint(lastPosition.latitude, lastPosition.longitude, true);
+    }
+  }, [pingWeightedPoint]);
 
   const fetchSignals = useCallback(
     async (latitude: number, longitude: number, heading: number | null) => {
@@ -299,13 +359,29 @@ export default function RoadAlerts() {
     (pos: GeolocationPosition) => {
       const { latitude, longitude, heading } = pos.coords;
       setPosition({ latitude, longitude, heading });
+      positionRef.current = { latitude, longitude };
 
       const now = Date.now();
-      if (now - lastFetchAtRef.current < POLL_MIN_INTERVAL_MS) return;
-      lastFetchAtRef.current = now;
-      fetchSignals(latitude, longitude, heading);
+      if (now - lastFetchAtRef.current >= POLL_MIN_INTERVAL_MS) {
+        lastFetchAtRef.current = now;
+        fetchSignals(latitude, longitude, heading);
+      }
+
+      // The first fix after Start is this trip's origin -- reported with
+      // isEndpoint so it's never recorded as a weighted point (see
+      // pingWeightedPoint), and doesn't count against the throttle below
+      // since it's not a routine-route sample at all.
+      if (isFirstPositionOfSessionRef.current) {
+        isFirstPositionOfSessionRef.current = false;
+        pingWeightedPoint(latitude, longitude, true);
+        return;
+      }
+
+      if (now - lastWeightedPingAtRef.current < WEIGHTED_POINT_PING_INTERVAL_MS) return;
+      lastWeightedPingAtRef.current = now;
+      pingWeightedPoint(latitude, longitude, false);
     },
-    [fetchSignals]
+    [fetchSignals, pingWeightedPoint]
   );
 
   const handleStart = useCallback(() => {
@@ -314,6 +390,7 @@ export default function RoadAlerts() {
       setError('This browser does not support geolocation.');
       return;
     }
+    isFirstPositionOfSessionRef.current = true;
     const id = navigator.geolocation.watchPosition(
       onPosition,
       (err) => setError(err.message || 'Could not start watching your location.'),
@@ -719,8 +796,10 @@ export default function RoadAlerts() {
       <div className="card" style={{ background: 'var(--color-surface)', marginBottom: 'var(--space-4)' }}>
         <p className="card-body" style={{ margin: 0 }}>
           Traffic data from New England 511 (Maine, New Hampshire, and Vermont DOTs). Provided
-          as-is, with no accuracy or uptime guarantee. Your location is sent for one live check at
-          a time and isn't stored.
+          as-is, with no accuracy or uptime guarantee. Each hazard check sends your location for
+          one live lookup, not stored. Separately, while watching is on, occasional pings (every
+          few minutes, excluding trip start/end) help build a routine-route model for smarter
+          future alerts -- never your destinations, only points visited often enough to qualify.
         </p>
       </div>
 
