@@ -291,7 +291,12 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
    its sub-items, so collapsing related pages under one nav entry
    doesn't lose the "you are here" signal a plain top-level link gives. */
 .nav-dropdown { position: relative; }
-.nav-item-dropdown-trigger { border: none; background: none; font: inherit; cursor: pointer; }
+/* font-family only, not the `font` shorthand -- that resets font-size
+   too, which would win over .nav-item's own font-size: 12px (this rule
+   comes later in the cascade at equal specificity) and made "Account"
+   render at the page's base font-size instead of matching every other
+   nav item. */
+.nav-item-dropdown-trigger { border: none; background: none; font-family: inherit; cursor: pointer; }
 .nav-caret { font-size: 9px; margin-left: -1px; opacity: 0.55; }
 .nav-dropdown-panel {
   position: absolute; top: calc(100% + 6px); left: 0; z-index: 40;
