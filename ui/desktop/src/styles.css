@@ -207,7 +207,11 @@ textarea.input { min-height: 90px; resize: vertical; }
    places: three separate pages that feed one another, reached from a
    single "Batch" nav entry and then switched between via these tabs
    rather than needing a nav dropdown for the choice. */
-.page-tabs { display: flex; gap: var(--space-5); border-bottom: 1px solid var(--color-divider); margin-bottom: var(--space-6); }
+/* --space-5 doesn't exist in the token scale (only 1/2/3/4/6/8 do) --
+   var() with an undefined custom property and no fallback resolves gap
+   to its initial value (0), so the tabs had no real spacing at all
+   until this was caught. --space-6 is the next real token up. */
+.page-tabs { display: flex; gap: var(--space-6); border-bottom: 1px solid var(--color-divider); margin-bottom: var(--space-6); }
 .page-tab {
   display: flex; align-items: center; gap: 6px;
   padding: 9px 2px 10px; margin-bottom: -1px;
