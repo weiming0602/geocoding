@@ -11,7 +11,7 @@ export default function Help() {
   const [topic, setTopic] = useState<HelpTopic>('geocoding');
 
   return (
-    <div style={{ maxWidth: 720, margin: '0 auto' }}>
+    <div style={{ maxWidth: 720 }}>
       <PageHeader icon="help">Help</PageHeader>
       <AccountTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
