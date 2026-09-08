@@ -21,6 +21,7 @@ import type {
   RoadSignalsResponse,
   TestWeightedPoint,
   TestWeightedPointsResponse,
+  TransactionsResponse,
   WeightedPointPingResponse,
   WeightedPointsResponse,
 } from './types';
@@ -422,4 +423,12 @@ export function getWeightedPoints(
 ): Promise<WeightedPointsResponse> {
   const qs = new URLSearchParams({ email: params.email, serviceKey: params.serviceKey });
   return getJson<WeightedPointsResponse>(baseUrl, `/road-alerts/weighted-points?${qs.toString()}`);
+}
+
+export function getTransactions(
+  passcode: string,
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<TransactionsResponse> {
+  const qs = new URLSearchParams({ passcode });
+  return getJson<TransactionsResponse>(baseUrl, `/admin/transactions?${qs.toString()}`);
 }

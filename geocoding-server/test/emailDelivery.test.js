@@ -1,7 +1,12 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { sendServiceKeyEmail, sendRoadAlertEmail, sendFeedbackNotification } = require('../src/emailDelivery');
+const {
+  sendServiceKeyEmail,
+  sendRoadAlertEmail,
+  sendFeedbackNotification,
+  sendTransactionsDigestEmail,
+} = require('../src/emailDelivery');
 
 // sendServiceKeyEmail only calls Resend's API when both env vars are
 // set; each test sets/restores them directly (there's no shared
@@ -197,6 +202,70 @@ test(
       assert.equal(fetchMock.mock.callCount(), 0);
     } finally {
       if (savedNotifyEmail !== undefined) process.env.FEEDBACK_NOTIFY_EMAIL = savedNotifyEmail;
+    }
+  })
+);
+
+test(
+  'sendTransactionsDigestEmail sends to TRANSACTIONS_NOTIFY_EMAIL when configured',
+  withResendConfigured({ TRANSACTIONS_NOTIFY_EMAIL: 'owner@example.com' }, async (t) => {
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 200 }));
+
+    const result = await sendTransactionsDigestEmail([
+      {
+        email: 'alice@example.com',
+        order_id: 'ORDER-1',
+        address_count: 1000,
+        price_cents: 1500,
+        tier: 6000,
+        created_at: new Date().toISOString(),
+      },
+      {
+        email: 'bob@example.com',
+        order_id: 'ORDER-2',
+        address_count: 500,
+        price_cents: 900,
+        tier: 500,
+        created_at: new Date().toISOString(),
+      },
+    ]);
+
+    assert.deepEqual(result, { delivered: true, stubbed: false });
+    assert.equal(fetchMock.mock.callCount(), 1);
+
+    const [, options] = fetchMock.mock.calls[0].arguments;
+    const body = JSON.parse(options.body);
+    assert.deepEqual(body.to, ['owner@example.com']);
+    assert.match(body.text, /alice@example\.com/);
+    assert.match(body.text, /bob@example\.com/);
+    assert.match(body.text, /\$24\.00/); // 1500 + 900 cents total
+    assert.match(body.subject, /2 new transactions/);
+  })
+);
+
+test(
+  'sendTransactionsDigestEmail falls back to the stub when TRANSACTIONS_NOTIFY_EMAIL is missing',
+  withResendConfigured({}, async (t) => {
+    const savedNotifyEmail = process.env.TRANSACTIONS_NOTIFY_EMAIL;
+    delete process.env.TRANSACTIONS_NOTIFY_EMAIL;
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 200 }));
+
+    try {
+      const result = await sendTransactionsDigestEmail([
+        {
+          email: 'alice@example.com',
+          order_id: 'ORDER-1',
+          address_count: 1000,
+          price_cents: 1500,
+          tier: 6000,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+
+      assert.deepEqual(result, { delivered: false, stubbed: true });
+      assert.equal(fetchMock.mock.callCount(), 0);
+    } finally {
+      if (savedNotifyEmail !== undefined) process.env.TRANSACTIONS_NOTIFY_EMAIL = savedNotifyEmail;
     }
   })
 );
