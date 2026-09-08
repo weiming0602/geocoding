@@ -20,4 +20,9 @@ Description=Back up geocoding and geocoding_users Postgres databases
 
 [Service]
 Type=oneshot
-ExecStart=/home/my_ai/projects/geocoding/ops/backup-databases.sh
+# pg_dump also authenticates via Postgres peer authentication (see
+# CLAUDE.md's "Environment / data layout") -- must run as the same OS
+# user as the database role being dumped, not root's default.
+User=my_ai
+Group=my_ai
+ExecStart=/home/my_ai/geocoding/ops/backup-databases.sh
