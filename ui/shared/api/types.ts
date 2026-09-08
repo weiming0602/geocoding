@@ -394,3 +394,21 @@ export type RoadRerouteResponse = {
   options: RerouteOption[];
   rejoinPoint: { latitude: number; longitude: number };
 };
+
+// GET /admin/transactions -- owner/manager-only view of completed
+// purchases (see geocoding-server/src/transactions.js). Only ever
+// includes a purchase that actually captured via PayPal and granted
+// quota; a failed/abandoned checkout attempt never appears here.
+export type Transaction = {
+  id: number;
+  email: string;
+  orderId: string;
+  addressCount: number;
+  priceCents: number;
+  tier: number;
+  createdAt: string;
+};
+
+export type TransactionsResponse = {
+  transactions: Transaction[];
+};
