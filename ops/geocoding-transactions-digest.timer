@@ -1,0 +1,15 @@
+# Fires geocoding-transactions-digest.service daily -- the owner should
+# hear about a day's purchases the same day, not pile up for a week.
+#
+# Persistent=true means a run missed while the box was off gets caught
+# up at next boot instead of silently skipped.
+
+[Unit]
+Description=Run geocoding-transactions-digest.service daily
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+
+[Install]
+WantedBy=timers.target

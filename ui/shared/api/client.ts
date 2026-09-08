@@ -23,6 +23,7 @@ import type {
   TestRoadSignalsResponse,
   TestWeightedPoint,
   TestWeightedPointsResponse,
+  TransactionsResponse,
   WeightedPointPingResponse,
   WeightedPointsResponse,
 } from './types';
@@ -455,4 +456,12 @@ export function clearTestRoadSignals(
 ): Promise<{ deleted: number }> {
   const qs = new URLSearchParams({ email: params.email, serviceKey: params.serviceKey });
   return deleteJson<{ deleted: number }>(baseUrl, `/road-alerts/test/signals?${qs.toString()}`);
+}
+
+export function getTransactions(
+  passcode: string,
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<TransactionsResponse> {
+  const qs = new URLSearchParams({ passcode });
+  return getJson<TransactionsResponse>(baseUrl, `/admin/transactions?${qs.toString()}`);
 }

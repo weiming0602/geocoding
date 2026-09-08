@@ -56,6 +56,12 @@ read-write).
   last digest, then clears what was sent):
   `cd geocoding-server && node scripts/road-alerts-digest.js` -- see
   `ops/` for the systemd timer/service pair and a crontab alternative.
+- Transactions digest (emails the owner every completed purchase since
+  the last digest, then marks them notified -- never deletes them,
+  unlike the Road Alerts digest above, since these are financial
+  records): `cd geocoding-server && node scripts/transactions-digest.js`
+  -- see `ops/` for the systemd timer/service pair and a crontab
+  alternative.
 - Mobile app: `cd ui/mobile && npm start`
 - Desktop app: `cd ui/desktop && npm run dev`
 - Desktop app tests: `cd ui/desktop && npm test` (vitest; `App.test.tsx` and
@@ -241,6 +247,24 @@ read-write).
   `feedback` table either way (see `feedback.js`) -- there's no public
   listing or reply endpoint, reviewing/replying is manual (psql + email),
   same as `users.js`'s `upsertUser`.
+- `ADMIN_PASSCODE` (optional -- unset = `GET /admin/transactions` always
+  rejects, never falls open) gates `ui/desktop`'s hidden `/owner`
+  dashboard's transactions view -- there's no login system anywhere in
+  this app, so this is one shared secret checked on every request, same
+  trust model as a batch service key, rather than real accounts/roles
+  for one page. The page asks for it once and remembers it in that
+  browser's `localStorage`.
+- `TRANSACTIONS_NOTIFY_EMAIL` (optional -- unset = stub) is where the
+  transactions digest script (see `scripts/transactions-digest.js`
+  above) emails a summary of purchases completed since the last digest;
+  uses the same Resend credentials above. Every completed purchase is
+  saved in `geocoding_users`' `transactions` table regardless (see
+  `transactions.js`, written from `POST /billing/purchase` right after
+  `addToTier` grants the quota) -- these rows are financial records and
+  are never deleted, only marked `notified_at` once a digest email for
+  them succeeds. Only a purchase that actually captured via PayPal and
+  granted quota is ever recorded; a failed/abandoned checkout attempt
+  never appears here.
 - `ALLOW_TEST_EMPTY_SERVICE_KEY` (optional, default off) lets all three
   batch endpoints accept an empty `serviceKey` for any known email,
   purely to skip looking one up while testing (see `quota.js`'s

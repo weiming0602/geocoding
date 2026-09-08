@@ -58,6 +58,7 @@ const {
 } = require('./testRoadSignals');
 const { openUsersDb, getUser, ensureCurrentPeriod, addToTier } = require('./users');
 const { ensureFeedbackTable, submitFeedback } = require('./feedback');
+const { ensureTransactionsTable, recordTransaction, listTransactions } = require('./transactions');
 const { checkQuota, useQuota } = require('./quota');
 const {
   sendResultsEmail,
@@ -138,6 +139,7 @@ function resolveAddresses(body) {
 const db = createReadOnlyPool(GEOCODING_DSN);
 const usersDbPromise = openUsersDb(USERS_DSN).then(async (pool) => {
   await ensureFeedbackTable(pool);
+  await ensureTransactionsTable(pool);
   await ensureRoadAlertsAccountsTable(pool);
   await ensureRoadAlertsSurfacedLogTable(pool);
   await ensureRoadAlertsTopicsTable(pool);
@@ -389,6 +391,18 @@ app.post('/billing/purchase', async (req, res) => {
     const usersDb = await usersDbPromise;
     const user = await addToTier(usersDb, email, tier.addressCount);
 
+    // Same "already succeeded, don't undo it" reasoning as the email
+    // send just below -- a real financial record of this purchase
+    // matters more than any downstream step failing, so it's recorded
+    // right after the quota grant, before the (best-effort) email send.
+    await recordTransaction(usersDb, {
+      email: user.email,
+      orderId,
+      addressCount: tier.addressCount,
+      priceCents: tier.priceCents,
+      tier: user.tier,
+    });
+
     // The purchase itself has already succeeded (money captured, quota
     // granted) by this point -- an email hiccup shouldn't undo that or
     // fail the request, so its outcome is only reported, never thrown.
@@ -463,6 +477,46 @@ app.post('/feedback', async (req, res) => {
     res.json({ received: true });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Owner/manager-only view of completed purchases (ui/desktop's
+// unlisted /admin/transactions page, reached only by direct URL -- it
+// deliberately has no NAV_ENTRIES link, unlike every real feature page).
+// There's no login system anywhere in this app (see CLAUDE.md), so this
+// reuses the simplest thing that already exists here -- a shared secret
+// checked on every request, same trust model as a batch service key --
+// rather than building real accounts/roles just for one admin page.
+// ADMIN_PASSCODE must be set for this to ever succeed: with it unset,
+// every request is rejected (never "misconfigured, so let it through").
+app.get('/admin/transactions', async (req, res) => {
+  const passcode = req.query && req.query.passcode;
+  try {
+    if (
+      typeof passcode !== 'string' ||
+      !process.env.ADMIN_PASSCODE ||
+      passcode !== process.env.ADMIN_PASSCODE
+    ) {
+      throw new UnauthorizedError('passcode is missing or incorrect');
+    }
+
+    const usersDb = await usersDbPromise;
+    const transactions = await listTransactions(usersDb);
+    res.json({
+      transactions: transactions.map((t) => ({
+        id: t.id,
+        email: t.email,
+        orderId: t.order_id,
+        addressCount: t.address_count,
+        priceCents: t.price_cents,
+        tier: t.tier,
+        createdAt: t.created_at,
+      })),
+    });
+  } catch (err) {
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: 'internal error' });
   }
