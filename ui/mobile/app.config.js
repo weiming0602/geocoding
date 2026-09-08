@@ -16,6 +16,10 @@ module.exports = {
     userInterfaceStyle: 'light',
     ios: {
       supportsTablet: true,
+      infoPlist: {
+        NSSpeechRecognitionUsageDescription: 'Allow $(PRODUCT_NAME) to use speech recognition.',
+        NSMicrophoneUsageDescription: 'Allow $(PRODUCT_NAME) to use the microphone.',
+      },
     },
     android: {
       adaptiveIcon: {
@@ -30,6 +34,8 @@ module.exports = {
           apiKey: process.env.GOOGLE_MAPS_API_KEY,
         },
       },
+      permissions: ['android.permission.RECORD_AUDIO'],
+      package: 'com.anonymous.geocodingapp',
     },
     web: {
       favicon: './assets/favicon.png',
@@ -38,6 +44,7 @@ module.exports = {
       'expo-font',
       'expo-splash-screen',
       'expo-secure-store',
+      'expo-speech-recognition',
       [
         'expo-maps',
         {
