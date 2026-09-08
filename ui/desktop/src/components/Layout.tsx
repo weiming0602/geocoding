@@ -160,36 +160,20 @@ export default function Layout({ children }: { children: ReactNode }) {
             <span style={{ fontFamily: 'var(--font-heading)', fontWeight: 'var(--font-heading-weight)' }}>
               Meridian
             </span>
-            {/* Tagline only -- the actual copyright notice lives once, in
-                the legal strip below, alongside Privacy/Terms/Site Map
-                (the conventional place for it). Repeating "© {year}
-                Meridian" here too just duplicated the same fact twice in
-                one footer. */}
-            <span className="text-muted" style={{ fontSize: 13 }}>
-              Built for Maine &amp; New Hampshire.
-            </span>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)', fontSize: 13 }}>
-            <Link to="/pricing" className="text-muted">
-              Pricing
-            </Link>
-            <Link to="/progress" className="text-muted">
-              Progress
-            </Link>
-            <Link to="/help" className="text-muted">
-              Help
-            </Link>
-            {mobileAppUrl && (
-              <a href={mobileAppUrl} className="btn btn-ghost" style={{ fontSize: 13, padding: '4px 10px' }}>
-                📱 Switch to mobile app
-              </a>
-            )}
-          </div>
+          {mobileAppUrl && (
+            <a href={mobileAppUrl} className="btn btn-ghost" style={{ fontSize: 13, padding: '4px 10px' }}>
+              📱 Switch to mobile app
+            </a>
+          )}
         </div>
 
-        {/* Legal strip -- separate row from the brand/tool links above,
-            same convention most business sites use to keep copyright/
-            privacy/terms links visually distinct from primary navigation. */}
+        {/* Every footer link in one row, separated from the brand row
+            above by a divider -- previously split into two separate rows
+            (site links, then a second "legal strip" for Privacy/Terms/
+            Site Map), which repeated the same row structure twice for no
+            real reason once the tagline/duplicate copyright above it were
+            trimmed down. */}
         <div
           style={{
             maxWidth: '1240px',
@@ -207,7 +191,16 @@ export default function Layout({ children }: { children: ReactNode }) {
           <span className="text-muted" style={{ fontSize: 12 }}>
             &copy; {new Date().getFullYear()} Meridian. All rights reserved.
           </span>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)', fontSize: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)', fontSize: 12, flexWrap: 'wrap' }}>
+            <Link to="/pricing" className="text-muted">
+              Pricing
+            </Link>
+            <Link to="/progress" className="text-muted">
+              Progress
+            </Link>
+            <Link to="/help" className="text-muted">
+              Help
+            </Link>
             <Link to="/privacy" className="text-muted">
               Privacy Policy
             </Link>
