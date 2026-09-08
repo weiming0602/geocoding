@@ -211,7 +211,23 @@ textarea.input { min-height: 90px; resize: vertical; }
    var() with an undefined custom property and no fallback resolves gap
    to its initial value (0), so the tabs had no real spacing at all
    until this was caught. --space-6 is the next real token up. */
-.page-tabs { display: flex; gap: var(--space-6); border-bottom: 1px solid var(--color-divider); margin-bottom: var(--space-6); }
+.page-tabs {
+  display: flex; gap: var(--space-6); border-bottom: 1px solid var(--color-divider); margin-bottom: var(--space-6);
+  /* Account's 4 labels ("Plan & quota"/"Pricing"/"Progress"/"Help") don't
+     reliably fit a phone-width viewport even at the tightened mobile gap
+     below -- scroll horizontally instead of silently clipping the last
+     tab (which `overflow-x: hidden` elsewhere on the page would do
+     without this). -webkit-overflow-scrolling gives it real momentum on
+     iOS Safari rather than a stuttery scroll. */
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+/* --space-6 reads fine at desktop widths, but on a phone the same gap
+   between 3-4 tab labels spreads them out further than the narrower
+   viewport can comfortably show at once. */
+@media (max-width: 600px) {
+  .page-tabs { gap: var(--space-3); }
+}
 .page-tab {
   display: flex; align-items: center; gap: 6px;
   padding: 9px 2px 10px; margin-bottom: -1px;
