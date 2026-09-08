@@ -199,6 +199,18 @@ export type RoadSignalsResponse = {
   generatedAt: string;
 };
 
+// /road-alerts/test/signals -- fake, developer-seeded hazards, gated
+// server-side behind ALLOW_TEST_ROAD_SIGNALS and off by default. See
+// geocoding-server/src/testRoadSignals.js. Unlike a real 511 incident,
+// persists until explicitly deleted rather than expiring on its own.
+// GET already returns each row shaped as a full RoadSignal (id prefixed
+// "test-" so it can never collide with a real incident id) -- usable
+// anywhere a real one is, including findAlertsForWeightedPoints, with no
+// special-casing.
+export type TestRoadSignalsResponse = {
+  signals: RoadSignal[];
+};
+
 // POST /road-alerts/register -- idempotent: an already-registered email
 // gets its existing service key back unchanged (alreadyRegistered: true),
 // never a new key. Free for every registered account right now, no trial
