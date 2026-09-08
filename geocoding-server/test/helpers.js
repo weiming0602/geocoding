@@ -342,6 +342,12 @@ async function withTestServer(callback, { seedStreets = true, geoOptions = {}, g
   const savedAllowTestWeightedPoints = process.env.ALLOW_TEST_WEIGHTED_POINTS;
   delete process.env.ALLOW_TEST_WEIGHTED_POINTS;
 
+  // Same rationale again -- a real .env's ADMIN_PASSCODE should never
+  // make the "GET /admin/transactions is unauthorized by default" tests
+  // pass for the wrong reason (see server.js's /admin/transactions).
+  const savedAdminPasscode = process.env.ADMIN_PASSCODE;
+  delete process.env.ADMIN_PASSCODE;
+
   try {
     return await callback({ port: httpServer.address().port, db: server.db, usersDb });
   } finally {
@@ -360,6 +366,7 @@ async function withTestServer(callback, { seedStreets = true, geoOptions = {}, g
       process.env.ALLOW_TEST_EMPTY_SERVICE_KEY = savedAllowTestEmptyServiceKey;
     if (savedAllowTestWeightedPoints !== undefined)
       process.env.ALLOW_TEST_WEIGHTED_POINTS = savedAllowTestWeightedPoints;
+    if (savedAdminPasscode !== undefined) process.env.ADMIN_PASSCODE = savedAdminPasscode;
   }
 }
 

@@ -204,6 +204,50 @@ async function sendFeedbackNotification({ name, email, message }) {
   });
 }
 
+/**
+ * Notifies the owner (TRANSACTIONS_NOTIFY_EMAIL) of purchases completed
+ * since the last digest -- falls back to a stub when Resend isn't
+ * configured or TRANSACTIONS_NOTIFY_EMAIL isn't set. `transactions` is a
+ * non-empty array of transactions table rows (see transactions.js's
+ * getUnnotifiedTransactions); the caller (transactionsDigest.js) never
+ * calls this with nothing pending, so there's no "no transactions today"
+ * email. Unlike sendFeedbackNotification, a failed send here matters:
+ * the caller only marks these rows notified once this returns delivered
+ * (or stubbed), so a real failure leaves them pending for the next run
+ * to retry rather than silently losing track of a purchase.
+ */
+async function sendTransactionsDigestEmail(transactions) {
+  const totalCents = transactions.reduce((sum, t) => sum + t.price_cents, 0);
+  const text =
+    `${transactions.length} new transaction${transactions.length === 1 ? '' : 's'} ` +
+    `totaling $${(totalCents / 100).toFixed(2)}:\n\n` +
+    transactions
+      .map((t) => {
+        const when = new Date(t.created_at).toLocaleString('en-US', { timeZone: 'UTC' });
+        return (
+          `- ${t.email}: ${t.address_count.toLocaleString()} addresses, ` +
+          `$${(t.price_cents / 100).toFixed(2)} (order ${t.order_id})\n` +
+          `  ${when} UTC, now on the ${t.tier.toLocaleString()}-address tier\n`
+        );
+      })
+      .join('\n') +
+    `\n`;
+
+  if (!isEmailConfigured() || !process.env.TRANSACTIONS_NOTIFY_EMAIL) {
+    console.log(
+      `[emailDelivery stub] would notify owner of ${transactions.length} transaction(s)`,
+      { totalCents }
+    );
+    return { delivered: false, stubbed: true };
+  }
+
+  return sendPlainTextEmail({
+    to: process.env.TRANSACTIONS_NOTIFY_EMAIL,
+    subject: `${transactions.length} new transaction${transactions.length === 1 ? '' : 's'} on your geocoding site`,
+    text,
+  });
+}
+
 module.exports = {
   sendResultsEmail,
   sendServiceKeyEmail,
@@ -211,4 +255,5 @@ module.exports = {
   sendRoadAlertEmail,
   sendRoadAlertsDigestEmail,
   sendFeedbackNotification,
+  sendTransactionsDigestEmail,
 };
