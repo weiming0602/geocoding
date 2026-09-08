@@ -18,9 +18,16 @@ Description=Annual TIGER/Line + Maine E911 address point refresh
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/my_ai/projects/geocoding
+# Postgres peer authentication (see CLAUDE.md's "Environment / data
+# layout") matches the connecting OS user to the requested role -- the
+# DSN below implicitly connects as the OS user running this, so it must
+# run as "my_ai" (the role every table in this app was created under),
+# not root's default.
+User=my_ai
+Group=my_ai
+WorkingDirectory=/home/my_ai/geocoding
 # GEOCODING_DSN should point at the Lightsail Database's network endpoint
 # in production (host/port/user/password), not the local Unix socket used
 # in dev -- see CLAUDE.md's "Environment / data layout".
 Environment=GEOCODING_DSN=dbname=geocoding
-ExecStart=/home/my_ai/projects/geocoding/.venv/bin/python -m geocoding.annual_update "${GEOCODING_DSN}"
+ExecStart=/home/my_ai/geocoding/.venv/bin/python -m geocoding.annual_update "${GEOCODING_DSN}"
