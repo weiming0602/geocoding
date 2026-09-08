@@ -18,10 +18,22 @@ Description=Delete feedback comments older than 90 days
 
 [Service]
 Type=oneshot
-WorkingDirectory=/home/my_ai/projects/geocoding/geocoding-server
+# Postgres peer authentication (see CLAUDE.md's "Environment / data
+# layout") matches the connecting OS user to the requested role -- the
+# DSN below requests role "my_ai", so this must run as that same OS
+# user, not root's default. Without this, every query fails with
+# "Peer authentication failed for user \"my_ai\"".
+User=my_ai
+Group=my_ai
+WorkingDirectory=/home/my_ai/geocoding/geocoding-server
 # USERS_DSN should point at the Lightsail Database's network endpoint in
 # production, not the local Unix socket used in dev -- see CLAUDE.md's
-# "Environment / data layout".
-Environment=USERS_DSN=postgresql://my_ai@%2Fvar%2Frun%2Fpostgresql/geocoding_users
+# "Environment / data layout". The socket path's "/" must be doubled
+# (%%2F, not %2F): systemd treats a single "%" in Environment= as the
+# start of one of its own specifiers (e.g. %h for $HOME) and silently
+# drops the whole assignment if it can't resolve one -- "%2F" isn't a
+# real specifier, so the DSN never actually got set without this, and
+# the script silently fell back to its own hardcoded default instead.
+Environment=USERS_DSN=postgresql://my_ai@%%2Fvar%%2Frun%%2Fpostgresql/geocoding_users
 # Adjust this path to wherever `which node` resolves on the actual box.
-ExecStart=/home/my_ai/.local/node/bin/node scripts/cleanup-feedback.js 90
+ExecStart=/usr/bin/node scripts/cleanup-feedback.js 90
