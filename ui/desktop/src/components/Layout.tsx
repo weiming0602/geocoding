@@ -160,8 +160,13 @@ export default function Layout({ children }: { children: ReactNode }) {
             <span style={{ fontFamily: 'var(--font-heading)', fontWeight: 'var(--font-heading-weight)' }}>
               Meridian
             </span>
+            {/* Tagline only -- the actual copyright notice lives once, in
+                the legal strip below, alongside Privacy/Terms/Site Map
+                (the conventional place for it). Repeating "© {year}
+                Meridian" here too just duplicated the same fact twice in
+                one footer. */}
             <span className="text-muted" style={{ fontSize: 13 }}>
-              &copy; {new Date().getFullYear()} Meridian. Built for Maine &amp; New Hampshire.
+              Built for Maine &amp; New Hampshire.
             </span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)', fontSize: 13 }}>
