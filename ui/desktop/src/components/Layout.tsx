@@ -33,6 +33,7 @@ const NAV_ENTRIES: NavEntry[] = [
   { to: '/batch', label: 'Batch', icon: 'batch', matchPrefixes: BATCH_ROUTES },
   { to: '/road-alerts', label: 'Road Alerts', icon: 'roadAlerts' },
   { to: '/road-alert-test', label: 'Road Alert Test', icon: 'roadAlerts' },
+  { to: '/road-alerts-home-board', label: 'Home Board', icon: 'roadAlerts' },
   { to: '/plan-quota', label: 'Account', icon: 'planQuota', matchPrefixes: ACCOUNT_ROUTES },
 ];
 

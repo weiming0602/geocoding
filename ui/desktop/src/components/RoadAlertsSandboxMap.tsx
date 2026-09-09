@@ -22,6 +22,11 @@ type Props = {
   points: SandboxPoint[];
   driverPosition?: { latitude: number; longitude: number } | null;
   onMapClick?: (coordinates: { latitude: number; longitude: number }) => void;
+  // Flies the camera to this coordinate whenever it changes -- e.g. a
+  // caller's own list-item click driving the map to that item's dot,
+  // like RoadAlertsHomeBoard.tsx's hazard list. Distinct from the
+  // initial fit-to-all-points behavior below, which only ever fires once.
+  focusPoint?: { latitude: number; longitude: number } | null;
 };
 
 // Plain DOM Markers (one per point), not BatchMapView's WebGL circle
@@ -29,7 +34,7 @@ type Props = {
 // (you're placing them by hand), so the per-point DOM cost that layer
 // exists to avoid never actually applies here, and per-point color/hover
 // label is far simpler to express this way.
-export default function RoadAlertsSandboxMap({ points, driverPosition, onMapClick }: Props) {
+export default function RoadAlertsSandboxMap({ points, driverPosition, onMapClick, focusPoint }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const [ready, setReady] = useState(false);
@@ -124,6 +129,12 @@ export default function RoadAlertsSandboxMap({ points, driverPosition, onMapClic
       driverMarkerRef.current.setLngLat([driverPosition.longitude, driverPosition.latitude]);
     }
   }, [driverPosition, ready]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || !focusPoint) return;
+    map.flyTo({ center: [focusPoint.longitude, focusPoint.latitude], zoom: 15, essential: true });
+  }, [focusPoint, ready]);
 
   return (
     <div
