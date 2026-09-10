@@ -50,7 +50,9 @@ const {
   ensureWeightedPointsTable,
   recordWeightedPointPing,
   getWeightedPoints,
+  getAllWeightedPointCandidates,
   ROUTINE_DENSITY_TIERS,
+  resolveRoutineDensityTier,
 } = require('./weightedPoints');
 const {
   ensureTestRoadSignalsTable,
@@ -1283,6 +1285,37 @@ app.get('/road-alerts/weighted-points', async (req, res) => {
 
     const weightedPoints = await getWeightedPoints(usersDb, email);
     res.json({ weightedPoints });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Debug/test-tooling counterpart to GET /road-alerts/weighted-points above
+// (see getAllWeightedPointCandidates's own doc comment) -- the Road Alert
+// Test page uses this one so a low- or no-qualified-point account is
+// still visible enough to evaluate the qualification logic against.
+// Never consumed by the real driving pages, which rely on the other
+// route's qualified-only contract for actual alerting.
+app.get('/road-alerts/weighted-points/candidates', async (req, res) => {
+  const { email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
+    const { qualifyingWindowDays, minPingsToQualify } = resolveRoutineDensityTier(account.routine_density);
+
+    const points = await getAllWeightedPointCandidates(usersDb, email);
+    res.json({ routineDensity: account.routine_density, tier: { qualifyingWindowDays, minPingsToQualify }, points });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
