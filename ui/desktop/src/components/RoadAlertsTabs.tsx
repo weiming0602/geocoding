@@ -10,8 +10,8 @@ import { Icon } from './icons';
 // landed on.
 const TABS = [
   { to: '/road-alerts', label: 'Road Alerts', icon: 'roadAlerts' as const },
-  { to: '/road-alerts-home-board', label: 'Hazards in the Neighborhood', icon: 'roadAlerts' as const },
-  { to: '/road-alert-test', label: 'Weighted Point Test', icon: 'roadAlerts' as const },
+  { to: '/road-alerts-home-board', label: 'Hazards in the Neighborhood', icon: 'neighborhood' as const },
+  { to: '/road-alert-test', label: 'Weighted Point Test', icon: 'weightedPoints' as const },
 ];
 
 export default function RoadAlertsTabs() {

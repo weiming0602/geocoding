@@ -56,7 +56,7 @@ export default function RoadAlertsTest() {
 
   return (
     <div>
-      <PageHeader icon="roadAlerts">Weighted Point Test</PageHeader>
+      <PageHeader icon="weightedPoints">Weighted Point Test</PageHeader>
       <RoadAlertsTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         Look up the real weighted points Road Alerts has collected for an account while driving --
