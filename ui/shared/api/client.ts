@@ -13,6 +13,7 @@ import type {
   RoadAlertsNotificationsResponse,
   RoadAlertsNotificationsViewedResponse,
   RoadAlertsPreferencesResponse,
+  RoadAlertsRoutineDensity,
   RoadAlertsRegisterResponse,
   RoadAlertsTopicResponse,
   RoadAlertsUsernameResponse,
@@ -286,8 +287,10 @@ export function getRoadAlertsPreferences(
   return getJson<RoadAlertsPreferencesResponse>(baseUrl, `/road-alerts/preferences?${qs.toString()}`);
 }
 
+// digestOptIn and routineDensity are independent -- pass only the one(s)
+// you're changing, the other is left untouched server-side.
 export function updateRoadAlertsPreferences(
-  params: { email: string; serviceKey: string; digestOptIn: boolean },
+  params: { email: string; serviceKey: string; digestOptIn?: boolean; routineDensity?: RoadAlertsRoutineDensity },
   baseUrl = DEFAULT_API_BASE_URL
 ): Promise<RoadAlertsPreferencesResponse> {
   return postJson<RoadAlertsPreferencesResponse>(baseUrl, '/road-alerts/preferences', params);

@@ -8,6 +8,7 @@ const {
   updateDigestOptIn,
   updateUsername,
   markNotificationsViewed,
+  updateRoutineDensity,
 } = require('../src/roadAlertsAccounts');
 const { NotFoundError, UnauthorizedError } = require('../src/errors');
 const { makeUsersDb } = require('./helpers');
@@ -24,6 +25,21 @@ test('registerAccount creates a fresh row with a real service key on first call'
   assert.equal(account.digest_opt_in, false);
   assert.equal(account.username, null);
   assert.equal(account.notifications_viewed_at, null);
+  assert.equal(account.routine_density, 'balanced');
+
+  await db.close();
+});
+
+test('updateRoutineDensity changes an account\'s routine-density setting', async () => {
+  const db = await makeUsersDb();
+  await ensureRoadAlertsAccountsTable(db);
+  await registerAccount(db, 'alice@example.com');
+
+  const updated = await updateRoutineDensity(db, 'alice@example.com', 'minimal');
+  assert.equal(updated.routine_density, 'minimal');
+
+  const updatedAgain = await updateRoutineDensity(db, 'alice@example.com', 'most_complete');
+  assert.equal(updatedAgain.routine_density, 'most_complete');
 
   await db.close();
 });
