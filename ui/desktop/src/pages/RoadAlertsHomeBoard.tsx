@@ -5,6 +5,7 @@ import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/h
 import type { RoadSignal, RoadSignalSeverity } from '../../../shared/api/types';
 import PageHeader from '../components/PageHeader';
 import RoadAlertsSandboxMap, { type SandboxPoint } from '../components/RoadAlertsSandboxMap';
+import RoadAlertsTabs from '../components/RoadAlertsTabs';
 
 // Same radius RoadAlerts.tsx polls with while driving -- there's no
 // reason a passive board centered on a fixed area needs a different one.
@@ -149,7 +150,8 @@ export default function RoadAlertsHomeBoard() {
 
   return (
     <div>
-      <PageHeader icon="roadAlerts">Home Board</PageHeader>
+      <PageHeader icon="roadAlerts">Hazards Near Home</PageHeader>
+      <RoadAlertsTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         All current hazards near where an account lives -- inferred from the center of its qualified
         weighted points (the routine, repeated locations Road Alerts has learned from actual driving),

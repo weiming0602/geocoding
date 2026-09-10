@@ -28,6 +28,7 @@ import { buildGoogleMapsDirectionsUrl } from '../../../shared/googleMapsDirectio
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
 import PageHeader from '../components/PageHeader';
 import RoadAlertsRegistration from '../components/RoadAlertsRegistration';
+import RoadAlertsTabs from '../components/RoadAlertsTabs';
 import RoadRerouteMap, { ROUTE_COLORS } from '../components/RoadRerouteMap';
 import { clearStoredAccount, getStoredAccount, type StoredRoadAlertsAccount } from '../roadAlertsStorage';
 import { isSpeechRecognitionAvailable, listenOnce, matchesSaveCommand } from '../webSpeechRecognition';
@@ -768,6 +769,7 @@ export default function RoadAlerts() {
     return (
       <div>
         <PageHeader icon="roadAlerts">Road Alerts</PageHeader>
+        <RoadAlertsTabs />
         <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
           Live traffic hazards near you, spoken aloud as you approach them.
         </p>
@@ -779,6 +781,7 @@ export default function RoadAlerts() {
   return (
     <div style={{ maxWidth: 720 }}>
       <PageHeader icon="roadAlerts">Road Alerts</PageHeader>
+      <RoadAlertsTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         Live traffic hazards near you, spoken aloud as you approach them.
       </p>

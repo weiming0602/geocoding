@@ -4,6 +4,7 @@ import { getWeightedPoints, registerRoadAlerts } from '../../../shared/api/clien
 import type { WeightedPointRecord } from '../../../shared/api/types';
 import PageHeader from '../components/PageHeader';
 import RoadAlertsSandboxMap, { type SandboxPoint } from '../components/RoadAlertsSandboxMap';
+import RoadAlertsTabs from '../components/RoadAlertsTabs';
 
 // A standalone lookup tool, not a sign-in: unlike RoadAlertsRegistration
 // (used on the real Road Alerts page), this deliberately never touches
@@ -55,7 +56,8 @@ export default function RoadAlertsTest() {
 
   return (
     <div>
-      <PageHeader icon="roadAlerts">Road Alert Test</PageHeader>
+      <PageHeader icon="roadAlerts">Weighted Point Test</PageHeader>
+      <RoadAlertsTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         Look up the real weighted points Road Alerts has collected for an account while driving --
         for reviewing what's accumulated so far, not a real driving feature. Only <em>qualified</em>{' '}

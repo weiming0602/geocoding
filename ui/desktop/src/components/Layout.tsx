@@ -13,27 +13,28 @@ import MobileRedirectBanner, { MOBILE_APP_URL } from './MobileRedirectBanner';
 // single nav entry for each needs to read as active from any of them.
 type NavEntry = { to: string; label: string; icon: IconName; end?: boolean; matchPrefixes?: string[] };
 
-// Kept in sync with BatchTabs.tsx/AccountTabs.tsx's own TABS lists by
-// hand -- both pairs are short and change rarely enough that a shared
-// import would be more indirection than it's worth.
+// Kept in sync with BatchTabs.tsx/AccountTabs.tsx/RoadAlertsTabs.tsx's own
+// TABS lists by hand -- these are short and change rarely enough that a
+// shared import would be more indirection than it's worth.
 const BATCH_ROUTES = ['/batch', '/import-addresses', '/find-places'];
 const ACCOUNT_ROUTES = ['/plan-quota', '/pricing', '/progress', '/help'];
+const ROAD_ALERTS_ROUTES = ['/road-alerts', '/road-alerts-home-board', '/road-alert-test'];
 
 // Find places and Import addresses both exist to feed Batch geocode an
 // address list (their own "Send to Batch" actions); Plan & quota/
 // Pricing/Progress/Help are account/info pages, not core geocoding
-// tools. Neither needed a full nav dropdown -- both groups' pages
-// already/now link to each other via a page-level tab strip, so the
-// primary nav only needs one entry per group (matchPrefixes keeps it
-// highlighted from any page in the group).
+// tools; Hazards Near Home and Weighted Point Test are both lookup
+// tools built on top of the same real Road Alerts data, not standalone
+// destinations. None of these three groups needed a full nav dropdown --
+// each group's pages already link to each other via a page-level tab
+// strip, so the primary nav only needs one entry per group
+// (matchPrefixes keeps it highlighted from any page in the group).
 const NAV_ENTRIES: NavEntry[] = [
   { to: '/', label: 'Overview', icon: 'overview', end: true },
   { to: '/geocode', label: 'Geocode', icon: 'geocode' },
   { to: '/reverse-geocode', label: 'Reverse geocode', icon: 'reverseGeocode' },
   { to: '/batch', label: 'Batch', icon: 'batch', matchPrefixes: BATCH_ROUTES },
-  { to: '/road-alerts', label: 'Road Alerts', icon: 'roadAlerts' },
-  { to: '/road-alert-test', label: 'Road Alert Test', icon: 'roadAlerts' },
-  { to: '/road-alerts-home-board', label: 'Home Board', icon: 'roadAlerts' },
+  { to: '/road-alerts', label: 'Road Alerts', icon: 'roadAlerts', matchPrefixes: ROAD_ALERTS_ROUTES },
   { to: '/plan-quota', label: 'Account', icon: 'planQuota', matchPrefixes: ACCOUNT_ROUTES },
 ];
 
