@@ -72,22 +72,41 @@ Tested live this session with a real HERE API key:
 
 ## Architecture
 
-**Two files, geography decides which one runs — never both for the same request.**
+**Three files, geography decides which provider runs — never both for the same
+request.**
 
-- `roadSignals.js` stays exactly as it is today for New England 511 (`NE511_NETWORKS`,
-  `fetchNetworkIncidentsCached`, `normalizeIncident`, `mapSeverity`, `categorizeHazard`,
-  `boundingBoxDegrees`, `filterByBbox`, `sortByFreshness` — all already exported, all
-  unchanged). Its own tests (`roadSignals.test.js`, `roadSignalsEndpoint.test.js`) are
-  not touched.
-- New `hereTraffic.js` holds HERE-specific fetch + normalization logic, mirroring
-  `normalizeIncident`'s output shape exactly (same `RoadSignal` fields: `id`, `severity`,
-  `hazardCategory`, `roadway`, `latitude`/`longitude`, `speech`, etc.) so downstream code
-  (`filterByBbox`, `sortByFreshness`, the `GET /road-signals` route, `roadAlertsMatching`)
-  never needs to know which provider produced a given signal.
+- **Correction made during plan-writing:** the original version of this spec said
+  `roadSignals.js` stays completely untouched and `hereTraffic.js` would reuse its
+  exported `categorizeHazard`/`filterByBbox`/`sortByFreshness`/`boundingBoxDegrees`
+  directly via `require('./roadSignals')`. That creates a **circular require** —
+  `roadSignals.js` also needs to `require('./hereTraffic')` for its dispatcher, and
+  Node's CommonJS gives the second module in a require cycle a still-initializing
+  (missing) view of the first module's exports. Fixed by extracting those four
+  provider-agnostic functions (plus `HAZARD_CATEGORIES`) into a new
+  `geocoding-server/src/roadSignalsShared.js`, which neither of the other two files'
+  requires depend on. This is a small, behavior-preserving move, not a rewrite — see
+  the plan's Task 1.
+- `roadSignals.js` re-exports the same names it does today (so
+  `require('../src/roadSignals')` in `roadSignals.test.js` keeps working unmodified,
+  zero test changes needed there) but now imports their implementations from
+  `roadSignalsShared.js` instead of defining them inline. `NE511_NETWORKS`,
+  `fetchNetworkIncidentsCached`, `normalizeIncident`, `mapSeverity` (NE511's own
+  keyword-based severity mapper — not moved, not reused by HERE) stay exactly where
+  they are.
+- `roadSignalsShared.js` holds `boundingBoxDegrees`, `filterByBbox`, `sortByFreshness`,
+  `HAZARD_CATEGORIES`, `categorizeHazard` — moved verbatim (same implementation, same
+  behavior), just relocated.
+- `hereTraffic.js` holds HERE-specific fetch + normalization logic, importing the shared
+  utilities from `roadSignalsShared.js` (never from `roadSignals.js`). Its normalized
+  output matches `normalizeIncident`'s shape exactly (same `RoadSignal` fields: `id`,
+  `severity`, `hazardCategory`, `roadway`, `latitude`/`longitude`, `speech`, etc.) so
+  downstream code (the `GET /road-signals` route, `roadAlertsMatching`) never needs to
+  know which provider produced a given signal.
 - `getRoadSignals({ latitude, longitude, radiusMeters })` in `roadSignals.js` becomes a
-  thin dispatcher: check a bounding box; inside it, run the existing NE511 code path
-  unchanged; outside it, call `hereTraffic.js`'s fetch function if `HERE_API_KEY` is set,
-  otherwise return an empty, non-error result.
+  thin dispatcher (this file's one real behavior change): check a bounding box; inside
+  it, run the existing NE511 code path unchanged; outside it, call `hereTraffic.js`'s
+  `getHereIncidents()` if `HERE_API_KEY` is set, otherwise return an empty, non-error
+  result.
 
 Rejected alternative: a formal provider registry (array of `{ coversLocation(),
 fetchIncidents() }` objects). Unnecessary abstraction for exactly two providers with a
