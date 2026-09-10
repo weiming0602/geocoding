@@ -16,10 +16,10 @@ const TABS = [
 
 export default function RoadAlertsTabs() {
   return (
-    <nav className="page-tabs" aria-label="Road Alerts tools">
+    <nav className="page-tabs page-tabs-compact" aria-label="Road Alerts tools">
       {TABS.map((tab) => (
         <NavLink key={tab.to} to={tab.to} className={({ isActive }) => `page-tab${isActive ? ' active' : ''}`}>
-          <Icon name={tab.icon} size={14} />
+          <Icon name={tab.icon} size={12} />
           {tab.label}
         </NavLink>
       ))}

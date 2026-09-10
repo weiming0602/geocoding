@@ -104,7 +104,7 @@ export default function Layout({ children }: { children: ReactNode }) {
       {showMobileRedirect ? <MobileRedirectBanner /> : <InstallAppBanner />}
       <nav className="nav">
         <div className="nav-brand">
-          <BrandMark size={32} />
+          <BrandMark size={38} />
           Meridian
         </div>
         <div className="nav-links">

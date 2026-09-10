@@ -242,6 +242,11 @@ textarea.input { min-height: 90px; resize: vertical; }
    top-level nav item does when you land on it, not feel like a
    different, quieter control living one level down. */
 .page-tab.active { color: var(--color-accent); border-bottom-color: var(--color-accent); font-weight: 600; animation: nav-item-hop 0.545s; }
+/* Road Alerts' three sub-tab labels ("Hazards in the Neighborhood",
+   "Weighted Point Test") run noticeably longer than Batch/Account's --
+   scoped smaller instead of shrinking .page-tab everywhere, so those
+   other tab strips keep their current size. */
+.page-tabs-compact .page-tab { font-size: 12.5px; padding: 8px 2px 9px; gap: 4px; }
 
 /* — cards — */
 .card {
@@ -288,7 +293,7 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
 .nav-brand {
   display: flex; align-items: center; gap: var(--space-2);
   font-family: var(--font-heading); font-weight: var(--font-heading-weight);
-  font-size: 26px;
+  font-size: 29px;
 }
 .nav-brand svg { color: var(--color-icon-active); }
 .nav-links { display: flex; align-items: center; gap: 2px; flex-wrap: wrap; }
