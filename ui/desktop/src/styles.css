@@ -106,6 +106,12 @@ h1, h2, h3, h4, h5, h6 {
   line-height: 1.12; letter-spacing: -0.015em; margin: 0 0 var(--space-2);
 }
 h1 { font-size: 48px; }
+/* PageHeader's own <h1> -- every page's title -- read as bigger than the
+   Meridian wordmark in the nav (29px), which felt backwards for a brand
+   mark vs. a page title. Scoped here rather than lowering the base h1
+   rule above, which is also used standalone (Overview's hero heading,
+   the legal pages, Site Map) and wasn't part of this complaint. */
+.page-header-title { font-size: 34px; }
 h2 { font-size: 37px; }
 h3 { font-size: 29px; }
 h4 { font-size: 23px; }

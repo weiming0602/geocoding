@@ -23,7 +23,7 @@ export default function PageHeader({ icon, children }: { icon: IconName; childre
       >
         <Icon name={icon} size={28} />
       </div>
-      <h1 style={{ margin: 0 }}>{children}</h1>
+      <h1 className="page-header-title" style={{ margin: 0 }}>{children}</h1>
     </div>
   );
 }
