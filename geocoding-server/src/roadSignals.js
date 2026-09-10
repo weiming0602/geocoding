@@ -2,6 +2,7 @@ const crypto = require('crypto');
 const { XMLParser } = require('fast-xml-parser');
 const { ValidationError, UpstreamError } = require('./errors');
 const { boundingBoxDegrees, filterByBbox, sortByFreshness, HAZARD_CATEGORIES, categorizeHazard } = require('./roadSignalsShared');
+const { isHereConfigured, getHereIncidents } = require('./hereTraffic');
 
 // Free, public, no API key or registration -- confirmed directly against
 // the New England 511 developer portal (nec-por.ne-compass.com/
@@ -15,6 +16,27 @@ const NE511_BASE_URL =
 const NE511_NETWORKS = ['Maine', 'NewHampshire', 'Vermont'];
 const NE511_TIMEOUT_MS = 10000;
 const MAX_RADIUS_METERS = 40000;
+// A simple, generously-padded bounding box covering Maine/NH/Vermont --
+// same "flat rectangle approximation" idiom boundingBoxDegrees uses.
+// Inside it, New England 511 is used even if HERE is also configured
+// (511 is free and one step closer to the source); outside it, HERE is
+// used if configured. See docs/superpowers/specs/
+// 2026-09-10-here-traffic-provider-design.md for why an explicit gate is
+// used instead of "try 511 first, fall back if empty" -- an empty 511
+// result for a real in-footprint location with no current incidents is
+// indistinguishable from an empty result because the location is simply
+// outside 511's coverage.
+const NE511_FOOTPRINT_BBOX = { minLat: 42.6, maxLat: 47.5, minLon: -73.5, maxLon: -66.8 };
+
+function isInNe511Footprint(latitude, longitude) {
+  return (
+    latitude >= NE511_FOOTPRINT_BBOX.minLat &&
+    latitude <= NE511_FOOTPRINT_BBOX.maxLat &&
+    longitude >= NE511_FOOTPRINT_BBOX.minLon &&
+    longitude <= NE511_FOOTPRINT_BBOX.maxLon
+  );
+}
+
 // Multiple mobile clients can poll this endpoint every ~15s each; caching
 // each state's raw incident list this long avoids re-fetching the same
 // upstream data for every request, same spirit as placesSearch.js's
@@ -241,6 +263,14 @@ async function getRoadSignals({ latitude, longitude, radiusMeters }) {
   }
   if (radiusMeters > MAX_RADIUS_METERS) {
     throw new ValidationError(`radiusMeters must be at most ${MAX_RADIUS_METERS}`);
+  }
+
+  if (!isInNe511Footprint(latitude, longitude)) {
+    if (!isHereConfigured()) {
+      return { signals: [], networks: [], partial: false, failedNetworks: [], generatedAt: new Date().toISOString() };
+    }
+    const signals = await getHereIncidents({ latitude, longitude, radiusMeters });
+    return { signals, networks: ['HERE'], partial: false, failedNetworks: [], generatedAt: new Date().toISOString() };
   }
 
   const settled = await Promise.allSettled(NE511_NETWORKS.map(fetchNetworkIncidentsCached));
