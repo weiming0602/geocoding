@@ -215,6 +215,57 @@ Checked directly against the source, not assumed:
   read of the terms before depending on it, versus the DOT-native
   incident data.
 
+## Texas coverage — investigated 2026-09-09, no equivalent found
+
+Prompted by a user request to extend Road Alerts hazard coverage to
+Texas (separate from the Texas *street/geocoding* data already ingested
+for a Dallas trip — see `states.py`'s FIPS 48 entry — which has no
+bearing on hazard/incident data). Checked directly, not assumed, same
+bar as the New England section above:
+
+- **TxDOT's official Open Data Portal** (`gis-txdot.opendata.arcgis.com`)
+  — confirmed via its full DCAT catalog (237 datasets): entirely
+  static/historical GIS data (roadway inventory, traffic counts, lane
+  geometry, toll roads). No live incident/hazard data of any kind.
+- **DriveTexas.org** (TxDOT's own live-incident map for the public) — a
+  real live feed exists behind it, but it's a JS single-page app with no
+  documented public API; its bundle has no discoverable API endpoint
+  from static analysis.
+- **`txdot-its-c2c.txdot.gov`** — TxDOT's Center-to-Center server, same
+  underlying protocol family New England 511 uses. Found with directory
+  browsing left enabled, exposing internal application files (`.dll`
+  binaries, `Web.config`, `Global.asax`, dated config backups) rather
+  than a documented public API — this is a misconfigured internal
+  system, not a legitimate data source, and was not explored further or
+  used. Worth someone responsibly flagging to TxDOT; irrelevant to this
+  feature either way.
+- **511dfw.org** (the real Dallas/Fort Worth 511 system, vendor:
+  Mindhop, Inc.) — has real `/api/routes/`, `/api/user/me`,
+  `/api/user/permissions` routes, but the user-scoped ones return `401
+  Unauthorized` anonymously and there's no developer/API section
+  anywhere on the site. The anonymous map view's own incident-data call
+  wasn't found in the several largest JS bundles checked — likely
+  served through Mindhop's private backend rather than 511dfw.org's own
+  API. Not pursued further: even if found, it would be an undocumented
+  private endpoint with no terms permitting third-party use, unlike New
+  England 511's actual developer portal.
+- **Houston TranStar** (`traffic.houstontranstar.org/api/api_doc.aspx`)
+  — a real, documented API, but per their own docs requires contacting
+  them directly to request feed access (not frictionless like New
+  England 511), and covers Houston only, not Dallas or statewide.
+- **Other states' 511 systems** (511NY, 511WI, SF Bay 511) all require
+  a registered developer API key with rate limits (e.g. SF Bay: 60
+  requests/hour) — none free-and-keyless like New England's, and none
+  are Texas anyway.
+
+**Conclusion: no free, public, keyless equivalent to New England 511
+exists for Texas**, statewide or Dallas-specific. Road Alerts hazard
+coverage stays ME/NH/VT-only. If TX coverage becomes worth pursuing
+later, the real options are contacting Houston TranStar (Houston-area
+only) or a paid commercial provider (e.g. HERE, INRIX) — a real cost
+and registration flow, unlike every other data source this feature
+currently uses.
+
 ## Data model sketch
 
 Informal, matching the existing convention of no DB-enforced foreign
