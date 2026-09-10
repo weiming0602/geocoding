@@ -14,13 +14,30 @@ covers integrating it as a second provider.
 
 Tested live this session with a real HERE API key:
 
-- Endpoint: `GET https://data.traffic.hereapi.com/v7/incidents?in=circle:{lat},{lon};r={radiusMeters}&locationReferencing=olr&apiKey={key}`
+- Endpoint: `GET https://data.traffic.hereapi.com/v7/incidents?in=circle:{lat},{lon};r={radiusMeters}&locationReferencing=shape&apiKey={key}`
+- **Correction made during plan-writing, re-verified live, not just from docs:** the
+  original version of this spec used `locationReferencing=olr` (OpenLR), which only
+  returns a binary-encoded location reference (base64 `olr` string) — decoding it into
+  real coordinates needs a dedicated location-referencing library this project doesn't
+  have. `shape` (Shape Points) was checked live instead and returns plain WGS84 `lat`/
+  `lng` directly, no decoding needed — see `location.shape.links[].points[].{lat,lng}`
+  below. Re-querying Dallas with `shape` returned 89 incidents (vs. 81 with `olr` for the
+  same circle moments earlier — HERE's live incident set naturally shifts between calls,
+  not a discrepancy between the two `locationReferencing` modes).
 - Response shape:
   ```json
   {
     "sourceUpdated": "2026-09-10T11:41:27Z",
     "results": [{
-      "location": { "length": 559.0, "olr": "..." },
+      "location": {
+        "length": 559.0,
+        "shape": {
+          "links": [
+            { "points": [{ "lat": 32.81818, "lng": -96.84479 }, { "lat": 32.81947, "lng": -96.84636 }], "length": 206.0, "functionalClass": 3 },
+            { "points": [{ "lat": 32.81947, "lng": -96.84636 }, { "lat": 32.81965, "lng": -96.84659 }], "length": 29.0, "functionalClass": 3 }
+          ]
+        }
+      },
       "incidentDetails": {
         "id": "...", "hrn": "here:traffic:incident:...",
         "startTime": "...", "endTime": "...", "entryTime": "...",
@@ -35,9 +52,16 @@ Tested live this session with a real HERE API key:
     }]
   }
   ```
+  A location's `shape` is a road segment (one or more `links`, each a polyline of
+  `points`) rather than a single point — this app's `RoadSignal` shape needs one
+  representative `latitude`/`longitude` per incident (for map markers and bbox
+  filtering), so normalization takes the **first point of the first link**
+  (`shape.links[0].points[0]`) as that incident's location. A location with no shape
+  data at all (empty `links`) is defensively treated as having no coordinates, same as
+  NE511's own `latitude`/`longitude: null` case.
   HERE's own documented `type` enum is likely broader than the ~6 values observed in our
-  two sample queries (Dallas TX: 81 incidents, Portland ME: 16 incidents) — the design
-  below does not assume this list is exhaustive.
+  sample queries (Dallas TX: 81-89 incidents across two calls, Portland ME: 16 incidents)
+  — the design below does not assume this list is exhaustive.
 - Real, plausible data: street names (`I-35E/US-77/N Stemmons Fwy`, `Victory Ave`),
   sensible reasons (`closed due to major event` near several State-Fair-adjacent
   incidents in early September, matching the real Texas State Fair calendar).
