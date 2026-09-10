@@ -150,7 +150,7 @@ export default function RoadAlertsHomeBoard() {
 
   return (
     <div>
-      <PageHeader icon="roadAlerts">Hazards Near Home</PageHeader>
+      <PageHeader icon="roadAlerts">Hazards in the Neighborhood</PageHeader>
       <RoadAlertsTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         All current hazards near where an account lives -- inferred from the center of its qualified

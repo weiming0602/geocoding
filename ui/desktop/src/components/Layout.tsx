@@ -23,7 +23,7 @@ const ROAD_ALERTS_ROUTES = ['/road-alerts', '/road-alerts-home-board', '/road-al
 // Find places and Import addresses both exist to feed Batch geocode an
 // address list (their own "Send to Batch" actions); Plan & quota/
 // Pricing/Progress/Help are account/info pages, not core geocoding
-// tools; Hazards Near Home and Weighted Point Test are both lookup
+// tools; Hazards in the Neighborhood and Weighted Point Test are both lookup
 // tools built on top of the same real Road Alerts data, not standalone
 // destinations. None of these three groups needed a full nav dropdown --
 // each group's pages already link to each other via a page-level tab
