@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { isHereConfigured, mapHereSeverity } = require('../src/hereTraffic');
+const { isHereConfigured, mapHereSeverity, categorizeHereIncident, extractRoadwayFromDescription } = require('../src/hereTraffic');
 
 test('isHereConfigured is false when HERE_API_KEY is unset', () => {
   const saved = process.env.HERE_API_KEY;
@@ -49,4 +49,59 @@ test('mapHereSeverity maps criticality minor to proximity', () => {
 
 test('mapHereSeverity falls back to proximity for an unrecognized criticality value', () => {
   assert.equal(mapHereSeverity({ criticality: 'unknown-future-value', roadClosed: false, type: 'other' }), 'proximity');
+});
+
+// description/type values below are real, sampled live from HERE
+// Traffic API v7 against Dallas, TX incidents this session.
+test('categorizeHereIncident maps type construction directly to construction', () => {
+  assert.equal(
+    categorizeHereIncident({ type: 'construction', typeDescription: { value: 'Road construction' }, description: { value: 'At W Mockingbird Ln - Construction work' } }),
+    'construction'
+  );
+});
+
+test('categorizeHereIncident maps type roadClosure directly to closure', () => {
+  assert.equal(
+    categorizeHereIncident({ type: 'roadClosure', typeDescription: { value: 'Road closure' }, description: { value: 'Closed' } }),
+    'closure'
+  );
+});
+
+test('categorizeHereIncident maps type congestion directly to congestion', () => {
+  assert.equal(
+    categorizeHereIncident({ type: 'congestion', typeDescription: { value: 'Congestion' }, description: { value: 'Backed-up traffic' } }),
+    'congestion'
+  );
+});
+
+test('categorizeHereIncident maps type laneRestriction directly to obstruction', () => {
+  assert.equal(
+    categorizeHereIncident({ type: 'laneRestriction', typeDescription: { value: 'Lane restriction' }, description: { value: 'Turning lane closed' } }),
+    'obstruction'
+  );
+});
+
+test('categorizeHereIncident falls back to the shared keyword matcher for type plannedEvent, defaulting to other', () => {
+  assert.equal(
+    categorizeHereIncident({ type: 'plannedEvent', typeDescription: { value: 'Planned event' }, description: { value: 'At Caroline St - Fair' } }),
+    'other'
+  );
+});
+
+test('categorizeHereIncident falls back to the shared keyword matcher and can still detect hazmat from description text', () => {
+  assert.equal(
+    categorizeHereIncident({ type: 'other', typeDescription: { value: 'Other news' }, description: { value: 'Chemical spill on shoulder' } }),
+    'hazmat'
+  );
+});
+
+test('extractRoadwayFromDescription extracts the roadway from an "At X - Y" description', () => {
+  assert.equal(extractRoadwayFromDescription('At W Mockingbird Ln - Construction work'), 'W Mockingbird Ln');
+  assert.equal(extractRoadwayFromDescription('At TX-289/Preston Rd/Exit 21 - Backed-up traffic. Approach with care'), 'TX-289/Preston Rd/Exit 21');
+});
+
+test('extractRoadwayFromDescription returns null when the description does not follow that pattern', () => {
+  assert.equal(extractRoadwayFromDescription('Closed'), null);
+  assert.equal(extractRoadwayFromDescription('Turning lane closed'), null);
+  assert.equal(extractRoadwayFromDescription(null), null);
 });
