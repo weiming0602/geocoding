@@ -185,6 +185,18 @@ test('normalizeHereIncident maps a real construction incident to the RoadSignal 
   assert.equal(normalized.severity, 'proximity');
   assert.equal(normalized.hazardCategory, 'construction');
   assert.equal(normalized.speech.brief, 'Construction work');
+  assert.equal(normalized.raw511EventType, 'Road construction');
+  assert.equal(normalized.raw511Severity, null);
+  assert.equal(normalized.status, null);
+  assert.equal(normalized.direction, null);
+  assert.equal(normalized.crossStreet, null);
+  assert.equal(normalized.mileMarker, null);
+  assert.equal(normalized.county, null);
+  assert.equal(normalized.city, null);
+  assert.equal(normalized.affectedLanes, null);
+  assert.equal(normalized.affectedLanesDetail, null);
+  assert.equal(normalized.weightRestriction, null);
+  assert.equal(normalized.verifiedBy, null);
 });
 
 test('normalizeHereIncident maps a real road closure incident to severity serious', () => {
