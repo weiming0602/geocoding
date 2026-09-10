@@ -25,8 +25,26 @@ const DAILY_DECAY = 0.98;
 // original design's "only segments whose weight crosses a threshold are
 // persisted at all" intent, just enforced at serving time rather than
 // by withholding the row.
-const QUALIFYING_WINDOW_DAYS = 7;
-const MIN_PINGS_TO_QUALIFY = 3;
+//
+// These two used to be flat constants shared by every account. They're
+// now per-tier (see ROUTINE_DENSITY_TIERS below) -- docs/
+// ROAD_ALERTS_DESIGN.md's "how much routine is remembered" setting,
+// exposed per-account via road_alerts_accounts.routine_density. 'balanced'
+// keeps the original values, so an account that's never touched the
+// setting sees no change in behavior.
+const ROUTINE_DENSITY_TIERS = {
+  // "Almost every time" -- near-daily driving within the window.
+  minimal: { qualifyingWindowDays: 7, minPingsToQualify: 6 },
+  balanced: { qualifyingWindowDays: 7, minPingsToQualify: 3 },
+  // Wider window, lower bar -- catches routes driven only occasionally.
+  most_complete: { qualifyingWindowDays: 14, minPingsToQualify: 2 },
+};
+const DEFAULT_ROUTINE_DENSITY = 'balanced';
+
+/** Resolves a (possibly missing or unrecognized) routineDensity value to a real tier, falling back to 'balanced'. */
+function resolveRoutineDensityTier(routineDensity) {
+  return ROUTINE_DENSITY_TIERS[routineDensity] ?? ROUTINE_DENSITY_TIERS[DEFAULT_ROUTINE_DENSITY];
+}
 
 const CREATE_TABLE_SQL = `
 CREATE TABLE IF NOT EXISTS road_alerts_weighted_points (
@@ -73,7 +91,7 @@ async function ensureWeightedPointsTable(pool) {
  * QUALIFYING_WINDOW_DAYS/MIN_PINGS_TO_QUALIFY above) only gates whether
  * getWeightedPoints will ever *return* it, not whether it's tracked.
  */
-async function recordWeightedPointPing(pool, email, { latitude, longitude, tlid, isEndpoint }) {
+async function recordWeightedPointPing(pool, email, { latitude, longitude, tlid, isEndpoint, routineDensity }) {
   if (typeof latitude !== 'number' || Number.isNaN(latitude)) {
     throw new ValidationError('latitude must be a number');
   }
@@ -83,6 +101,7 @@ async function recordWeightedPointPing(pool, email, { latitude, longitude, tlid,
   if (isEndpoint) {
     return null;
   }
+  const { qualifyingWindowDays, minPingsToQualify } = resolveRoutineDensityTier(routineDensity);
 
   const { rows: existing } = await pool.query(
     `SELECT id, latitude, longitude, weight, window_started_at, window_ping_count, qualified_at, last_pinged_at
@@ -103,14 +122,14 @@ async function recordWeightedPointPing(pool, email, { latitude, longitude, tlid,
   if (nearest && nearestDistance <= MATCH_RADIUS_METERS) {
     const now = new Date();
     const windowAgeDays = (now.getTime() - new Date(nearest.window_started_at).getTime()) / 86400000;
-    // A window older than QUALIFYING_WINDOW_DAYS has expired -- this
-    // ping starts a fresh one rather than extending a stale count, so
-    // "3 times this week" can't be satisfied by e.g. one ping each in
+    // A window older than the tier's qualifyingWindowDays has expired --
+    // this ping starts a fresh one rather than extending a stale count,
+    // so "3 times this week" can't be satisfied by e.g. one ping each in
     // three unrelated months.
-    const windowExpired = windowAgeDays > QUALIFYING_WINDOW_DAYS;
+    const windowExpired = windowAgeDays > qualifyingWindowDays;
     const windowStartedAt = windowExpired ? now : nearest.window_started_at;
     const windowPingCount = windowExpired ? 1 : nearest.window_ping_count + 1;
-    const nowQualifies = windowPingCount >= MIN_PINGS_TO_QUALIFY;
+    const nowQualifies = windowPingCount >= minPingsToQualify;
 
     const daysSinceLastPing = (now.getTime() - new Date(nearest.last_pinged_at).getTime()) / 86400000;
     const decayedWeight = nearest.weight * DAILY_DECAY ** Math.max(daysSinceLastPing, 0);
@@ -188,6 +207,6 @@ module.exports = {
   getWeightedPoints,
   deleteStalePoints,
   MATCH_RADIUS_METERS,
-  QUALIFYING_WINDOW_DAYS,
-  MIN_PINGS_TO_QUALIFY,
+  ROUTINE_DENSITY_TIERS,
+  DEFAULT_ROUTINE_DENSITY,
 };
