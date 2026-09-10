@@ -6,6 +6,7 @@ const {
   ensureWeightedPointsTable,
   recordWeightedPointPing,
   getWeightedPoints,
+  getAllWeightedPointCandidates,
 } = require('../src/weightedPoints');
 
 const EMAIL = 'alice@example.com';
@@ -224,6 +225,64 @@ test('getWeightedPoints returns qualified points sorted by weight, heaviest firs
     assert.equal(points.length, 2);
     assert.ok(Number(points[0].weight) > Number(points[1].weight));
     assert.equal(points[0].latitude, 44.8);
+  } finally {
+    await db.close();
+  }
+});
+
+test('getAllWeightedPointCandidates includes unqualified points, unlike getWeightedPoints', async () => {
+  const db = await makeUsersDb();
+  try {
+    await ensureWeightedPointsTable(db);
+    await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8 });
+    await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8 });
+
+    const qualifiedOnly = await getWeightedPoints(db, EMAIL);
+    assert.equal(qualifiedOnly.length, 0, 'sanity check: two pings should not qualify under balanced');
+
+    const candidates = await getAllWeightedPointCandidates(db, EMAIL);
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].qualified, false);
+    assert.equal(candidates[0].windowPingCount, 2);
+    assert.equal(candidates[0].qualifiedAt, null);
+  } finally {
+    await db.close();
+  }
+});
+
+test('getAllWeightedPointCandidates marks a qualified point as qualified, with a qualifiedAt timestamp', async () => {
+  const db = await makeUsersDb();
+  try {
+    await ensureWeightedPointsTable(db);
+    for (let i = 0; i < 3; i++) {
+      await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8 });
+    }
+
+    const candidates = await getAllWeightedPointCandidates(db, EMAIL);
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].qualified, true);
+    assert.equal(candidates[0].windowPingCount, 3);
+    assert.ok(candidates[0].qualifiedAt);
+  } finally {
+    await db.close();
+  }
+});
+
+test('getAllWeightedPointCandidates returns both qualified and unqualified points together', async () => {
+  const db = await makeUsersDb();
+  try {
+    await ensureWeightedPointsTable(db);
+    // Point A: qualifies (3 pings).
+    for (let i = 0; i < 3; i++) {
+      await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8 });
+    }
+    // Point B: does not qualify (1 ping), far enough away to be a separate row.
+    await recordWeightedPointPing(db, EMAIL, { latitude: 44.8, longitude: -68.8 });
+
+    const candidates = await getAllWeightedPointCandidates(db, EMAIL);
+    assert.equal(candidates.length, 2);
+    const qualifiedCount = candidates.filter((c) => c.qualified).length;
+    assert.equal(qualifiedCount, 1);
   } finally {
     await db.close();
   }

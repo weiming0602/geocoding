@@ -27,6 +27,7 @@ import type {
   TransactionsResponse,
   WeightedPointPingResponse,
   WeightedPointsResponse,
+  WeightedPointCandidatesResponse,
 } from './types';
 
 // On a physical mobile device/simulator, "localhost" means the device
@@ -428,6 +429,17 @@ export function getWeightedPoints(
 ): Promise<WeightedPointsResponse> {
   const qs = new URLSearchParams({ email: params.email, serviceKey: params.serviceKey });
   return getJson<WeightedPointsResponse>(baseUrl, `/road-alerts/weighted-points?${qs.toString()}`);
+}
+
+// Debug/test-tooling counterpart to getWeightedPoints above -- see
+// WeightedPointCandidatesResponse's own doc comment. Used by the Road
+// Alert Test page only.
+export function getWeightedPointCandidates(
+  params: { email: string; serviceKey: string },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<WeightedPointCandidatesResponse> {
+  const qs = new URLSearchParams({ email: params.email, serviceKey: params.serviceKey });
+  return getJson<WeightedPointCandidatesResponse>(baseUrl, `/road-alerts/weighted-points/candidates?${qs.toString()}`);
 }
 
 export function addTestRoadSignal(
