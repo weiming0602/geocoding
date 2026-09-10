@@ -1,7 +1,8 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { isHereConfigured, mapHereSeverity, categorizeHereIncident, extractRoadwayFromDescription, normalizeHereIncident } = require('../src/hereTraffic');
+const { isHereConfigured, mapHereSeverity, categorizeHereIncident, extractRoadwayFromDescription, normalizeHereIncident, getHereIncidents } = require('../src/hereTraffic');
+const { UpstreamError } = require('../src/errors');
 
 test('isHereConfigured is false when HERE_API_KEY is unset', () => {
   const saved = process.env.HERE_API_KEY;
@@ -213,3 +214,89 @@ test('normalizeHereIncident returns null latitude/longitude when there is no sha
   assert.equal(normalized.latitude, null);
   assert.equal(normalized.longitude, null);
 });
+
+// fetchHereIncidents/getHereIncidents call the real global fetch, so
+// these tests replace it with a fake for the duration of each test and
+// restore it afterward -- same technique roadSignalsEndpoint.test.js
+// already uses for New England 511's fetch calls.
+function withFakeFetch(respond, fn) {
+  return async () => {
+    const saved = global.fetch;
+    global.fetch = respond;
+    try {
+      await fn();
+    } finally {
+      global.fetch = saved;
+    }
+  };
+}
+
+test(
+  'getHereIncidents fetches, normalizes, and bbox-filters real HERE results',
+  withFakeFetch(
+    async (url) => {
+      assert.ok(String(url).startsWith('https://data.traffic.hereapi.com/v7/incidents?'));
+      assert.ok(String(url).includes('in=circle:32.8626698,-96.7601162;r=10000'));
+      assert.ok(String(url).includes('locationReferencing=shape'));
+      return {
+        ok: true,
+        json: async () => ({ results: [REAL_CONSTRUCTION_INCIDENT, REAL_ROAD_CLOSURE_INCIDENT] }),
+      };
+    },
+    async () => {
+      const saved = process.env.HERE_API_KEY;
+      process.env.HERE_API_KEY = 'test-key';
+      try {
+        const signals = await getHereIncidents({ latitude: 32.8626698, longitude: -96.7601162, radiusMeters: 10000 });
+        assert.equal(signals.length, 2);
+        assert.ok(signals.some((s) => s.id === '2021742316625632607'));
+        assert.ok(signals.some((s) => s.id === '3690011721065073050'));
+      } finally {
+        if (saved !== undefined) process.env.HERE_API_KEY = saved;
+        else delete process.env.HERE_API_KEY;
+      }
+    }
+  )
+);
+
+test(
+  'getHereIncidents throws UpstreamError when the HERE fetch itself fails',
+  withFakeFetch(
+    async () => {
+      throw new Error('network down');
+    },
+    async () => {
+      const saved = process.env.HERE_API_KEY;
+      process.env.HERE_API_KEY = 'test-key';
+      try {
+        await assert.rejects(
+          () => getHereIncidents({ latitude: 32.86, longitude: -96.76, radiusMeters: 10000 }),
+          UpstreamError
+        );
+      } finally {
+        if (saved !== undefined) process.env.HERE_API_KEY = saved;
+        else delete process.env.HERE_API_KEY;
+      }
+    }
+  )
+);
+
+test(
+  'getHereIncidents throws UpstreamError when HERE responds with a non-2xx status',
+  withFakeFetch(
+    async () => ({ ok: false, status: 500 }),
+    async () => {
+      const saved = process.env.HERE_API_KEY;
+      process.env.HERE_API_KEY = 'test-key';
+      try {
+        await assert.rejects(
+          () => getHereIncidents({ latitude: 32.86, longitude: -96.76, radiusMeters: 10000 }),
+          UpstreamError
+        );
+      } finally {
+        if (saved !== undefined) process.env.HERE_API_KEY = saved;
+        else delete process.env.HERE_API_KEY;
+      }
+    }
+  )
+);

@@ -6,7 +6,11 @@
 // confirmed live against real Dallas/Portland locations before this was
 // built.
 
-const { categorizeHazard } = require('./roadSignalsShared');
+const { UpstreamError } = require('./errors');
+const { categorizeHazard, filterByBbox, sortByFreshness } = require('./roadSignalsShared');
+
+const HERE_BASE_URL = process.env.HERE_BASE_URL || 'https://data.traffic.hereapi.com/v7/incidents';
+const HERE_TIMEOUT_MS = 10000;
 
 /** Whether HERE_API_KEY is set -- mirrors billing.js's isConfigured() pattern for an optional paid integration. */
 function isHereConfigured() {
@@ -139,10 +143,46 @@ function normalizeHereIncident(raw) {
   return normalized;
 }
 
+/**
+ * Fetches live incidents from HERE within `radiusMeters` of (latitude,
+ * longitude), already normalized to this app's RoadSignal shape. Throws
+ * UpstreamError on any failure (network error, non-2xx response) --
+ * HERE is a single provider with no sub-networks to partially succeed
+ * across, so a failed fetch here is always the "nothing usable to
+ * return" case, same as New England 511's own all-networks-failed throw
+ * in roadSignals.js's getRoadSignals.
+ */
+async function fetchHereIncidents(latitude, longitude, radiusMeters) {
+  const url = `${HERE_BASE_URL}?in=circle:${latitude},${longitude};r=${radiusMeters}&locationReferencing=shape&apiKey=${process.env.HERE_API_KEY}`;
+  let response;
+  try {
+    response = await fetch(url, { signal: AbortSignal.timeout(HERE_TIMEOUT_MS) });
+  } catch (err) {
+    throw new UpstreamError(`HERE Traffic API is temporarily unavailable: ${err.message}`);
+  }
+  if (!response.ok) {
+    throw new UpstreamError(`HERE Traffic API is temporarily unavailable (status ${response.status})`);
+  }
+  const body = await response.json();
+  return (body.results || []).map(normalizeHereIncident);
+}
+
+/**
+ * Top-level entry point roadSignals.js's dispatcher calls -- fetch,
+ * normalize, bbox-filter, sort, same shape getRoadSignals already
+ * returns for New England 511's `signals` field.
+ */
+async function getHereIncidents({ latitude, longitude, radiusMeters }) {
+  const incidents = await fetchHereIncidents(latitude, longitude, radiusMeters);
+  return sortByFreshness(filterByBbox(incidents, latitude, longitude, radiusMeters));
+}
+
 module.exports = {
   isHereConfigured,
   mapHereSeverity,
   categorizeHereIncident,
   extractRoadwayFromDescription,
   normalizeHereIncident,
+  fetchHereIncidents,
+  getHereIncidents,
 };
