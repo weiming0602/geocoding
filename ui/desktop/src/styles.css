@@ -1,5 +1,5 @@
 /* Classical — design-system tokens and component classes. This file is the source of truth for the system's look; retune it here and see readme.md. */
-@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@400;600&family=Lora:wght@400;600&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap');
 
 :root {
   --color-bg: #f3f2f2;
@@ -45,11 +45,11 @@
   --color-accent-2-800: #1e4a3b;
   --color-accent-2-900: #123329;
 
-  --font-heading: "Cormorant Garamond", system-ui, sans-serif;
+  --font-heading: "Space Grotesk", system-ui, sans-serif;
   --font-heading-weight: 600; /* review round 3: bold retired — semibold is the
      interface headings' ceiling (they need the weight at small sizes); display
      text goes lighter still, to the normal cut (see the deck) */
-  --font-body: "Lora", system-ui, sans-serif;
+  --font-body: "Space Grotesk", system-ui, sans-serif;
 
   --space-1: 4.6px;
   --space-2: 9.2px;
