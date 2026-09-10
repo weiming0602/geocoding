@@ -1,13 +1,12 @@
 // Real, working, paid alternative to New England 511 for everywhere
-// NE511 doesn't cover (see docs/ROAD_ALERTS_DESIGN.md's "Texas coverage"
-// section for the research trail, and
+// NE511 doesn't cover (see
 // docs/superpowers/specs/2026-09-10-here-traffic-provider-design.md for
-// the full design). 30,000 free transactions/month, no credit card --
-// confirmed live against real Dallas/Portland locations before this was
-// built.
+// the full design and the research trail, including the Texas coverage
+// research). 30,000 free transactions/month, no credit card -- confirmed
+// live against real Dallas/Portland locations before this was built.
 
 const { UpstreamError } = require('./errors');
-const { categorizeHazard, filterByBbox, sortByFreshness } = require('./roadSignalsShared');
+const { categorizeHazard, sortByFreshness } = require('./roadSignalsShared');
 
 const HERE_BASE_URL = process.env.HERE_BASE_URL || 'https://data.traffic.hereapi.com/v7/incidents';
 const HERE_TIMEOUT_MS = 10000;
@@ -46,8 +45,9 @@ const HERE_TYPE_TO_CATEGORY = {
 };
 
 function categorizeHereIncident({ type, typeDescription, description }) {
-  const direct = HERE_TYPE_TO_CATEGORY[type];
-  if (direct) return direct;
+  if (Object.prototype.hasOwnProperty.call(HERE_TYPE_TO_CATEGORY, type)) {
+    return HERE_TYPE_TO_CATEGORY[type];
+  }
   return categorizeHazard({
     raw511EventType: typeDescription?.value,
     description: description?.value,
@@ -72,9 +72,11 @@ function extractRoadwayFromDescription(description) {
  * A HERE incident's `location` describes a road segment (one or more
  * `links`, each a polyline of `points`), not a single point -- this
  * app's RoadSignal needs one representative latitude/longitude (for map
- * markers and bbox filtering), so this takes the first point of the
- * first link. A location with no shape data at all returns nulls, same
- * as roadSignals.js's normalizeIncident does for a New England 511
+ * markers), so this takes the first point of the first link. Note this
+ * is only an approximation of where the segment is -- see
+ * getHereIncidents's comment for why it's deliberately not used for
+ * spatial filtering. A location with no shape data at all returns nulls,
+ * same as roadSignals.js's normalizeIncident does for a New England 511
  * incident with no usable coordinates.
  */
 function firstShapePoint(location) {
@@ -153,6 +155,9 @@ function normalizeHereIncident(raw) {
  * in roadSignals.js's getRoadSignals.
  */
 async function fetchHereIncidents(latitude, longitude, radiusMeters) {
+  if (!isHereConfigured()) {
+    throw new UpstreamError('HERE Traffic API is not configured (HERE_API_KEY is unset)');
+  }
   const url = `${HERE_BASE_URL}?in=circle:${latitude},${longitude};r=${radiusMeters}&locationReferencing=shape&apiKey=${process.env.HERE_API_KEY}`;
   let response;
   try {
@@ -163,18 +168,32 @@ async function fetchHereIncidents(latitude, longitude, radiusMeters) {
   if (!response.ok) {
     throw new UpstreamError(`HERE Traffic API is temporarily unavailable (status ${response.status})`);
   }
-  const body = await response.json();
-  return (body.results || []).map(normalizeHereIncident);
+  try {
+    const body = await response.json();
+    return (body.results || []).map(normalizeHereIncident);
+  } catch (err) {
+    throw new UpstreamError(`HERE Traffic API returned an unusable response: ${err.message}`);
+  }
 }
 
 /**
  * Top-level entry point roadSignals.js's dispatcher calls -- fetch,
- * normalize, bbox-filter, sort, same shape getRoadSignals already
- * returns for New England 511's `signals` field.
+ * normalize, sort, same shape getRoadSignals already returns for New
+ * England 511's `signals` field. Deliberately does NOT bbox-filter:
+ * HERE's own `in=circle:...` query parameter already does correct,
+ * segment-aware spatial filtering server-side (an incident is included
+ * whenever its road segment intersects the circle), but this app's own
+ * `filterByBbox` only has a single point to work with --
+ * `normalizeHereIncident`'s `latitude`/`longitude` is just the first
+ * point of the first link of that segment, which can be far outside the
+ * query radius even when the incident (and the rest of its segment)
+ * genuinely intersects it. Re-filtering with that single point would
+ * incorrectly drop real, HERE-confirmed-relevant incidents -- especially
+ * long ones like highway closures.
  */
 async function getHereIncidents({ latitude, longitude, radiusMeters }) {
   const incidents = await fetchHereIncidents(latitude, longitude, radiusMeters);
-  return sortByFreshness(filterByBbox(incidents, latitude, longitude, radiusMeters));
+  return sortByFreshness(incidents);
 }
 
 module.exports = {

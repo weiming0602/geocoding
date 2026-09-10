@@ -266,11 +266,12 @@ async function getRoadSignals({ latitude, longitude, radiusMeters }) {
   }
 
   if (!isInNe511Footprint(latitude, longitude)) {
+    const generatedAt = new Date().toISOString();
     if (!isHereConfigured()) {
-      return { signals: [], networks: [], partial: false, failedNetworks: [], generatedAt: new Date().toISOString() };
+      return { signals: [], networks: [], partial: false, failedNetworks: [], generatedAt };
     }
     const signals = await getHereIncidents({ latitude, longitude, radiusMeters });
-    return { signals, networks: ['HERE'], partial: false, failedNetworks: [], generatedAt: new Date().toISOString() };
+    return { signals, networks: ['HERE'], partial: false, failedNetworks: [], generatedAt };
   }
 
   const settled = await Promise.allSettled(NE511_NETWORKS.map(fetchNetworkIncidentsCached));

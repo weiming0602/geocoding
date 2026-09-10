@@ -300,3 +300,114 @@ test(
     }
   )
 );
+
+test(
+  'getHereIncidents throws UpstreamError when the HERE response body is malformed JSON',
+  withFakeFetch(
+    async () => ({
+      ok: true,
+      json: async () => {
+        throw new Error('Unexpected token in JSON');
+      },
+    }),
+    async () => {
+      const saved = process.env.HERE_API_KEY;
+      process.env.HERE_API_KEY = 'test-key';
+      try {
+        await assert.rejects(
+          () => getHereIncidents({ latitude: 32.86, longitude: -96.76, radiusMeters: 10000 }),
+          UpstreamError
+        );
+      } finally {
+        if (saved !== undefined) process.env.HERE_API_KEY = saved;
+        else delete process.env.HERE_API_KEY;
+      }
+    }
+  )
+);
+
+test(
+  'getHereIncidents throws UpstreamError when a result entry is missing incidentDetails',
+  withFakeFetch(
+    async () => ({
+      ok: true,
+      json: async () => ({ results: [{ location: {} }] }),
+    }),
+    async () => {
+      const saved = process.env.HERE_API_KEY;
+      process.env.HERE_API_KEY = 'test-key';
+      try {
+        await assert.rejects(
+          () => getHereIncidents({ latitude: 32.86, longitude: -96.76, radiusMeters: 10000 }),
+          UpstreamError
+        );
+      } finally {
+        if (saved !== undefined) process.env.HERE_API_KEY = saved;
+        else delete process.env.HERE_API_KEY;
+      }
+    }
+  )
+);
+
+test('getHereIncidents throws UpstreamError when HERE_API_KEY is unset, without calling fetch', async () => {
+  const saved = process.env.HERE_API_KEY;
+  delete process.env.HERE_API_KEY;
+  const savedFetch = global.fetch;
+  global.fetch = () => {
+    throw new Error('fetch should not have been called');
+  };
+  try {
+    await assert.rejects(
+      () => getHereIncidents({ latitude: 32.86, longitude: -96.76, radiusMeters: 10000 }),
+      UpstreamError
+    );
+  } finally {
+    global.fetch = savedFetch;
+    if (saved !== undefined) process.env.HERE_API_KEY = saved;
+  }
+});
+
+// Regression test for the bbox-refiltering bug: HERE's own circle query
+// already confirmed this incident is relevant, but normalizeHereIncident
+// only has the segment's first shape point to work with -- here it's
+// placed roughly 10km+ north of the query point, well outside a 10km
+// query radius, even though the real incident (and the rest of its
+// segment) is genuinely within range. getHereIncidents must NOT drop it.
+const FAR_FIRST_POINT_INCIDENT = {
+  location: {
+    length: 15000.0,
+    shape: { links: [{ points: [{ lat: 32.95, lng: -96.76 }, { lat: 32.86, lng: -96.76 }], length: 15000.0, functionalClass: 1 }] },
+  },
+  incidentDetails: {
+    id: 'far-first-point-test-id',
+    entryTime: '2026-09-10T00:00:00Z',
+    roadClosed: false,
+    criticality: 'minor',
+    type: 'construction',
+    typeDescription: { value: 'x' },
+    description: { value: 'x' },
+    summary: { value: 'x' },
+  },
+};
+
+test(
+  'getHereIncidents does not drop an incident whose first shape point is far outside the query radius, since HERE already confirmed relevance',
+  withFakeFetch(
+    async () => ({
+      ok: true,
+      json: async () => ({ results: [FAR_FIRST_POINT_INCIDENT] }),
+    }),
+    async () => {
+      const saved = process.env.HERE_API_KEY;
+      process.env.HERE_API_KEY = 'test-key';
+      try {
+        const signals = await getHereIncidents({ latitude: 32.86, longitude: -96.76, radiusMeters: 10000 });
+        assert.equal(signals.length, 1);
+        assert.equal(signals[0].id, 'far-first-point-test-id');
+      } finally {
+        if (saved !== undefined) process.env.HERE_API_KEY = saved;
+        else delete process.env.HERE_API_KEY;
+      }
+    }
+  )
+);

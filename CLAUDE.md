@@ -128,7 +128,11 @@ read-write).
   (default 20), `PAYPAL_CLIENT_ID`/`PAYPAL_CLIENT_SECRET` (unset =
   `billing.js`'s stub), `PAYPAL_API_BASE` (default
   `https://api-m.sandbox.paypal.com` -- set to `https://api-m.paypal.com`
-  to go live).
+  to go live), `HERE_API_KEY` (unset = the HERE Traffic API provider is
+  silently disabled, New England 511 continues to work as before),
+  `HERE_BASE_URL` (default
+  `https://data.traffic.hereapi.com/v7/incidents` -- override point for
+  testing).
 - Frontend PayPal env vars, both optional and both default to sandbox:
   `VITE_PAYPAL_CLIENT_ID` (`ui/desktop`, e.g. via a gitignored
   `ui/desktop/.env.local`) / `EXPO_PUBLIC_PAYPAL_CLIENT_ID` (`ui/mobile`)
