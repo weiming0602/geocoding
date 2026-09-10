@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { isHereConfigured, mapHereSeverity, categorizeHereIncident, extractRoadwayFromDescription } = require('../src/hereTraffic');
+const { isHereConfigured, mapHereSeverity, categorizeHereIncident, extractRoadwayFromDescription, normalizeHereIncident } = require('../src/hereTraffic');
 
 test('isHereConfigured is false when HERE_API_KEY is unset', () => {
   const saved = process.env.HERE_API_KEY;
@@ -104,4 +104,100 @@ test('extractRoadwayFromDescription returns null when the description does not f
   assert.equal(extractRoadwayFromDescription('Closed'), null);
   assert.equal(extractRoadwayFromDescription('Turning lane closed'), null);
   assert.equal(extractRoadwayFromDescription(null), null);
+});
+
+// Real incidents captured live from HERE Traffic API v7 this session
+// (Dallas, TX -- circle:32.8626698,-96.7601162;r=10000,
+// locationReferencing=shape) -- shape.links trimmed to 2 points for
+// readability, incidentDetails kept verbatim.
+const REAL_CONSTRUCTION_INCIDENT = {
+  location: {
+    length: 559.0,
+    shape: { links: [{ points: [{ lat: 32.81818, lng: -96.84479 }, { lat: 32.81947, lng: -96.84636 }], length: 206.0, functionalClass: 3 }] },
+  },
+  incidentDetails: {
+    id: '2021742316625632607',
+    hrn: 'here:traffic:incident:2021742316625632607',
+    startTime: '2026-09-02T16:17:34Z',
+    endTime: '2026-09-13T16:17:34Z',
+    entryTime: '2026-09-03T15:32:50Z',
+    roadClosed: false,
+    criticality: 'minor',
+    type: 'construction',
+    typeDescription: { value: 'Road construction', language: 'en-US' },
+    codes: [803, 500],
+    description: { value: 'At W Mockingbird Ln - Construction work', language: 'en-US' },
+    summary: { value: 'Construction work', language: 'en-US' },
+  },
+};
+
+const REAL_ROAD_CLOSURE_INCIDENT = {
+  location: {
+    length: 119.0,
+    shape: { links: [{ points: [{ lat: 32.90477, lng: -96.68286 }, { lat: 32.90477, lng: -96.68261 }], length: 23.0, functionalClass: 5 }] },
+  },
+  incidentDetails: {
+    id: '3690011721065073050',
+    hrn: 'here:traffic:incident:3690011721065073050',
+    startTime: '2026-09-09T22:21:50Z',
+    endTime: '2026-09-11T10:21:50Z',
+    entryTime: '2026-09-09T22:21:50Z',
+    roadClosed: true,
+    criticality: 'critical',
+    type: 'roadClosure',
+    typeDescription: { value: 'Road closure', language: 'en-US' },
+    codes: [401],
+    description: { value: 'Closed', language: 'en-US' },
+    summary: { value: 'Closed', language: 'en-US' },
+  },
+};
+
+// An incident with no shape data at all -- defensive case, not sampled
+// live (every real incident this session had shape data), but HERE's
+// docs don't guarantee every location referencing type is always
+// present for every incident.
+const NO_SHAPE_INCIDENT = {
+  location: { length: 10.0 },
+  incidentDetails: {
+    id: 'no-shape-test-id',
+    entryTime: '2026-09-10T00:00:00Z',
+    roadClosed: false,
+    criticality: 'minor',
+    type: 'other',
+    typeDescription: { value: 'Other news', language: 'en-US' },
+    description: { value: 'Something happened', language: 'en-US' },
+    summary: { value: 'Something happened', language: 'en-US' },
+  },
+};
+
+test('normalizeHereIncident maps a real construction incident to the RoadSignal shape', () => {
+  const normalized = normalizeHereIncident(REAL_CONSTRUCTION_INCIDENT);
+  assert.equal(normalized.id, '2021742316625632607');
+  assert.equal(normalized.type, 'traffic_hazard');
+  assert.equal(normalized.source, 'HERE Traffic API');
+  assert.equal(normalized.network, 'HERE');
+  assert.equal(normalized.roadway, 'W Mockingbird Ln');
+  assert.equal(normalized.latitude, 32.81818);
+  assert.equal(normalized.longitude, -96.84479);
+  assert.equal(normalized.description, 'At W Mockingbird Ln - Construction work');
+  assert.equal(normalized.createdAt, '2026-09-03T15:32:50Z');
+  assert.equal(normalized.lastUpdatedAt, '2026-09-03T15:32:50Z');
+  assert.equal(normalized.severity, 'proximity');
+  assert.equal(normalized.hazardCategory, 'construction');
+  assert.equal(normalized.speech.brief, 'Construction work');
+});
+
+test('normalizeHereIncident maps a real road closure incident to severity serious', () => {
+  const normalized = normalizeHereIncident(REAL_ROAD_CLOSURE_INCIDENT);
+  assert.equal(normalized.roadway, null);
+  assert.equal(normalized.severity, 'serious');
+  assert.equal(normalized.hazardCategory, 'closure');
+  assert.equal(normalized.latitude, 32.90477);
+  assert.equal(normalized.longitude, -96.68286);
+});
+
+test('normalizeHereIncident returns null latitude/longitude when there is no shape data', () => {
+  const normalized = normalizeHereIncident(NO_SHAPE_INCIDENT);
+  assert.equal(normalized.latitude, null);
+  assert.equal(normalized.longitude, null);
 });
