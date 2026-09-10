@@ -1,11 +1,13 @@
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
-import { getRoadSignals, getWeightedPoints, registerRoadAlerts, reverseGeocode } from '../../../shared/api/client';
+import { ApiError, getRoadSignals, getWeightedPoints, reverseGeocode } from '../../../shared/api/client';
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
 import type { RoadSignal, RoadSignalSeverity } from '../../../shared/api/types';
 import PageHeader from '../components/PageHeader';
+import RoadAlertsRegistration from '../components/RoadAlertsRegistration';
 import RoadAlertsSandboxMap, { type SandboxPoint } from '../components/RoadAlertsSandboxMap';
 import RoadAlertsTabs from '../components/RoadAlertsTabs';
+import { clearStoredAccount, getStoredAccount, type StoredRoadAlertsAccount } from '../roadAlertsStorage';
 
 // Same radius RoadAlerts.tsx polls with while driving -- there's no
 // reason a passive board centered on a fixed area needs a different one.
@@ -52,14 +54,18 @@ function centroid(points: { latitude: number; longitude: number }[]): { latitude
   return { latitude: total.latitude / points.length, longitude: total.longitude / points.length };
 }
 
-// A passive lookup tool, same pattern as RoadAlertsTest.tsx -- typing an
-// email here never touches roadAlertsStorage.ts's shared "signed in"
-// account.
+// Uses the same signed-in account as the main Road Alerts tab (see
+// roadAlertsStorage.ts) rather than asking for an email every visit --
+// the three Road Alerts sub-tabs now read as one feature (RoadAlertsTabs),
+// so switching between them shouldn't mean signing in again each time.
 export default function RoadAlertsHomeBoard() {
-  const [email, setEmail] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [account, setAccount] = useState<StoredRoadAlertsAccount | null>(() => getStoredAccount());
+  const [registrationReason, setRegistrationReason] = useState<string | null>(null);
+  // Starts true when already signed in -- the load effect below fires
+  // immediately on mount in that case, so this avoids a one-frame flash
+  // of "not enough driving history" before that fetch actually runs.
+  const [loading, setLoading] = useState(() => Boolean(getStoredAccount()));
   const [error, setError] = useState<string | null>(null);
-  const [lookedUpEmail, setLookedUpEmail] = useState<string | null>(null);
   const [homeArea, setHomeArea] = useState<{ latitude: number; longitude: number } | null>(null);
   const [signals, setSignals] = useState<RoadSignal[] | null>(null);
   const [partial, setPartial] = useState(false);
@@ -71,12 +77,7 @@ export default function RoadAlertsHomeBoard() {
   const [addressesLoading, setAddressesLoading] = useState(false);
   const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
 
-  const handleLookup = useCallback(async () => {
-    const trimmed = email.trim();
-    if (!trimmed) {
-      setError('Enter an email address.');
-      return;
-    }
+  const loadHomeBoard = useCallback(async (current: StoredRoadAlertsAccount) => {
     setLoading(true);
     setError(null);
     setSignals(null);
@@ -84,10 +85,8 @@ export default function RoadAlertsHomeBoard() {
     setAddresses({});
     setSelectedSignalId(null);
     try {
-      const account = await registerRoadAlerts(trimmed);
-      const { weightedPoints } = await getWeightedPoints({ email: account.email, serviceKey: account.serviceKey });
+      const { weightedPoints } = await getWeightedPoints({ email: current.email, serviceKey: current.serviceKey });
       if (weightedPoints.length === 0) {
-        setLookedUpEmail(account.email);
         return;
       }
       const area = centroid(weightedPoints);
@@ -95,13 +94,12 @@ export default function RoadAlertsHomeBoard() {
         latitude: area.latitude,
         longitude: area.longitude,
         radiusMeters: RADIUS_METERS,
-        email: account.email,
-        serviceKey: account.serviceKey,
+        email: current.email,
+        serviceKey: current.serviceKey,
       });
       setHomeArea(area);
       setSignals(result.signals);
       setPartial(result.partial);
-      setLookedUpEmail(account.email);
 
       const withCoordinates = result.signals.filter(
         (s): s is RoadSignal & { latitude: number; longitude: number } =>
@@ -120,12 +118,32 @@ export default function RoadAlertsHomeBoard() {
         setAddressesLoading(false);
       }
     } catch (err) {
+      // A stale/invalid stored service key (account deleted, key rotated)
+      // -- same recovery as RoadAlerts.tsx's own 404/401 handling.
+      if (err instanceof ApiError && (err.status === 404 || err.status === 401)) {
+        clearStoredAccount();
+        setAccount(null);
+        setRegistrationReason("We couldn't verify your Road Alerts account -- please register again below.");
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Could not look up the home board.');
-      setLookedUpEmail(null);
     } finally {
       setLoading(false);
     }
-  }, [email]);
+  }, []);
+
+  // Runs once on mount if already signed in, and again whenever a fresh
+  // registration completes below -- never on every render, since
+  // loadHomeBoard's identity is stable (useCallback with no deps).
+  useEffect(() => {
+    if (account) loadHomeBoard(account);
+  }, [account, loadHomeBoard]);
+
+  const handleUseDifferentEmail = useCallback(() => {
+    clearStoredAccount();
+    setRegistrationReason(null);
+    setAccount(null);
+  }, []);
 
   const mapPoints = useMemo<SandboxPoint[]>(
     () =>
@@ -148,47 +166,48 @@ export default function RoadAlertsHomeBoard() {
       ? { latitude: selectedSignal.latitude, longitude: selectedSignal.longitude }
       : null;
 
+  if (!account) {
+    return (
+      <div>
+        <PageHeader icon="neighborhood">Hazards in the Neighborhood</PageHeader>
+        <RoadAlertsTabs />
+        <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
+          All current hazards near where your account lives -- inferred from the center of your qualified
+          weighted points, the routine, repeated locations Road Alerts has learned from actual driving.
+        </p>
+        <RoadAlertsRegistration onRegistered={setAccount} reason={registrationReason} />
+      </div>
+    );
+  }
+
   return (
     <div>
       <PageHeader icon="neighborhood">Hazards in the Neighborhood</PageHeader>
       <RoadAlertsTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
-        All current hazards near where an account lives -- inferred from the center of its qualified
-        weighted points (the routine, repeated locations Road Alerts has learned from actual driving),
-        not a typed-in address. An account needs at least one qualified weighted point before a home
-        area can be identified.
+        All current hazards near where {account.email} lives -- inferred from the center of its
+        qualified weighted points, not a typed-in address. An account needs at least one qualified
+        weighted point before a home area can be identified.
       </p>
 
-      <div className="card elev-sm" style={{ maxWidth: 480, marginBottom: 'var(--space-4)' }}>
-        <div className="field">
-          <label>Email</label>
-          <input
-            className="input"
-            type="email"
-            placeholder="you@example.com"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleLookup();
-            }}
-            disabled={loading}
-          />
-        </div>
+      {error && (
+        <p className="card-body" style={{ color: '#a4402a', marginBottom: 'var(--space-3)' }}>
+          {error}
+        </p>
+      )}
 
-        {error && (
-          <p className="card-body" style={{ color: '#a4402a', margin: '0 0 var(--space-3)' }}>
-            {error}
-          </p>
-        )}
-
-        <button className="btn btn-primary" onClick={handleLookup} disabled={loading}>
-          {loading ? 'Looking up…' : 'Show home board'}
+      <div style={{ display: 'flex', gap: 'var(--space-3)', alignItems: 'center', marginBottom: 'var(--space-4)' }}>
+        <button className="btn btn-primary" onClick={() => loadHomeBoard(account)} disabled={loading}>
+          {loading ? 'Refreshing…' : 'Refresh'}
+        </button>
+        <button className="btn btn-ghost" onClick={handleUseDifferentEmail}>
+          Not you? Use a different email
         </button>
       </div>
 
-      {lookedUpEmail && !homeArea && (
+      {!loading && signals === null && !error && (
         <p className="text-muted">
-          Not enough driving history yet to identify a home area for {lookedUpEmail} -- drive past the
+          Not enough driving history yet to identify a home area for {account.email} -- drive past the
           same spots a few more times so a weighted point can qualify.
         </p>
       )}
@@ -201,7 +220,7 @@ export default function RoadAlertsHomeBoard() {
             </p>
           )}
           <h5 className="text-muted" style={{ letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-            {signals.length} alert{signals.length === 1 ? '' : 's'} near {lookedUpEmail}'s home area
+            {signals.length} alert{signals.length === 1 ? '' : 's'} near your home area
           </h5>
           <RoadAlertsSandboxMap points={mapPoints} driverPosition={homeArea} focusPoint={focusPoint} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', marginTop: 'var(--space-4)' }}>
