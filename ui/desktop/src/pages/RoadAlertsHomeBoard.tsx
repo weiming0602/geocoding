@@ -80,6 +80,11 @@ export default function RoadAlertsHomeBoard() {
   // below) scroll the matching list card into view, the reverse
   // direction of a list-card click flying the map to that card's marker.
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  // Scrolled into view whenever a list card is clicked (see the card's
+  // onClick below) -- the list sits above the map (PR #47), so on a
+  // short viewport the map can be off-screen; clicking a hazard should
+  // bring it into view, not just fly the (currently invisible) camera.
+  const mapSectionRef = useRef<HTMLDivElement | null>(null);
   // Incremented on the "Zoom out to neighborhood" button click --
   // RoadAlertsSandboxMap re-fits its camera to all current points
   // whenever this value changes (see its fitAllPointsRequest prop),
@@ -252,7 +257,14 @@ export default function RoadAlertsHomeBoard() {
                     cardRefs.current[signal.id] = el;
                   }}
                   className="card elev-sm"
-                  onClick={hasCoordinates ? () => setSelectedSignalId(signal.id) : undefined}
+                  onClick={
+                    hasCoordinates
+                      ? () => {
+                          setSelectedSignalId(signal.id);
+                          mapSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }
+                      : undefined
+                  }
                   style={{
                     cursor: hasCoordinates ? 'pointer' : undefined,
                     outline: selected ? '2px solid var(--color-accent-500, #3fb1ce)' : undefined,
@@ -293,18 +305,20 @@ export default function RoadAlertsHomeBoard() {
               );
             })}
           </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 'var(--space-2)' }}>
-            <button className="btn btn-ghost" onClick={() => setFitAllRequest((n) => n + 1)}>
-              Zoom out to neighborhood
-            </button>
+          <div ref={mapSectionRef}>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 'var(--space-2)' }}>
+              <button className="btn btn-ghost" onClick={() => setFitAllRequest((n) => n + 1)}>
+                Zoom out to neighborhood
+              </button>
+            </div>
+            <RoadAlertsSandboxMap
+              points={mapPoints}
+              driverPosition={homeArea}
+              focusPoint={focusPoint}
+              onPointClick={handleMarkerClick}
+              fitAllPointsRequest={fitAllRequest}
+            />
           </div>
-          <RoadAlertsSandboxMap
-            points={mapPoints}
-            driverPosition={homeArea}
-            focusPoint={focusPoint}
-            onPointClick={handleMarkerClick}
-            fitAllPointsRequest={fitAllRequest}
-          />
         </>
       )}
     </div>
