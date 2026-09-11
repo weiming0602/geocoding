@@ -80,6 +80,11 @@ export default function RoadAlertsHomeBoard() {
   // below) scroll the matching list card into view, the reverse
   // direction of a list-card click flying the map to that card's marker.
   const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  // Incremented on the "Zoom out to neighborhood" button click --
+  // RoadAlertsSandboxMap re-fits its camera to all current points
+  // whenever this value changes (see its fitAllPointsRequest prop),
+  // undoing whatever a focusPoint flyTo or manual pan/zoom left it at.
+  const [fitAllRequest, setFitAllRequest] = useState(0);
 
   const loadHomeBoard = useCallback(async (current: StoredRoadAlertsAccount) => {
     setLoading(true);
@@ -288,11 +293,17 @@ export default function RoadAlertsHomeBoard() {
               );
             })}
           </div>
+          <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 'var(--space-2)' }}>
+            <button className="btn btn-ghost" onClick={() => setFitAllRequest((n) => n + 1)}>
+              Zoom out to neighborhood
+            </button>
+          </div>
           <RoadAlertsSandboxMap
             points={mapPoints}
             driverPosition={homeArea}
             focusPoint={focusPoint}
             onPointClick={handleMarkerClick}
+            fitAllPointsRequest={fitAllRequest}
           />
         </>
       )}
