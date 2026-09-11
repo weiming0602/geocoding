@@ -1,6 +1,8 @@
 const crypto = require('crypto');
 const { XMLParser } = require('fast-xml-parser');
 const { ValidationError, UpstreamError } = require('./errors');
+const { boundingBoxDegrees, filterByBbox, sortByFreshness, HAZARD_CATEGORIES, categorizeHazard } = require('./roadSignalsShared');
+const { isHereConfigured, getHereIncidents } = require('./hereTraffic');
 
 // Free, public, no API key or registration -- confirmed directly against
 // the New England 511 developer portal (nec-por.ne-compass.com/
@@ -14,6 +16,27 @@ const NE511_BASE_URL =
 const NE511_NETWORKS = ['Maine', 'NewHampshire', 'Vermont'];
 const NE511_TIMEOUT_MS = 10000;
 const MAX_RADIUS_METERS = 40000;
+// A simple, generously-padded bounding box covering Maine/NH/Vermont --
+// same "flat rectangle approximation" idiom boundingBoxDegrees uses.
+// Inside it, New England 511 is used even if HERE is also configured
+// (511 is free and one step closer to the source); outside it, HERE is
+// used if configured. See docs/superpowers/specs/
+// 2026-09-10-here-traffic-provider-design.md for why an explicit gate is
+// used instead of "try 511 first, fall back if empty" -- an empty 511
+// result for a real in-footprint location with no current incidents is
+// indistinguishable from an empty result because the location is simply
+// outside 511's coverage.
+const NE511_FOOTPRINT_BBOX = { minLat: 42.6, maxLat: 47.5, minLon: -73.5, maxLon: -66.8 };
+
+function isInNe511Footprint(latitude, longitude) {
+  return (
+    latitude >= NE511_FOOTPRINT_BBOX.minLat &&
+    latitude <= NE511_FOOTPRINT_BBOX.maxLat &&
+    longitude >= NE511_FOOTPRINT_BBOX.minLon &&
+    longitude <= NE511_FOOTPRINT_BBOX.maxLon
+  );
+}
+
 // Multiple mobile clients can poll this endpoint every ~15s each; caching
 // each state's raw incident list this long avoids re-fetching the same
 // upstream data for every request, same spirit as placesSearch.js's
@@ -76,46 +99,6 @@ function mapSeverity({ raw511Severity, raw511EventType, description }) {
   if (/accident|crash|construction|delay/.test(text)) return 'need_to_know';
   if (/disabled vehicle|debris|stall/.test(text)) return 'proximity';
   return 'need_to_know';
-}
-
-// The full set HAZARD_CATEGORY_ICONS (ui/shared/hazardCategories.ts) has
-// an icon for -- kept here, not derived from that file, since this module
-// has no business depending on a UI-layer file; the two are kept in sync
-// by hand, same as ui/shared/api/types.ts already mirrors this server's
-// response shapes by hand elsewhere in the codebase.
-const HAZARD_CATEGORIES = [
-  'hazmat',
-  'accident',
-  'construction',
-  'closure',
-  'congestion',
-  'obstruction',
-  'weather',
-  'other',
-];
-
-/**
- * Same keyword-matching approach as mapSeverity just above, over the same
- * `eventType`/`description` text -- 511 has no separate structured
- * "hazard type" field at all (confirmed by live sampling across all 3
- * networks, same as every other `raw511*`-prefixed field this module
- * reads), so free-text keywords are the only signal available. Checked
- * most-specific/most-dangerous first (a "chemical spill during a road
- * closure" should read as hazmat, not just a closure) down to the
- * generic fallback `other`, which is deliberately NOT the same bucket as
- * a real category guess -- better to show a plain warning icon than a
- * wrong specific one.
- */
-function categorizeHazard({ raw511EventType, description }) {
-  const text = `${raw511EventType || ''} ${description || ''}`.toLowerCase();
-  if (/hazmat|hazardous material|chemical|fuel spill|gas leak|toxic/.test(text)) return 'hazmat';
-  if (/accident|crash|collision/.test(text)) return 'accident';
-  if (/construction|road work|roadwork|repav|paving|maintenance/.test(text)) return 'construction';
-  if (/closed|closure/.test(text)) return 'closure';
-  if (/congestion|heavy traffic|backup/.test(text)) return 'congestion';
-  if (/disabled vehicle|debris|stall|obstruction/.test(text)) return 'obstruction';
-  if (/flood|icy|ice|snow|weather|fog/.test(text)) return 'weather';
-  return 'other';
 }
 
 /**
@@ -228,57 +211,6 @@ function normalizeIncident(raw, network) {
   return normalized;
 }
 
-/**
- * Flat rectangle approximation (not a true geodesic circle), same
- * approach as placesSearch.js's metersToViewbox -- more than accurate
- * enough for "what's roughly nearby" filtering.
- */
-function boundingBoxDegrees(latitude, longitude, radiusMeters) {
-  const latDelta = radiusMeters / 111320;
-  const lonDelta = radiusMeters / (111320 * Math.cos((latitude * Math.PI) / 180));
-  return {
-    minLat: latitude - latDelta,
-    maxLat: latitude + latDelta,
-    minLon: longitude - lonDelta,
-    maxLon: longitude + lonDelta,
-  };
-}
-
-/**
- * Most-recently-updated first, so a driver re-opening the list sees what's
- * newest at a glance rather than whatever order 511 happened to return
- * (observed to be roughly network-grouping, not chronological). Falls
- * back to `createdAt` when `lastUpdatedAt` is missing (511 doesn't always
- * carry the latter -- see normalizeIncident's `createdAt` comment) --
- * `lastUpdatedAt` is still preferred when both exist, since it reflects
- * how current the information actually is, not just when the incident
- * was first reported. An incident with neither timestamp sorts last
- * (treated as oldest/least certain), not first.
- */
-function freshnessTimestamp(incident) {
-  const raw = incident.lastUpdatedAt || incident.createdAt;
-  if (!raw) return -Infinity;
-  const ms = Date.parse(raw);
-  return Number.isNaN(ms) ? -Infinity : ms;
-}
-
-function sortByFreshness(incidents) {
-  return [...incidents].sort((a, b) => freshnessTimestamp(b) - freshnessTimestamp(a));
-}
-
-function filterByBbox(incidents, latitude, longitude, radiusMeters) {
-  const box = boundingBoxDegrees(latitude, longitude, radiusMeters);
-  return incidents.filter(
-    (incident) =>
-      typeof incident.latitude === 'number' &&
-      typeof incident.longitude === 'number' &&
-      incident.latitude >= box.minLat &&
-      incident.latitude <= box.maxLat &&
-      incident.longitude >= box.minLon &&
-      incident.longitude <= box.maxLon
-  );
-}
-
 async function fetchNetworkIncidents(network) {
   const url = `${NE511_BASE_URL}?networks=${network}&dataTypes=incidentData`;
   let response;
@@ -331,6 +263,15 @@ async function getRoadSignals({ latitude, longitude, radiusMeters }) {
   }
   if (radiusMeters > MAX_RADIUS_METERS) {
     throw new ValidationError(`radiusMeters must be at most ${MAX_RADIUS_METERS}`);
+  }
+
+  if (!isInNe511Footprint(latitude, longitude)) {
+    const generatedAt = new Date().toISOString();
+    if (!isHereConfigured()) {
+      return { signals: [], networks: [], partial: false, failedNetworks: [], generatedAt };
+    }
+    const signals = await getHereIncidents({ latitude, longitude, radiusMeters });
+    return { signals, networks: ['HERE'], partial: false, failedNetworks: [], generatedAt };
   }
 
   const settled = await Promise.allSettled(NE511_NETWORKS.map(fetchNetworkIncidentsCached));
