@@ -16,6 +16,11 @@ export type SandboxPoint = {
   // mapHoverLabel.ts), which only ever takes text.
   label: string;
   color: string;
+  // Optional -- only needed by a caller that wants clicking this point's
+  // marker to drive something else (e.g. RoadAlertsHomeBoard.tsx
+  // highlighting/scrolling to the matching list card via onPointClick
+  // below). A caller with no such list (RoadAlertsTest.tsx) can omit it.
+  id?: string;
 };
 
 type Props = {
@@ -27,6 +32,10 @@ type Props = {
   // like RoadAlertsHomeBoard.tsx's hazard list. Distinct from the
   // initial fit-to-all-points behavior below, which only ever fires once.
   focusPoint?: { latitude: number; longitude: number } | null;
+  // The reverse direction of focusPoint -- clicking a point's own marker
+  // notifies the caller (by that point's `id`) instead of the caller
+  // driving the map. A marker with no `id` is not clickable this way.
+  onPointClick?: (id: string) => void;
 };
 
 // Plain DOM Markers (one per point), not BatchMapView's WebGL circle
@@ -34,7 +43,7 @@ type Props = {
 // (you're placing them by hand), so the per-point DOM cost that layer
 // exists to avoid never actually applies here, and per-point color/hover
 // label is far simpler to express this way.
-export default function RoadAlertsSandboxMap({ points, driverPosition, onMapClick, focusPoint }: Props) {
+export default function RoadAlertsSandboxMap({ points, driverPosition, onMapClick, focusPoint, onPointClick }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const [ready, setReady] = useState(false);
@@ -42,6 +51,8 @@ export default function RoadAlertsSandboxMap({ points, driverPosition, onMapClic
   const driverMarkerRef = useRef<Marker | null>(null);
   const onMapClickRef = useRef(onMapClick);
   onMapClickRef.current = onMapClick;
+  const onPointClickRef = useRef(onPointClick);
+  onPointClickRef.current = onPointClick;
   const hasFitOnceRef = useRef(false);
 
   useEffect(() => {
@@ -80,6 +91,16 @@ export default function RoadAlertsSandboxMap({ points, driverPosition, onMapClic
       el.style.background = point.color;
       el.style.border = '2px solid #ffffff';
       el.style.boxShadow = '0 1px 3px rgba(0,0,0,0.4)';
+      if (point.id) {
+        el.style.cursor = 'pointer';
+        el.addEventListener('click', (e) => {
+          // Stops this from also reaching the map's own 'click' handler
+          // (onMapClick) -- a marker click means "select this point," not
+          // "place a new point here."
+          e.stopPropagation();
+          onPointClickRef.current?.(point.id!);
+        });
+      }
       const marker = new Marker({ element: el }).setLngLat([point.longitude, point.latitude]).addTo(map);
       attachHoverLabel(marker, map, point.label);
       return marker;

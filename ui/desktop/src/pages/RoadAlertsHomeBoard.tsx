@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError, getRoadSignals, getWeightedPoints, reverseGeocode } from '../../../shared/api/client';
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
@@ -76,6 +76,10 @@ export default function RoadAlertsHomeBoard() {
   const [addresses, setAddresses] = useState<Record<string, string>>({});
   const [addressesLoading, setAddressesLoading] = useState(false);
   const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
+  // Keyed by signal.id -- lets a map-marker click (handleMarkerClick
+  // below) scroll the matching list card into view, the reverse
+  // direction of a list-card click flying the map to that card's marker.
+  const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const loadHomeBoard = useCallback(async (current: StoredRoadAlertsAccount) => {
     setLoading(true);
@@ -145,6 +149,15 @@ export default function RoadAlertsHomeBoard() {
     setAccount(null);
   }, []);
 
+  // Same pattern as Batch.tsx's own handleMarkerClick: selecting a point
+  // (from either direction) is enough to highlight its list card via the
+  // `selected` styling below; this additionally scrolls that card into
+  // view, since the list can be longer than one screen.
+  const handleMarkerClick = useCallback((id: string) => {
+    setSelectedSignalId(id);
+    cardRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
+
   const mapPoints = useMemo<SandboxPoint[]>(
     () =>
       (signals ?? [])
@@ -152,6 +165,7 @@ export default function RoadAlertsHomeBoard() {
           typeof s.latitude === 'number' && typeof s.longitude === 'number'
         )
         .map((s) => ({
+          id: s.id,
           latitude: s.latitude,
           longitude: s.longitude,
           color: '#a4402a',
@@ -222,14 +236,16 @@ export default function RoadAlertsHomeBoard() {
           <h5 className="text-muted" style={{ letterSpacing: '0.06em', textTransform: 'uppercase' }}>
             {signals.length} alert{signals.length === 1 ? '' : 's'} near your home area
           </h5>
-          <RoadAlertsSandboxMap points={mapPoints} driverPosition={homeArea} focusPoint={focusPoint} />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', marginTop: 'var(--space-4)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', marginBottom: 'var(--space-4)' }}>
             {signals.map((signal) => {
               const hasCoordinates = typeof signal.latitude === 'number' && typeof signal.longitude === 'number';
               const selected = signal.id === selectedSignalId;
               return (
                 <div
                   key={signal.id}
+                  ref={(el) => {
+                    cardRefs.current[signal.id] = el;
+                  }}
                   className="card elev-sm"
                   onClick={hasCoordinates ? () => setSelectedSignalId(signal.id) : undefined}
                   style={{
@@ -272,6 +288,12 @@ export default function RoadAlertsHomeBoard() {
               );
             })}
           </div>
+          <RoadAlertsSandboxMap
+            points={mapPoints}
+            driverPosition={homeArea}
+            focusPoint={focusPoint}
+            onPointClick={handleMarkerClick}
+          />
         </>
       )}
     </div>
