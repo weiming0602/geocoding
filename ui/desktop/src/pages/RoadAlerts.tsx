@@ -13,6 +13,7 @@ import {
   markRoadAlertsNotificationsViewed,
   postRoadAlertsStatement,
   postWeightedPointPing,
+  reverseGeocode,
   updateRoadAlertsPreferences,
   updateRoadAlertsUsername,
 } from '../../../shared/api/client';
@@ -28,6 +29,7 @@ import { buildGoogleMapsDirectionsUrl } from '../../../shared/googleMapsDirectio
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
 import PageHeader from '../components/PageHeader';
 import RoadAlertsRegistration from '../components/RoadAlertsRegistration';
+import RoadAlertsSandboxMap, { type SandboxPoint } from '../components/RoadAlertsSandboxMap';
 import RoadAlertsTabs from '../components/RoadAlertsTabs';
 import RoadRerouteMap, { ROUTE_COLORS } from '../components/RoadRerouteMap';
 import { clearStoredAccount, getStoredAccount, type StoredRoadAlertsAccount } from '../roadAlertsStorage';
@@ -105,6 +107,24 @@ export default function RoadAlerts() {
     null
   );
   const [signals, setSignals] = useState<RoadSignal[]>([]);
+  // Reverse-geocoded from `position` (see fetchSignals below, which
+  // refreshes it on the same throttle as the hazard lookup itself) --
+  // shown at the top of the page as a human-readable stand-in for the
+  // raw lat/lon, and clickable to fly the map to your own dot.
+  const [myAddress, setMyAddress] = useState<string | null>(null);
+  const [myAddressLoading, setMyAddressLoading] = useState(false);
+  // Flies the persistent overview map's camera to this coordinate --
+  // driven by clicking "my address" above (RoadAlertsSandboxMap's
+  // focusPoint prop), same mechanism RoadAlertsHomeBoard uses for its
+  // list-click-to-map-fly behavior.
+  const [focusPoint, setFocusPoint] = useState<{ latitude: number; longitude: number } | null>(null);
+  // The reverse direction: clicking a hazard's own marker on the map
+  // highlights/scrolls to its card below, same pattern as
+  // RoadAlertsHomeBoard's handleMarkerClick/cardRefs.
+  const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
+  const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  // Incremented by the map's own "Zoom out to neighborhood" button.
+  const [fitAllRequest, setFitAllRequest] = useState(0);
   // Spoken alerts default to the shortest form -- something you hear
   // while approaching a hazard should be as small as possible.
   const [detailLevel, setDetailLevel] = useState<DetailLevel>('brief');
@@ -317,6 +337,15 @@ export default function RoadAlerts() {
     async (latitude: number, longitude: number, heading: number | null) => {
       const current = accountRef.current;
       if (!current) return;
+
+      // Best-effort, independent of the hazard fetch below -- a failed
+      // reverse geocode shouldn't block or error out hazard alerting.
+      setMyAddressLoading(true);
+      reverseGeocode({ latitude, longitude })
+        .then((result) => setMyAddress(result.address))
+        .catch(() => {})
+        .finally(() => setMyAddressLoading(false));
+
       try {
         const response = await getRoadSignals({
           latitude,
@@ -765,6 +794,29 @@ export default function RoadAlerts() {
     };
   }, []);
 
+  // Same pattern as RoadAlertsHomeBoard's own handleMarkerClick/cardRefs:
+  // clicking a hazard's marker highlights and scrolls to its card.
+  const handleMarkerClick = useCallback((id: string) => {
+    setSelectedSignalId(id);
+    cardRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }, []);
+
+  const mapPoints = useMemo<SandboxPoint[]>(
+    () =>
+      signals
+        .filter((s): s is RoadSignal & { latitude: number; longitude: number } =>
+          typeof s.latitude === 'number' && typeof s.longitude === 'number'
+        )
+        .map((s) => ({
+          id: s.id,
+          latitude: s.latitude,
+          longitude: s.longitude,
+          color: '#a4402a',
+          label: `${HAZARD_CATEGORY_LABELS[s.hazardCategory]}${s.roadway ? ` -- ${s.roadway}` : ''}`,
+        })),
+    [signals]
+  );
+
   if (account === null) {
     return (
       <div>
@@ -786,9 +838,52 @@ export default function RoadAlerts() {
         Live traffic hazards near you, spoken aloud as you approach them.
       </p>
 
+      <p className="card-meta" style={{ marginBottom: 'var(--space-2)' }}>
+        {position ? (
+          <>
+            Your location:{' '}
+            <button
+              onClick={() => setFocusPoint({ latitude: position.latitude, longitude: position.longitude })}
+              title="Fly the map below to your location"
+              style={{
+                background: 'none',
+                border: 'none',
+                padding: 0,
+                font: 'inherit',
+                color: 'inherit',
+                textDecoration: 'underline',
+                cursor: 'pointer',
+              }}
+            >
+              {myAddress ??
+                (myAddressLoading
+                  ? 'looking up your address…'
+                  : `${position.latitude.toFixed(5)}, ${position.longitude.toFixed(5)}`)}
+            </button>
+          </>
+        ) : watching ? (
+          'Waiting for a GPS fix…'
+        ) : (
+          'Not watching your location yet -- open Settings below to type a test location.'
+        )}
+      </p>
+
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 'var(--space-2)' }}>
+        <button className="btn btn-ghost" onClick={() => setFitAllRequest((n) => n + 1)}>
+          Zoom out to neighborhood
+        </button>
+      </div>
+      <RoadAlertsSandboxMap
+        points={mapPoints}
+        driverPosition={position}
+        focusPoint={focusPoint}
+        onPointClick={handleMarkerClick}
+        fitAllPointsRequest={fitAllRequest}
+      />
+
       <button
         className="btn btn-ghost"
-        style={{ marginBottom: 'var(--space-4)' }}
+        style={{ margin: 'var(--space-4) 0' }}
         onClick={() => setSettingsOpen((o) => !o)}
       >
         {settingsOpen ? 'Hide settings' : 'Settings'}
@@ -908,14 +1003,6 @@ export default function RoadAlerts() {
         </div>
       </div>
 
-      <p className="card-meta" style={{ marginBottom: 'var(--space-4)' }}>
-        {position
-          ? `Watching near ${position.latitude.toFixed(5)}, ${position.longitude.toFixed(5)}`
-          : watching
-            ? 'Waiting for a GPS fix…'
-            : 'Not watching your location yet.'}
-      </p>
-
       <div className="card" style={{ marginBottom: 'var(--space-4)' }}>
         <div className="card-title" style={{ fontSize: 15 }}>
           Test a location manually
@@ -993,8 +1080,14 @@ export default function RoadAlerts() {
           return (
             <div
               key={signal.id}
+              ref={(el) => {
+                cardRefs.current[signal.id] = el;
+              }}
               className="card elev-sm"
-              style={index === 0 ? { background: 'var(--color-accent-100)' } : undefined}
+              style={{
+                ...(index === 0 ? { background: 'var(--color-accent-100)' } : undefined),
+                outline: signal.id === selectedSignalId ? '2px solid var(--color-accent-500, #3fb1ce)' : undefined,
+              }}
             >
               <div
                 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}
