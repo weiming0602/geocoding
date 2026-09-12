@@ -63,10 +63,13 @@
   --radius-lg: 18px;
   --radius-xl: 22px;
 
-  /* Icon-nav system (Layout.tsx, PageHeader.tsx): every icon tile uses the
-     same gold, active or not -- no other hue anywhere in this system.
-     --color-icon-default kept as its own variable (rather than inlining
-     --color-icon-active at each call site) purely so every icon-tile rule
+  /* Icon-nav system (Layout.tsx, PageHeader.tsx): every icon uses the same
+     gold, active or not -- no other hue anywhere in this system. The
+     primary nav's own icons (.nav-item-tile) render as a plain gold glyph
+     on a transparent background (no tile/box); PageHeader's and
+     Overview's task-card icons (.task-icon-tile) still sit on a solid
+     gold tile. --color-icon-default kept as its own variable (rather than
+     inlining --color-icon-active at each call site) purely so every rule
      shares one definition; it's intentionally the same value. Deliberately
      more saturated than --color-accent's muted gold, since the old ramp
      read as too flat for icon tiles at this size. The tint/text pair for
@@ -316,10 +319,13 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
 .nav-item-tile {
   width: 20px; height: 20px; border-radius: 7px; flex: none;
   display: flex; align-items: center; justify-content: center;
-  background: var(--color-icon-default); color: #fff;
+  /* No tile/box behind the primary nav's icons -- just the gold glyph
+     itself (icons.tsx draws every icon with stroke/fill: currentColor,
+     so this color is what the icon actually renders in). */
+  background: transparent; color: var(--color-icon-default);
 }
 .nav-item.active { font-weight: 600; background: var(--color-icon-active-tint); color: var(--color-icon-active-tint-text); animation: nav-item-hop 0.545s; }
-.nav-item.active .nav-item-tile { background: var(--color-icon-active); }
+.nav-item.active .nav-item-tile { color: var(--color-icon-active); }
 
 /* Plays once whenever a nav item newly becomes .active (react-router's
    NavLink adds the class to a different element on each navigation, so
