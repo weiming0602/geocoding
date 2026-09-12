@@ -63,13 +63,16 @@
   --radius-lg: 18px;
   --radius-xl: 22px;
 
-  /* Icon-nav system (Layout.tsx, PageHeader.tsx): a single calm color for
-     every icon, with amber reserved for whichever page is currently open --
-     deliberately more saturated than --color-accent's muted gold, since the
-     old ramp read as too flat for icon tiles at this size. The tint/text
-     pair for the active pill reuses --color-accent-100/800 exactly (same
+  /* Icon-nav system (Layout.tsx, PageHeader.tsx): every icon tile uses the
+     same gold, active or not -- no other hue anywhere in this system.
+     --color-icon-default kept as its own variable (rather than inlining
+     --color-icon-active at each call site) purely so every icon-tile rule
+     shares one definition; it's intentionally the same value. Deliberately
+     more saturated than --color-accent's muted gold, since the old ramp
+     read as too flat for icon tiles at this size. The tint/text pair for
+     the active nav pill reuses --color-accent-100/800 exactly (same
      values), so it stays visually part of the existing accent family. */
-  --color-icon-default: #2fd1ac;
+  --color-icon-default: #f2a52d;
   --color-icon-active: #f2a52d;
   --color-icon-active-tint: var(--color-accent-100);
   --color-icon-active-tint-text: var(--color-accent-800);
@@ -342,8 +345,8 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
   100% { transform: translateY(0); }
 }
 
-/* Overview's task cards link to other pages, so their tiles stay the
-   default teal -- amber is reserved for wherever you already are. */
+/* Overview's task cards link to other pages -- same gold tile color as
+   every other icon in the nav (see --color-icon-default's own comment). */
 .task-icon-tile {
   width: 36px; height: 36px; border-radius: var(--radius-md); flex: none;
   display: flex; align-items: center; justify-content: center;
