@@ -36,14 +36,43 @@ type Props = {
   // notifies the caller (by that point's `id`) instead of the caller
   // driving the map. A marker with no `id` is not clickable this way.
   onPointClick?: (id: string) => void;
+  // Re-fits the camera to all current `points` (same bounds logic as the
+  // one-time initial fit below) every time this value changes -- e.g. a
+  // caller's own "zoom out to the neighborhood" button, like
+  // RoadAlertsHomeBoard.tsx's, undoing whatever pan/zoom a focusPoint
+  // flyTo (or manual dragging) left the map at. Any changing value works;
+  // the number itself is never read, only compared for identity.
+  fitAllPointsRequest?: number;
 };
+
+/** Frames every point in view -- a single point centers+zooms on it directly (fitBounds degenerates awkwardly on a zero-size box), multiple points use fitBounds. */
+function fitToPoints(map: MapLibreMap, points: SandboxPoint[]) {
+  if (points.length === 0) return;
+  if (points.length === 1) {
+    map.setCenter([points[0].longitude, points[0].latitude]);
+    map.setZoom(12);
+    return;
+  }
+  const bounds = points.reduce(
+    (acc, p) => acc.extend([p.longitude, p.latitude]),
+    new LngLatBounds([points[0].longitude, points[0].latitude], [points[0].longitude, points[0].latitude])
+  );
+  map.fitBounds(bounds, { padding: 60, maxZoom: 14 });
+}
 
 // Plain DOM Markers (one per point), not BatchMapView's WebGL circle
 // layer -- a sandbox never has more than a handful of points at once
 // (you're placing them by hand), so the per-point DOM cost that layer
 // exists to avoid never actually applies here, and per-point color/hover
 // label is far simpler to express this way.
-export default function RoadAlertsSandboxMap({ points, driverPosition, onMapClick, focusPoint, onPointClick }: Props) {
+export default function RoadAlertsSandboxMap({
+  points,
+  driverPosition,
+  onMapClick,
+  focusPoint,
+  onPointClick,
+  fitAllPointsRequest,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const [ready, setReady] = useState(false);
@@ -111,16 +140,7 @@ export default function RoadAlertsSandboxMap({ points, driverPosition, onMapClic
     // single point added, which would be disorienting mid-session.
     if (!hasFitOnceRef.current && points.length > 0) {
       hasFitOnceRef.current = true;
-      if (points.length === 1) {
-        map.setCenter([points[0].longitude, points[0].latitude]);
-        map.setZoom(12);
-      } else {
-        const bounds = points.reduce(
-          (acc, p) => acc.extend([p.longitude, p.latitude]),
-          new LngLatBounds([points[0].longitude, points[0].latitude], [points[0].longitude, points[0].latitude])
-        );
-        map.fitBounds(bounds, { padding: 60, maxZoom: 14 });
-      }
+      fitToPoints(map, points);
     }
   }, [points, ready]);
 
@@ -156,6 +176,16 @@ export default function RoadAlertsSandboxMap({ points, driverPosition, onMapClic
     if (!map || !ready || !focusPoint) return;
     map.flyTo({ center: [focusPoint.longitude, focusPoint.latitude], zoom: 15, essential: true });
   }, [focusPoint, ready]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready || fitAllPointsRequest === undefined) return;
+    fitToPoints(map, points);
+    // Reacts only to the request counter changing, not to `points` itself --
+    // `points` is read fresh from the closure when the button is clicked,
+    // it isn't meant to retrigger this effect on every incoming update.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fitAllPointsRequest, ready]);
 
   return (
     <div
