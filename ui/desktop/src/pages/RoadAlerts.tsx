@@ -23,7 +23,7 @@ import type {
   RoadSignal,
   RoadSignalSeverity,
 } from '../../../shared/api/types';
-import { bearingDegrees, haversineDistanceMeters, isAhead } from '../../../shared/geo';
+import { bearingDegrees, estimateSpeedMetersPerSecond, haversineDistanceMeters, isAhead } from '../../../shared/geo';
 import { buildGoogleMapsDirectionsUrl } from '../../../shared/googleMapsDirections';
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
 import PageHeader from '../components/PageHeader';
@@ -49,6 +49,21 @@ const POLL_MIN_INTERVAL_MS = 15000;
 // Mirrors ui/mobile's RoadAlertsForm.tsx exactly -- see that file's own
 // comment for why this is much coarser than POLL_MIN_INTERVAL_MS.
 const WEIGHTED_POINT_PING_INTERVAL_MS = 3 * 60 * 1000;
+// Watching auto-starts as soon as an account is ready (see the effect
+// below) -- someone who just opened this page while parked shouldn't see
+// a hazard list for wherever they happen to be sitting. "Hazards in the
+// Neighborhood" already covers that passive/not-driving case; this tab
+// only starts checking once real movement is detected. ~7.8 mph: safely
+// above GPS jitter and a brisk walk/jog (which could otherwise trip this
+// while carrying the phone), comfortably below the slowest realistic
+// driving speed (a car easing out of a driveway).
+const MOVING_SPEED_THRESHOLD_MPS = 3.5;
+// Below this distance between two consecutive GPS fixes, ordinary jitter
+// dominates -- neither the speed nor the bearing computed between them is
+// trustworthy. 15m comfortably exceeds typical enableHighAccuracy jitter
+// (commonly 5-15m outdoors) while still being covered in ~2s at even a
+// slow-moving car's speed, so real movement is still detected promptly.
+const MIN_RELIABLE_DISPLACEMENT_METERS = 15;
 
 const SEVERITY_LABELS: Record<RoadSignalSeverity, string> = {
   serious: 'Serious',
@@ -104,6 +119,11 @@ export default function RoadAlerts() {
   const [position, setPosition] = useState<{ latitude: number; longitude: number; heading: number | null } | null>(
     null
   );
+  // True once a GPS fix shows real movement (see MOVING_SPEED_THRESHOLD_MPS)
+  // since the last Start press -- hazard checks are held back until then
+  // (see onPosition below), so opening this page while parked doesn't
+  // surface a hazard list for a stationary location.
+  const [hasDetectedMovement, setHasDetectedMovement] = useState(false);
   const [signals, setSignals] = useState<RoadSignal[]>([]);
   // Spoken alerts default to the shortest form -- something you hear
   // while approaching a hazard should be as small as possible.
@@ -192,6 +212,16 @@ export default function RoadAlerts() {
   // endpoint -- a ref (not just the `position` state) so handleStop
   // doesn't need `position` in its own dependency array.
   const positionRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  // Mirrors hasDetectedMovement -- read/written directly inside onPosition
+  // (a ref, not the state value, since onPosition is a long-lived
+  // useCallback closure registered once with watchPosition; the state
+  // setter still runs alongside it, purely to trigger a re-render).
+  const hasDetectedMovementRef = useRef(false);
+  // The previous GPS fix, used to estimate speed when the device doesn't
+  // report GeolocationCoordinates.speed itself (see onPosition below).
+  // Reset in handleStart so a stale fix from a prior trip can't be
+  // compared against this trip's first one.
+  const lastFixRef = useRef<{ latitude: number; longitude: number; timestampMs: number } | null>(null);
   useEffect(() => {
     voiceEnabledRef.current = voiceEnabled;
   }, [voiceEnabled]);
@@ -358,14 +388,54 @@ export default function RoadAlerts() {
 
   const onPosition = useCallback(
     (pos: GeolocationPosition) => {
-      const { latitude, longitude, heading } = pos.coords;
-      setPosition({ latitude, longitude, heading });
+      const { latitude, longitude, heading, speed } = pos.coords;
+      const current = { latitude, longitude, timestampMs: pos.timestamp };
+      const previous = lastFixRef.current;
+      lastFixRef.current = current;
+
+      // A derived speed/heading between two fixes is only trustworthy
+      // once they're far enough apart that ordinary GPS jitter (a few
+      // meters, even with enableHighAccuracy) is small relative to the
+      // real movement being measured -- a short enough interval can
+      // otherwise make jitter alone look like highway speed, and a
+      // near-zero displacement gives a meaningless, noise-dominated
+      // bearing rather than an accurate one.
+      const displacementMeters = previous ? haversineDistanceMeters(previous, current) : null;
+      const reliable = displacementMeters !== null && displacementMeters >= MIN_RELIABLE_DISPLACEMENT_METERS;
+
+      // Prefers the device's own reported speed/heading -- reliable
+      // regardless of fix spacing -- and only falls back to a fix-pair
+      // estimate when the device doesn't report one at all. Heading in
+      // particular is null on virtually every desktop browser and many
+      // mobile ones too; without this fallback, isAhead's own "can't
+      // tell, assume ahead" default would forward every hazard in range
+      // regardless of actual direction, which is far less accurate than
+      // a real bearing derived from where the driver just came from.
+      const estimatedSpeedMps =
+        typeof speed === 'number' && !Number.isNaN(speed)
+          ? speed
+          : reliable
+            ? estimateSpeedMetersPerSecond(previous!, current)
+            : null;
+      const estimatedHeadingDeg =
+        typeof heading === 'number' && heading >= 0 ? heading : reliable ? bearingDegrees(previous!, current) : null;
+
+      setPosition({ latitude, longitude, heading: estimatedHeadingDeg });
       positionRef.current = { latitude, longitude };
 
+      if (
+        !hasDetectedMovementRef.current &&
+        estimatedSpeedMps !== null &&
+        estimatedSpeedMps >= MOVING_SPEED_THRESHOLD_MPS
+      ) {
+        hasDetectedMovementRef.current = true;
+        setHasDetectedMovement(true);
+      }
+
       const now = Date.now();
-      if (now - lastFetchAtRef.current >= POLL_MIN_INTERVAL_MS) {
+      if (hasDetectedMovementRef.current && now - lastFetchAtRef.current >= POLL_MIN_INTERVAL_MS) {
         lastFetchAtRef.current = now;
-        fetchSignals(latitude, longitude, heading);
+        fetchSignals(latitude, longitude, estimatedHeadingDeg);
       }
 
       // The first fix after Start is this trip's origin -- reported with
@@ -392,6 +462,9 @@ export default function RoadAlerts() {
       return;
     }
     isFirstPositionOfSessionRef.current = true;
+    hasDetectedMovementRef.current = false;
+    setHasDetectedMovement(false);
+    lastFixRef.current = null;
     const id = navigator.geolocation.watchPosition(
       onPosition,
       (err) => setError(err.message || 'Could not start watching your location.'),
@@ -965,11 +1038,18 @@ export default function RoadAlerts() {
         </p>
       )}
 
-      <h5 className="text-muted" style={{ letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-        {signals.length} alert{signals.length === 1 ? '' : 's'} within {metersLabel(RADIUS_METERS)}
-      </h5>
+      {watching && !hasDetectedMovement && signals.length === 0 ? (
+        <p className="text-muted">
+          Waiting to confirm you're actually driving before checking for hazards -- start moving, or use
+          "Test a location manually" in Settings to check a spot right away.
+        </p>
+      ) : (
+        <>
+          <h5 className="text-muted" style={{ letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+            {signals.length} alert{signals.length === 1 ? '' : 's'} within {metersLabel(RADIUS_METERS)}
+          </h5>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
         {signals.map((signal, index) => {
           const ahead =
             position && typeof signal.latitude === 'number' && typeof signal.longitude === 'number'
@@ -1289,7 +1369,9 @@ export default function RoadAlerts() {
             </div>
           );
         })}
-      </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }
