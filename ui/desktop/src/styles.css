@@ -63,18 +63,19 @@
   --radius-lg: 18px;
   --radius-xl: 22px;
 
-  /* Icon-nav system (Layout.tsx, PageHeader.tsx): every icon uses the same
-     gold, active or not -- no other hue anywhere in this system. The
-     primary nav's own icons (.nav-item-tile) render as a plain gold glyph
-     on a transparent background (no tile/box); PageHeader's and
-     Overview's task-card icons (.task-icon-tile) still sit on a solid
-     gold tile. --color-icon-default kept as its own variable (rather than
-     inlining --color-icon-active at each call site) purely so every rule
-     shares one definition; it's intentionally the same value. Deliberately
-     more saturated than --color-accent's muted gold, since the old ramp
-     read as too flat for icon tiles at this size. The tint/text pair for
-     the active nav pill reuses --color-accent-100/800 exactly (same
-     values), so it stays visually part of the existing accent family. */
+  /* Icon-tile system (PageHeader.tsx, Overview's task cards): every solid
+     icon tile uses the same gold, active or not -- no other hue anywhere
+     in this system. The primary nav's own icons (Layout.tsx's
+     .nav-item-tile) are the one exception: plain black glyphs on a
+     transparent background, no tile/box and no gold at all -- see
+     .nav-item-tile's own comment. --color-icon-default kept as its own
+     variable (rather than inlining --color-icon-active at each call site)
+     purely so every solid-tile rule shares one definition; it's
+     intentionally the same value. Deliberately more saturated than
+     --color-accent's muted gold, since the old ramp read as too flat for
+     icon tiles at this size. The tint/text pair for the active nav pill
+     reuses --color-accent-100/800 exactly (same values), so it stays
+     visually part of the existing accent family. */
   --color-icon-default: #f2a52d;
   --color-icon-active: #f2a52d;
   --color-icon-active-tint: var(--color-accent-100);
@@ -312,20 +313,21 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
 .nav-item {
   display: flex; align-items: center; gap: 5px;
   padding: 4px 9px 4px 4px; border-radius: 999px;
-  color: inherit; text-decoration: none; font-size: 12px; white-space: nowrap;
+  color: inherit; text-decoration: none; font-size: 14px; white-space: nowrap;
   transition: background var(--transition-fast), color var(--transition-fast);
 }
 .nav-item:hover:not(.active) { background: color-mix(in srgb, var(--color-text) 6%, transparent); }
 .nav-item-tile {
-  width: 20px; height: 20px; border-radius: 7px; flex: none;
+  width: 24px; height: 24px; border-radius: 7px; flex: none;
   display: flex; align-items: center; justify-content: center;
-  /* No tile/box behind the primary nav's icons -- just the gold glyph
-     itself (icons.tsx draws every icon with stroke/fill: currentColor,
-     so this color is what the icon actually renders in). */
-  background: transparent; color: var(--color-icon-default);
+  /* No tile/box behind the primary nav's icons -- just the glyph itself
+     (icons.tsx draws every icon with stroke/fill: currentColor, so this
+     color is what the icon actually renders in). Plain black/no color
+     distinction between the active tab and the rest -- that's carried by
+     the pill's own background/bold-text/hop-animation below instead. */
+  background: transparent; color: var(--color-text);
 }
 .nav-item.active { font-weight: 600; background: var(--color-icon-active-tint); color: var(--color-icon-active-tint-text); animation: nav-item-hop 0.545s; }
-.nav-item.active .nav-item-tile { color: var(--color-icon-active); }
 
 /* Plays once whenever a nav item newly becomes .active (react-router's
    NavLink adds the class to a different element on each navigation, so
