@@ -58,6 +58,12 @@ const WEIGHTED_POINT_PING_INTERVAL_MS = 3 * 60 * 1000;
 // while carrying the phone), comfortably below the slowest realistic
 // driving speed (a car easing out of a driveway).
 const MOVING_SPEED_THRESHOLD_MPS = 3.5;
+// Below this distance between two consecutive GPS fixes, ordinary jitter
+// dominates -- neither the speed nor the bearing computed between them is
+// trustworthy. 15m comfortably exceeds typical enableHighAccuracy jitter
+// (commonly 5-15m outdoors) while still being covered in ~2s at even a
+// slow-moving car's speed, so real movement is still detected promptly.
+const MIN_RELIABLE_DISPLACEMENT_METERS = 15;
 
 const SEVERITY_LABELS: Record<RoadSignalSeverity, string> = {
   serious: 'Serious',
@@ -383,32 +389,53 @@ export default function RoadAlerts() {
   const onPosition = useCallback(
     (pos: GeolocationPosition) => {
       const { latitude, longitude, heading, speed } = pos.coords;
-      setPosition({ latitude, longitude, heading });
+      const current = { latitude, longitude, timestampMs: pos.timestamp };
+      const previous = lastFixRef.current;
+      lastFixRef.current = current;
+
+      // A derived speed/heading between two fixes is only trustworthy
+      // once they're far enough apart that ordinary GPS jitter (a few
+      // meters, even with enableHighAccuracy) is small relative to the
+      // real movement being measured -- a short enough interval can
+      // otherwise make jitter alone look like highway speed, and a
+      // near-zero displacement gives a meaningless, noise-dominated
+      // bearing rather than an accurate one.
+      const displacementMeters = previous ? haversineDistanceMeters(previous, current) : null;
+      const reliable = displacementMeters !== null && displacementMeters >= MIN_RELIABLE_DISPLACEMENT_METERS;
+
+      // Prefers the device's own reported speed/heading -- reliable
+      // regardless of fix spacing -- and only falls back to a fix-pair
+      // estimate when the device doesn't report one at all. Heading in
+      // particular is null on virtually every desktop browser and many
+      // mobile ones too; without this fallback, isAhead's own "can't
+      // tell, assume ahead" default would forward every hazard in range
+      // regardless of actual direction, which is far less accurate than
+      // a real bearing derived from where the driver just came from.
+      const estimatedSpeedMps =
+        typeof speed === 'number' && !Number.isNaN(speed)
+          ? speed
+          : reliable
+            ? estimateSpeedMetersPerSecond(previous!, current)
+            : null;
+      const estimatedHeadingDeg =
+        typeof heading === 'number' && heading >= 0 ? heading : reliable ? bearingDegrees(previous!, current) : null;
+
+      setPosition({ latitude, longitude, heading: estimatedHeadingDeg });
       positionRef.current = { latitude, longitude };
 
-      if (!hasDetectedMovementRef.current) {
-        const current = { latitude, longitude, timestampMs: pos.timestamp };
-        // Prefers the GPS hardware's own (Doppler-based) speed when the
-        // device reports one; falls back to a distance/time estimate
-        // between consecutive fixes otherwise (desktop browsers, some
-        // Android WebViews never populate `coords.speed`).
-        const estimatedSpeedMps =
-          typeof speed === 'number' && !Number.isNaN(speed)
-            ? speed
-            : lastFixRef.current
-              ? estimateSpeedMetersPerSecond(lastFixRef.current, current)
-              : null;
-        lastFixRef.current = current;
-        if (estimatedSpeedMps !== null && estimatedSpeedMps >= MOVING_SPEED_THRESHOLD_MPS) {
-          hasDetectedMovementRef.current = true;
-          setHasDetectedMovement(true);
-        }
+      if (
+        !hasDetectedMovementRef.current &&
+        estimatedSpeedMps !== null &&
+        estimatedSpeedMps >= MOVING_SPEED_THRESHOLD_MPS
+      ) {
+        hasDetectedMovementRef.current = true;
+        setHasDetectedMovement(true);
       }
 
       const now = Date.now();
       if (hasDetectedMovementRef.current && now - lastFetchAtRef.current >= POLL_MIN_INTERVAL_MS) {
         lastFetchAtRef.current = now;
-        fetchSignals(latitude, longitude, heading);
+        fetchSignals(latitude, longitude, estimatedHeadingDeg);
       }
 
       // The first fix after Start is this trip's origin -- reported with
