@@ -44,3 +44,19 @@ export function isAhead(headingDeg: number | null | undefined, bearingDeg: numbe
   const diff = Math.abs(((bearingDeg - headingDeg + 540) % 360) - 180);
   return diff <= coneDeg / 2;
 }
+
+export type TimedCoordinates = Coordinates & { timestampMs: number };
+
+/**
+ * Estimated ground speed between two GPS fixes, in meters/second -- a
+ * fallback for devices/browsers that don't report
+ * GeolocationCoordinates.speed themselves (desktop browsers, some
+ * Android WebViews). Returns null when the fixes are simultaneous or
+ * out of order, since a non-positive interval can't be divided into a
+ * meaningful speed.
+ */
+export function estimateSpeedMetersPerSecond(previous: TimedCoordinates, current: TimedCoordinates): number | null {
+  const dtSeconds = (current.timestampMs - previous.timestampMs) / 1000;
+  if (dtSeconds <= 0) return null;
+  return haversineDistanceMeters(previous, current) / dtSeconds;
+}
