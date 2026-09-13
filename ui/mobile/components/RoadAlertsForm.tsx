@@ -26,9 +26,10 @@ import type {
   RoadSignalSeverity,
 } from '../../shared/api/types';
 import { bearingDegrees, haversineDistanceMeters, isAhead } from '../../shared/geo';
+import type { TimedCoordinates } from '../../shared/geo';
 import { buildGoogleMapsDirectionsUrl } from '../../shared/googleMapsDirections';
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../shared/hazardCategories';
-import { findAlertsForWeightedPoints, type WeightedPoint } from '../../shared/roadAlertsMatching';
+import { approachedWeightedPoints, findAlertsForWeightedPoints, type WeightedPoint } from '../../shared/roadAlertsMatching';
 import { colors, radius, space } from '../../shared/theme';
 import RoadAlertsMap, { ROUTE_COLORS } from './RoadAlertsMap';
 import RoadAlertsRegistration from './RoadAlertsRegistration';
@@ -50,6 +51,13 @@ const RADIUS_METERS = 10000;
 // rather than a separate timer, but still caps how often the free public
 //511 API gets hit if the device reports position rapidly.
 const POLL_MIN_INTERVAL_MS = 15000;
+// How many recent position samples the in-memory route-approach trail
+// keeps -- ~60 seconds at the ~15s hazard-check cadence above. Short on
+// purpose: a real route change (a turn) should outweigh the pre-turn
+// direction quickly. Never persisted anywhere -- see
+// docs/ROAD_ALERTS_DESIGN.md's Privacy model section. Mirrors
+// ui/desktop/src/pages/RoadAlerts.tsx's own TRAIL_MAX_SAMPLES exactly.
+const TRAIL_MAX_SAMPLES = 4;
 // Much coarser than POLL_MIN_INTERVAL_MS on purpose -- routine-route
 // learning doesn't need anywhere near hazard-checking's resolution, and
 // a tighter interval would mean more battery/data spent on writes than
@@ -247,6 +255,10 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
   const detailLevelRef = useRef(detailLevel);
   const accountRef = useRef(account);
   const weightedPointsRef = useRef<WeightedPoint[]>(weightedPoints);
+  // Short in-memory trail for approachedWeightedPoints -- capped at
+  // TRAIL_MAX_SAMPLES, oldest dropped first. Never persisted. Reset in
+  // handleStart, same as isFirstPositionOfSessionRef.
+  const trailRef = useRef<TimedCoordinates[]>([]);
   useEffect(() => {
     voiceEnabledRef.current = voiceEnabled;
   }, [voiceEnabled]);
@@ -459,11 +471,8 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
         // so it shouldn't get silently dropped by a momentary bad heading
         // reading (e.g. stopped at a light) the way a plain cone check
         // would.
-        const routeAlerts = findAlertsForWeightedPoints(
-          { latitude, longitude },
-          weightedPointsRef.current,
-          response.signals
-        );
+        const candidatePoints = approachedWeightedPoints(trailRef.current, weightedPointsRef.current);
+        const routeAlerts = findAlertsForWeightedPoints({ latitude, longitude }, candidatePoints, response.signals);
         const onRouteIds = new Set(routeAlerts.map((a) => a.signal.id));
         setOnRouteIds(onRouteIds);
 
@@ -504,6 +513,7 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
       const now = Date.now();
       if (now - lastFetchAtRef.current >= POLL_MIN_INTERVAL_MS) {
         lastFetchAtRef.current = now;
+        trailRef.current = [...trailRef.current, { latitude, longitude, timestampMs: now }].slice(-TRAIL_MAX_SAMPLES);
         fetchSignals(latitude, longitude, heading);
       }
 
@@ -532,6 +542,7 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
         throw new Error('Location permission was not granted.');
       }
       isFirstPositionOfSessionRef.current = true;
+      trailRef.current = [];
       const subscription = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 25 },
         onPosition
