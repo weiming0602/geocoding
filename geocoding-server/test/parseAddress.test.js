@@ -138,8 +138,37 @@ test('rejects an address with no leading house number', () => {
   assert.throws(() => parseAddress('Pequawket Trl, Standish, ME 04091'), ValidationError);
 });
 
-test('rejects an address with no ZIP code', () => {
-  assert.throws(() => parseAddress('996 Pequawket Trl, Standish, ME'), ValidationError);
+test('parses a comma-separated address with no ZIP code', () => {
+  const result = parseAddress('996 Pequawket Trl, Standish, ME');
+  assert.deepEqual(result, {
+    number: 996,
+    streetName: 'Pequawket Trl',
+    zip: null,
+    state: 'ME',
+    town: 'Standish',
+  });
+});
+
+test('parses a no-comma address with a trailing state code and no ZIP code', () => {
+  const result = parseAddress('996 Pequawket Trl ME');
+  assert.deepEqual(result, {
+    number: 996,
+    streetName: 'Pequawket Trl',
+    zip: null,
+    state: 'ME',
+    town: null,
+  });
+});
+
+test('parses an address with no ZIP, no state, and no town', () => {
+  const result = parseAddress('996 Pequawket Trl');
+  assert.deepEqual(result, {
+    number: 996,
+    streetName: 'Pequawket Trl',
+    zip: null,
+    state: null,
+    town: null,
+  });
 });
 
 test('rejects an overly long address', () => {

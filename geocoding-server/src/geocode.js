@@ -147,6 +147,20 @@ async function geocode(db, addressInput, { offsetFeet = 20 } = {}) {
     };
   }
 
+  // No exact address-point match, and no ZIP to fall back on -- unlike
+  // matchAddressPoint (keyed by town), candidateStreets has no town/city
+  // column to filter by at all (TIGER's street_names only carries
+  // zipl/zipr/state), so a common street name has no other way to be
+  // disambiguated here. Caught explicitly, with a message naming the
+  // actual problem, rather than letting `street_names.zipColumn = NULL`
+  // silently match nothing and surface as a confusing "in ZIP null".
+  if (!zip) {
+    throw new NotFoundError(
+      `could not find an exact address match for "${streetName}" in ${town ?? 'the given town'} -- ` +
+        'add a ZIP code to search by street range instead'
+    );
+  }
+
   const rangeSide = number % 2 === 1 ? 'left' : 'right';
   const offsetSide = rangeSide;
   const [fromCol, toCol] = rangeSide === 'left' ? ['lfromadd', 'ltoadd'] : ['rfromadd', 'rtoadd'];

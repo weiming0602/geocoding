@@ -358,9 +358,14 @@ read-write).
   (`guessRole`) are just a starting point the user confirms/fixes on the
   mapping step -- nothing here silently commits to a wrong guess. Rows
   are flagged, not dropped, when they can't produce a geocodable address
-  line (same leading-house-number/trailing-5-digit-ZIP rule
-  `parseAddress.js` enforces server-side, reimplemented client-side in
-  `isGeocodableAddressLine` since this step never touches the server).
+  line (the leading-house-number/trailing-5-digit-ZIP rule
+  `isGeocodableAddressLine` reimplements client-side, since this step
+  never touches the server -- **now stricter than the server itself**:
+  `parseAddress.js` no longer requires a ZIP (it can match an exact Maine
+  E911 address point by town alone), but `isGeocodableAddressLine` still
+  does, so a ZIP-less-but-otherwise-complete row gets flagged here even
+  though the server could geocode it. Not yet reconciled -- flagged, not
+  fixed).
   The preview step's filter bar covers every column in the uploaded
   file, not just the ones mapped to an address role (e.g. a "Region" or
   "Notes" column someone didn't map to anything is still filterable) --
