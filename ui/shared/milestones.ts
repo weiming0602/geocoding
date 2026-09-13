@@ -105,6 +105,41 @@ export const MILESTONES: Milestone[] = [
       "Construction, accidents, closures, and more now show their own icon in the alert list, sorted with the most recently updated hazard first.",
   },
   {
+    date: 'Sep 9, 2026',
+    title: 'Hazards near where you live',
+    description:
+      "A new view shows every current hazard around your home area automatically -- no need to be driving to check what's nearby.",
+  },
+  {
+    date: 'Sep 10, 2026',
+    title: 'Road Alerts coverage beyond New England',
+    description:
+      'Traffic hazards are now available with live coverage well outside Maine, New Hampshire, and Vermont, not just within them.',
+  },
+  {
+    date: 'Sep 13, 2026',
+    title: "Road Alerts waits until you're actually driving",
+    description:
+      "Opening the app while parked no longer shows a hazard list for wherever you happen to be sitting -- alerts only start once you're moving.",
+  },
+  {
+    date: 'Sep 13, 2026',
+    title: 'Smarter about which hazards matter to you',
+    description:
+      "Road Alerts now recognizes when you're heading toward one of your usual routes, and prioritizes hazards actually in your way over ones nearby but unrelated to your trip.",
+  },
+  {
+    date: 'Sep 13, 2026',
+    title: 'Faster hazard updates',
+    description: 'Road Alerts hazard checks now respond faster and more consistently while driving.',
+  },
+  {
+    date: 'Sep 13, 2026',
+    title: 'Geocode a Maine address without its ZIP code',
+    description:
+      'As long as the street, city, and state are given, an exact address can now be matched even without a ZIP code.',
+  },
+  {
     date: 'Coming soon',
     title: 'New Hampshire accuracy upgrade',
     description: 'The same real per-house location data, for New Hampshire.',
