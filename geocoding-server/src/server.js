@@ -24,6 +24,7 @@ const {
   checkAccess: checkRoadAlertsAccess,
   updateDigestOptIn,
   updateUsername,
+  updateRoutineDensity,
   markNotificationsViewed,
 } = require('./roadAlertsAccounts');
 const {
@@ -49,6 +50,7 @@ const {
   ensureWeightedPointsTable,
   recordWeightedPointPing,
   getWeightedPoints,
+  ROUTINE_DENSITY_TIERS,
 } = require('./weightedPoints');
 const {
   ensureTestRoadSignalsTable,
@@ -611,7 +613,7 @@ app.get('/road-alerts/preferences', async (req, res) => {
     const usersDb = await usersDbPromise;
     const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
 
-    res.json({ digestOptIn: account.digest_opt_in });
+    res.json({ digestOptIn: account.digest_opt_in, routineDensity: account.routine_density });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
@@ -621,8 +623,12 @@ app.get('/road-alerts/preferences', async (req, res) => {
   }
 });
 
+// digestOptIn and routineDensity are independent settings sharing one
+// endpoint (same reasoning as their shared GET above) -- each is only
+// validated/updated when present in the body, so a caller changing one
+// never has to also resend the other's current value.
 app.post('/road-alerts/preferences', async (req, res) => {
-  const { email, serviceKey, digestOptIn } = req.body || {};
+  const { email, serviceKey, digestOptIn, routineDensity } = req.body || {};
   try {
     if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
       throw new ValidationError('email must be a valid email address');
@@ -630,15 +636,27 @@ app.post('/road-alerts/preferences', async (req, res) => {
     if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
       throw new ValidationError('serviceKey must be a non-empty string');
     }
-    if (typeof digestOptIn !== 'boolean') {
+    if (digestOptIn === undefined && routineDensity === undefined) {
+      throw new ValidationError('must include digestOptIn and/or routineDensity');
+    }
+    if (digestOptIn !== undefined && typeof digestOptIn !== 'boolean') {
       throw new ValidationError('digestOptIn must be a boolean');
+    }
+    if (routineDensity !== undefined && !Object.prototype.hasOwnProperty.call(ROUTINE_DENSITY_TIERS, routineDensity)) {
+      throw new ValidationError(`routineDensity must be one of: ${Object.keys(ROUTINE_DENSITY_TIERS).join(', ')}`);
     }
 
     const usersDb = await usersDbPromise;
     await checkRoadAlertsAccess(usersDb, email, serviceKey);
-    const account = await updateDigestOptIn(usersDb, email, digestOptIn);
+    let account;
+    if (digestOptIn !== undefined) {
+      account = await updateDigestOptIn(usersDb, email, digestOptIn);
+    }
+    if (routineDensity !== undefined) {
+      account = await updateRoutineDensity(usersDb, email, routineDensity);
+    }
 
-    res.json({ digestOptIn: account.digest_opt_in });
+    res.json({ digestOptIn: account.digest_opt_in, routineDensity: account.routine_density });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
@@ -1230,13 +1248,14 @@ app.post('/road-alerts/weighted-points', async (req, res) => {
     }
 
     const usersDb = await usersDbPromise;
-    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+    const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
 
     const point = await recordWeightedPointPing(usersDb, email, {
       latitude: typeof latitude === 'number' ? latitude : Number(latitude),
       longitude: typeof longitude === 'number' ? longitude : Number(longitude),
       tlid: typeof tlid === 'string' ? tlid : null,
       isEndpoint: Boolean(isEndpoint),
+      routineDensity: account.routine_density,
     });
 
     res.json({ point });

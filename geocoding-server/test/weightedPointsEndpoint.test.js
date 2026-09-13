@@ -115,6 +115,29 @@ test('GET /road-alerts/weighted-points returns points once qualified (pinged eno
     { seedStreets: false }
   ));
 
+test('POST /road-alerts/weighted-points uses the account\'s own routine-density setting to decide qualification', () =>
+  withTestServer(
+    async ({ port, usersDb }) => {
+      const { registerAccount, updateRoutineDensity } = require('../src/roadAlertsAccounts');
+      const account = await registerAccount(usersDb, TEST_EMAIL);
+      await updateRoutineDensity(usersDb, TEST_EMAIL, 'minimal');
+
+      // Balanced would qualify at 3 pings; minimal (6 pings) should not yet.
+      for (let i = 0; i < 3; i++) {
+        await fetch(`http://127.0.0.1:${port}/road-alerts/weighted-points`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: TEST_EMAIL, serviceKey: account.service_key, latitude: 43.9, longitude: -69.8 }),
+        });
+      }
+
+      const response = await fetch(weightedPointsUrl(port, { serviceKey: account.service_key }));
+      const body = await response.json();
+      assert.equal(body.weightedPoints.length, 0, 'minimal tier should not qualify at only 3 pings');
+    },
+    { seedStreets: false }
+  ));
+
 test('GET /road-alerts/weighted-points requires a valid email format', () =>
   withTestServer(
     async ({ port }) => {

@@ -225,13 +225,19 @@ export type RoadAlertsRegisterResponse = {
   digestOptIn: boolean;
 };
 
+// The three tiers of docs/ROAD_ALERTS_DESIGN.md's "how much routine is
+// remembered" setting (see geocoding-server/src/weightedPoints.js's
+// ROUTINE_DENSITY_TIERS, which is what actually interprets this value).
+export type RoadAlertsRoutineDensity = 'minimal' | 'balanced' | 'most_complete';
+
 // GET/POST /road-alerts/preferences -- the account's opt-in flag for the
 // daily email digest (see geocoding-server/src/roadAlertsDigest.js).
 // Default false; only alerts explicitly saved via the voice
 // "save"/"keep"/"email" command are ever included, never every alert
-// spoken automatically.
+// spoken automatically. routineDensity defaults to 'balanced'.
 export type RoadAlertsPreferencesResponse = {
   digestOptIn: boolean;
+  routineDensity: RoadAlertsRoutineDensity;
 };
 
 // GET/POST /road-alerts/username -- the display name shown alongside
