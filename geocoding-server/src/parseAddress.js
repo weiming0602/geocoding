@@ -26,20 +26,24 @@ const US_STATE_CODES = new Set([
  *   "996 Pequawket Trl, Standish, Maine 04091"
  *   "996 Pequawket Trl, Standish, Maine, 04091"
  *   "996 Pequawket Trl ME 04091"
- * Basic by design: assumes a leading house number and a trailing
- * 5-digit ZIP. Street name is everything up to the first comma (or,
- * with no comma, everything before the ZIP minus a trailing 2-letter
- * state code, if one is present). `state` is whatever sits between the
- * last comma and the ZIP — a 2-letter abbreviation or a full name — or
- * null if it can't be confidently isolated (e.g. no comma and no
- * trailing 2-letter code). `town` is whatever sits between the first and
- * last comma (e.g. "Standish" above) -- null when there's only one comma
- * (or none), i.e. no town was given separately from the street/state. A
- * comma directly before the ZIP with nothing after it (third example
- * above) doesn't count as its own segment -- without dropping it, "state"
- * would end up empty and "Standish, Maine" would incorrectly get
- * swallowed whole into `town`, since it'd otherwise look identical to
- * "everything between the first and last comma".
+ * Basic by design: assumes a leading house number. A trailing 5-digit
+ * ZIP is used when present to anchor where the street/town/state portion
+ * ends, but is not required -- `zip` comes back null when one isn't
+ * found, and the rest of parsing runs on the whole remaining string
+ * instead. Street name is everything up to the first comma (or, with no
+ * comma, everything before the ZIP -- or the end of the string, with no
+ * ZIP -- minus a trailing 2-letter state code, if one is present). `state`
+ * is whatever sits between the last comma and the ZIP (or end of string)
+ * — a 2-letter abbreviation or a full name — or null if it can't be
+ * confidently isolated (e.g. no comma and no trailing 2-letter code).
+ * `town` is whatever sits between the first and last comma (e.g.
+ * "Standish" above) -- null when there's only one comma (or none), i.e.
+ * no town was given separately from the street/state. A comma directly
+ * before the ZIP with nothing after it (third example above) doesn't
+ * count as its own segment -- without dropping it, "state" would end up
+ * empty and "Standish, Maine" would incorrectly get swallowed whole into
+ * `town`, since it'd otherwise look identical to "everything between the
+ * first and last comma".
  * Used to match Maine's E911 address points, which are keyed by town
  * rather than ZIP (see matchAddressPoint in geocode.js) -- getting town
  * wrong here (e.g. "Standish, Maine" instead of "Standish") silently
@@ -66,15 +70,21 @@ function parseAddress(input) {
   const number = parseInt(numberMatch[1], 10);
   const afterNumber = trimmed.slice(numberMatch[0].length);
 
+  // A ZIP is used when present to anchor where the street/town/state
+  // portion ends, but isn't required -- geocode.js's Maine E911
+  // address-point path matches by town, not ZIP, so a caller who knows
+  // the town doesn't need to also supply a ZIP. Without one, the
+  // street/town/state parsing below just runs on the whole remaining
+  // string instead of "everything before the ZIP" -- same logic either
+  // way, since it never actually depended on the ZIP boundary itself.
   const zipMatches = [...trimmed.matchAll(/\b\d{5}\b/g)].filter(
     (m) => m.index >= numberMatch[0].length
   );
-  if (zipMatches.length === 0) {
-    throw new ValidationError('address must include a 5-digit ZIP code');
-  }
-  const zip = zipMatches[zipMatches.length - 1][0];
-  const zipIndexInAfterNumber = zipMatches[zipMatches.length - 1].index - numberMatch[0].length;
-  const beforeZip = afterNumber.slice(0, zipIndexInAfterNumber);
+  const zip = zipMatches.length > 0 ? zipMatches[zipMatches.length - 1][0] : null;
+  const beforeZip =
+    zipMatches.length > 0
+      ? afterNumber.slice(0, zipMatches[zipMatches.length - 1].index - numberMatch[0].length)
+      : afterNumber;
 
   const commaIndices = [...beforeZip.matchAll(/,/g)].map((m) => m.index);
   let streetPart;
