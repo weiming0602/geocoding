@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { Coordinates, RoadSignal } from './api/types';
 import {
+  approachedWeightedPoints,
   crossTrackDistanceMeters,
   alongTrackDistanceMeters,
   findAlertsForWeightedPoints,
@@ -177,5 +178,74 @@ describe('findAlertsForWeightedPoints', () => {
 
     expect(alerts.map((a) => a.signal.id)).toEqual([relevantHazard.id]);
     expect(alerts[0].signal.severity).toBe('serious');
+  });
+});
+
+describe('approachedWeightedPoints', () => {
+  // A trail moving from USER 100m north -- above the 50m default
+  // displacement threshold, so its trend (due north) is trusted.
+  const TRAIL_TOWARD_NORTH = [
+    { ...USER, timestampMs: 0 },
+    { ...offsetMeters(USER, 100, 0), timestampMs: 15000 },
+  ];
+
+  test('keeps a weighted point the trail is trending toward', () => {
+    const point = makeWeightedPoint(ROUTINE_POINT, 0.8); // 5km due north of USER
+
+    const result = approachedWeightedPoints(TRAIL_TOWARD_NORTH, [point]);
+
+    expect(result).toEqual([point]);
+  });
+
+  test('excludes a weighted point the trail is trending away from', () => {
+    const trailTowardSouth = [
+      { ...USER, timestampMs: 0 },
+      { ...offsetMeters(USER, -100, 0), timestampMs: 15000 },
+    ];
+    const point = makeWeightedPoint(ROUTINE_POINT, 0.8); // due north -- opposite direction
+
+    expect(approachedWeightedPoints(trailTowardSouth, [point])).toHaveLength(0);
+  });
+
+  test('passes every point through unfiltered when the trail has fewer than 2 samples', () => {
+    const point = makeWeightedPoint(offsetMeters(USER, 0, 5000), 0.8); // due east -- would fail a north trend
+
+    const result = approachedWeightedPoints([{ ...USER, timestampMs: 0 }], [point]);
+
+    expect(result).toEqual([point]);
+  });
+
+  test('passes every point through unfiltered when trail displacement is below the reliability threshold', () => {
+    // Only 10m apart -- below the 50m default, even though the direction
+    // implied (north) doesn't match this point's actual direction (east).
+    const barelyMovedTrail = [
+      { ...USER, timestampMs: 0 },
+      { ...offsetMeters(USER, 10, 0), timestampMs: 15000 },
+    ];
+    const point = makeWeightedPoint(offsetMeters(USER, 0, 5000), 0.8); // due east
+
+    const result = approachedWeightedPoints(barelyMovedTrail, [point]);
+
+    expect(result).toEqual([point]);
+  });
+
+  test('keeps only the points consistent with the trend, given points in different directions', () => {
+    const northPoint = makeWeightedPoint(ROUTINE_POINT, 0.8); // due north
+    const eastPoint = makeWeightedPoint(offsetMeters(USER, 0, 5000), 0.6); // due east
+
+    const result = approachedWeightedPoints(TRAIL_TOWARD_NORTH, [northPoint, eastPoint]);
+
+    expect(result).toEqual([northPoint]);
+  });
+
+  test('a custom approachConeDeg widens or narrows what counts as consistent', () => {
+    // ~30 degrees east of the trail's north trend -- inside a wide cone,
+    // outside the default 45-degree one.
+    const diagonalPoint = makeWeightedPoint(offsetMeters(USER, 5000, 2887), 0.8);
+
+    expect(approachedWeightedPoints(TRAIL_TOWARD_NORTH, [diagonalPoint])).toHaveLength(0);
+    expect(
+      approachedWeightedPoints(TRAIL_TOWARD_NORTH, [diagonalPoint], { approachConeDeg: 90 })
+    ).toEqual([diagonalPoint]);
   });
 });
