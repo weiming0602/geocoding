@@ -375,6 +375,11 @@ export default function RoadAlerts() {
     window.speechSynthesis?.cancel();
     setWatching(false);
 
+    // Discard the trail and any in-progress route match the moment
+    // driving stops -- see docs/ROAD_ALERTS_DESIGN.md's privacy model.
+    trailRef.current = [];
+    setOnRouteIds(new Set());
+
     // The last known fix is this trip's destination -- reported with
     // isEndpoint so it's never recorded as a weighted point, same
     // reasoning as the origin ping in onPosition below.

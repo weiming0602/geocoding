@@ -437,6 +437,11 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
     Speech.stop();
     setWatching(false);
 
+    // Discard the trail and any in-progress route match the moment
+    // driving stops -- see docs/ROAD_ALERTS_DESIGN.md's privacy model.
+    trailRef.current = [];
+    setOnRouteIds(new Set());
+
     // The last known fix is this trip's destination -- reported with
     // isEndpoint so it's never recorded as a weighted point, same
     // reasoning as the origin ping in onPosition below.
@@ -543,6 +548,7 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
       }
       isFirstPositionOfSessionRef.current = true;
       trailRef.current = [];
+      setOnRouteIds(new Set());
       const subscription = await Location.watchPositionAsync(
         { accuracy: Location.Accuracy.High, timeInterval: 5000, distanceInterval: 25 },
         onPosition

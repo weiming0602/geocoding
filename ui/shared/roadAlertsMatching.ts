@@ -173,7 +173,8 @@ export function approachedWeightedPoints(
   weightedPoints: WeightedPoint[],
   options: ApproachOptions = {}
 ): WeightedPoint[] {
-  const { minTrailDisplacementMeters, approachConeDeg } = { ...DEFAULT_APPROACH_OPTIONS, ...options };
+  const minTrailDisplacementMeters = options.minTrailDisplacementMeters ?? DEFAULT_APPROACH_OPTIONS.minTrailDisplacementMeters;
+  const approachConeDeg = options.approachConeDeg ?? DEFAULT_APPROACH_OPTIONS.approachConeDeg;
   if (trail.length < 2) return weightedPoints;
 
   const oldest = trail[0];

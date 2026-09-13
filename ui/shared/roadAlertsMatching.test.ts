@@ -248,4 +248,39 @@ describe('approachedWeightedPoints', () => {
       approachedWeightedPoints(TRAIL_TOWARD_NORTH, [diagonalPoint], { approachConeDeg: 90 })
     ).toEqual([diagonalPoint]);
   });
+
+  test('a 4-sample trail with a turn reflects the overall oldest-to-newest trend, not an average of each leg', () => {
+    // Both apps feed this a sliding window of up to 4 samples, not just 2
+    // -- this trail turns partway through: due north for the first two
+    // samples (trail[0] -> trail[1]), then due east for the last two
+    // (trail[1] -> trail[2], trail[2] -> trail[3]). The implementation
+    // only ever reads trail[0] and trail[trail.length - 1], so the trend
+    // here is the straight-line bearing from USER to a point 200m north +
+    // 200m east of it -- exactly 45 degrees (northeast) -- not an average
+    // of the individual legs' bearings (0, 90, 90 degrees) and not just
+    // the most recent leg's bearing (90 degrees, due east).
+    const turningTrail = [
+      { ...USER, timestampMs: 0 },
+      { ...offsetMeters(USER, 200, 0), timestampMs: 15000 },
+      { ...offsetMeters(USER, 200, 100), timestampMs: 30000 },
+      { ...offsetMeters(USER, 200, 200), timestampMs: 45000 },
+    ];
+    const newest = offsetMeters(USER, 200, 200);
+
+    // 5km out along the actual 45-degree trend (3536m north + 3536m east,
+    // since 5000 * cos(45deg) = 5000 * sin(45deg) = 3535.5) -- 0 degrees
+    // off the trend, well inside the default 45-degree cone (22.5 degrees
+    // either side).
+    const onTrend = makeWeightedPoint(offsetMeters(newest, 3536, 3536), 0.8);
+    // Due east of the newest fix (90 degrees) -- the most recent leg's
+    // own direction, and exactly what the driver was just heading, but 45
+    // degrees off the overall 45-degree trend, outside the cone's
+    // 22.5-degree half-width. Excluding this proves the function used the
+    // overall trend, not the last leg alone.
+    const lastLegDirection = makeWeightedPoint(offsetMeters(newest, 0, 5000), 0.6);
+
+    const result = approachedWeightedPoints(turningTrail, [onTrend, lastLegDirection]);
+
+    expect(result).toEqual([onTrend]);
+  });
 });
