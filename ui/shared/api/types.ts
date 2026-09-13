@@ -341,6 +341,31 @@ export type WeightedPointsResponse = {
   weightedPoints: WeightedPointRecord[];
 };
 
+// GET /road-alerts/weighted-points/candidates -- debug/test-tooling
+// counterpart to WeightedPointsResponse above, for the Road Alert Test
+// page only. Unlike that route, this one returns *every* tracked point
+// (qualified or not) with the diagnostic fields that explain why --
+// windowPingCount vs. tier.minPingsToQualify, qualifiedAt, etc. Never
+// used by the real driving pages. See geocoding-server/src/
+// weightedPoints.js's getAllWeightedPointCandidates.
+export type WeightedPointCandidate = {
+  latitude: number;
+  longitude: number;
+  weight: number;
+  tlid: string | null;
+  qualified: boolean;
+  qualifiedAt: string | null;
+  windowStartedAt: string;
+  windowPingCount: number;
+  lastPingedAt: string;
+};
+
+export type WeightedPointCandidatesResponse = {
+  routineDensity: RoadAlertsRoutineDensity;
+  tier: { qualifyingWindowDays: number; minPingsToQualify: number };
+  points: WeightedPointCandidate[];
+};
+
 // `point` is null when the ping was a trip endpoint (isEndpoint: true)
 // -- deliberately never recorded, see weightedPoints.js's own doc
 // comment for why.

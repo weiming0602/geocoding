@@ -153,6 +153,12 @@ async function recordWeightedPointPing(pool, email, { latitude, longitude, tlid,
   return rows[0];
 }
 
+/** A row's weight decayed to its current (not last-write-time) value -- shared by getWeightedPoints and getAllWeightedPointCandidates below. */
+function decayedWeightAt(weight, lastPingedAt) {
+  const daysSincePing = (Date.now() - new Date(lastPingedAt).getTime()) / 86400000;
+  return weight * DAILY_DECAY ** Math.max(daysSincePing, 0);
+}
+
 /**
  * Returns an account's *qualified* weighted points only (see
  * MIN_PINGS_TO_QUALIFY) -- a point that hasn't earned qualified_at yet
@@ -171,16 +177,46 @@ async function getWeightedPoints(pool, email) {
   );
 
   return rows
-    .map((row) => {
-      const daysSincePing = (Date.now() - new Date(row.last_pinged_at).getTime()) / 86400000;
-      return {
-        latitude: row.latitude,
-        longitude: row.longitude,
-        tlid: row.tlid,
-        weight: row.weight * DAILY_DECAY ** Math.max(daysSincePing, 0),
-      };
-    })
+    .map((row) => ({
+      latitude: row.latitude,
+      longitude: row.longitude,
+      tlid: row.tlid,
+      weight: decayedWeightAt(row.weight, row.last_pinged_at),
+    }))
     .sort((a, b) => b.weight - a.weight);
+}
+
+/**
+ * Debug/test-tooling counterpart to getWeightedPoints -- returns *every*
+ * tracked point for an account, qualified or not, with the diagnostic
+ * fields that explain *why* (window_ping_count vs. the account's own
+ * tier threshold, qualified_at, last_pinged_at). Never used by the real
+ * driving pages (see roadAlertsMatching.js/RoadAlerts.tsx, which rely on
+ * getWeightedPoints' qualified-only contract for actual alerting) --
+ * this exists for the Road Alert Test page, so a low- or no-qualified-
+ * point account is still visible enough to evaluate the qualification
+ * logic against.
+ */
+async function getAllWeightedPointCandidates(pool, email) {
+  const { rows } = await pool.query(
+    `SELECT latitude, longitude, weight, tlid, window_started_at, window_ping_count, qualified_at, last_pinged_at
+     FROM road_alerts_weighted_points WHERE email = $1`,
+    [email]
+  );
+
+  return rows
+    .map((row) => ({
+      latitude: row.latitude,
+      longitude: row.longitude,
+      tlid: row.tlid,
+      weight: decayedWeightAt(row.weight, row.last_pinged_at),
+      qualified: row.qualified_at !== null,
+      qualifiedAt: row.qualified_at,
+      windowStartedAt: row.window_started_at,
+      windowPingCount: row.window_ping_count,
+      lastPingedAt: row.last_pinged_at,
+    }))
+    .sort((a, b) => Number(b.qualified) - Number(a.qualified) || b.weight - a.weight);
 }
 
 /**
@@ -205,8 +241,10 @@ module.exports = {
   ensureWeightedPointsTable,
   recordWeightedPointPing,
   getWeightedPoints,
+  getAllWeightedPointCandidates,
   deleteStalePoints,
   MATCH_RADIUS_METERS,
   ROUTINE_DENSITY_TIERS,
   DEFAULT_ROUTINE_DENSITY,
+  resolveRoutineDensityTier,
 };
