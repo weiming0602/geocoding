@@ -37,11 +37,20 @@ function isInNe511Footprint(latitude, longitude) {
   );
 }
 
-// Multiple mobile clients can poll this endpoint every ~15s each; caching
-// each state's raw incident list this long avoids re-fetching the same
-// upstream data for every request, same spirit as placesSearch.js's
+// Both apps' Road Alerts pages poll this endpoint on the same ~15s
+// cadence (POLL_MIN_INTERVAL_MS in RoadAlerts.tsx/RoadAlertsForm.tsx) --
+// a TTL equal to that cadence means a single active driver's own cache
+// entry has typically just expired by the time their next poll arrives,
+// so it does almost nothing for the case that matters most (one person,
+// actually driving, waiting on a fast hazard check). Set well past that
+// cadence so most polls hit a warm cache instead of live-fetching New
+// England 511's own no-uptime-guarantee XML endpoint (NE511_TIMEOUT_MS
+// below shows a single fetch can legitimately take up to 10s) on nearly
+// every single check. Hazard data doesn't need second-by-second
+// freshness -- a ~1 minute lag trades a little staleness for
+// consistently fast responses. Same spirit as placesSearch.js's
 // Nominatim throttling but for repeat reads rather than a rate limit.
-const NETWORK_CACHE_TTL_MS = 15000;
+const NETWORK_CACHE_TTL_MS = 60000;
 
 const networkCache = new Map(); // network -> { at, incidents }
 
