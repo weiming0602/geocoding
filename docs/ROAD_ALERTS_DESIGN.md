@@ -77,6 +77,16 @@ routinely, not where they've been, when, or where they started/ended.**
   specific user, since it's the same query shape regardless of who's
   asking.
 
+**Addendum, 2026-09-12:** the route-approach matching feature (see
+`docs/superpowers/specs/2026-09-12-road-alerts-route-approach-design.md`)
+keeps a short (~60 second) trail of recent position fixes, used to infer
+which routine destination a driver's current movement looks like it's
+heading toward. This does not revisit the "no raw trip trace stored"
+decision above -- the trail exists only in the browser/app's own memory
+for the current session, is never written to a database or sent to the
+server as its own request, and is discarded the moment driving stops or
+the page/screen closes.
+
 ### User-facing setting: how much routine is remembered
 
 Exposed as a single choice, not a raw "weight threshold" (users don't

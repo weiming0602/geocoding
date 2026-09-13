@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'vitest';
 import type { Coordinates, RoadSignal } from './api/types';
 import {
+  approachedWeightedPoints,
   crossTrackDistanceMeters,
   alongTrackDistanceMeters,
   findAlertsForWeightedPoints,
@@ -177,5 +178,109 @@ describe('findAlertsForWeightedPoints', () => {
 
     expect(alerts.map((a) => a.signal.id)).toEqual([relevantHazard.id]);
     expect(alerts[0].signal.severity).toBe('serious');
+  });
+});
+
+describe('approachedWeightedPoints', () => {
+  // A trail moving from USER 100m north -- above the 50m default
+  // displacement threshold, so its trend (due north) is trusted.
+  const TRAIL_TOWARD_NORTH = [
+    { ...USER, timestampMs: 0 },
+    { ...offsetMeters(USER, 100, 0), timestampMs: 15000 },
+  ];
+
+  test('keeps a weighted point the trail is trending toward', () => {
+    const point = makeWeightedPoint(ROUTINE_POINT, 0.8); // 5km due north of USER
+
+    const result = approachedWeightedPoints(TRAIL_TOWARD_NORTH, [point]);
+
+    expect(result).toEqual([point]);
+  });
+
+  test('excludes a weighted point the trail is trending away from', () => {
+    const trailTowardSouth = [
+      { ...USER, timestampMs: 0 },
+      { ...offsetMeters(USER, -100, 0), timestampMs: 15000 },
+    ];
+    const point = makeWeightedPoint(ROUTINE_POINT, 0.8); // due north -- opposite direction
+
+    expect(approachedWeightedPoints(trailTowardSouth, [point])).toHaveLength(0);
+  });
+
+  test('passes every point through unfiltered when the trail has fewer than 2 samples', () => {
+    const point = makeWeightedPoint(offsetMeters(USER, 0, 5000), 0.8); // due east -- would fail a north trend
+
+    const result = approachedWeightedPoints([{ ...USER, timestampMs: 0 }], [point]);
+
+    expect(result).toEqual([point]);
+  });
+
+  test('passes every point through unfiltered when trail displacement is below the reliability threshold', () => {
+    // Only 10m apart -- below the 50m default, even though the direction
+    // implied (north) doesn't match this point's actual direction (east).
+    const barelyMovedTrail = [
+      { ...USER, timestampMs: 0 },
+      { ...offsetMeters(USER, 10, 0), timestampMs: 15000 },
+    ];
+    const point = makeWeightedPoint(offsetMeters(USER, 0, 5000), 0.8); // due east
+
+    const result = approachedWeightedPoints(barelyMovedTrail, [point]);
+
+    expect(result).toEqual([point]);
+  });
+
+  test('keeps only the points consistent with the trend, given points in different directions', () => {
+    const northPoint = makeWeightedPoint(ROUTINE_POINT, 0.8); // due north
+    const eastPoint = makeWeightedPoint(offsetMeters(USER, 0, 5000), 0.6); // due east
+
+    const result = approachedWeightedPoints(TRAIL_TOWARD_NORTH, [northPoint, eastPoint]);
+
+    expect(result).toEqual([northPoint]);
+  });
+
+  test('a custom approachConeDeg widens or narrows what counts as consistent', () => {
+    // ~30 degrees east of the trail's north trend -- inside a wide cone,
+    // outside the default 45-degree one.
+    const diagonalPoint = makeWeightedPoint(offsetMeters(USER, 5000, 2887), 0.8);
+
+    expect(approachedWeightedPoints(TRAIL_TOWARD_NORTH, [diagonalPoint])).toHaveLength(0);
+    expect(
+      approachedWeightedPoints(TRAIL_TOWARD_NORTH, [diagonalPoint], { approachConeDeg: 90 })
+    ).toEqual([diagonalPoint]);
+  });
+
+  test('a 4-sample trail with a turn reflects the overall oldest-to-newest trend, not an average of each leg', () => {
+    // Both apps feed this a sliding window of up to 4 samples, not just 2
+    // -- this trail turns partway through: due north for the first two
+    // samples (trail[0] -> trail[1]), then due east for the last two
+    // (trail[1] -> trail[2], trail[2] -> trail[3]). The implementation
+    // only ever reads trail[0] and trail[trail.length - 1], so the trend
+    // here is the straight-line bearing from USER to a point 200m north +
+    // 200m east of it -- exactly 45 degrees (northeast) -- not an average
+    // of the individual legs' bearings (0, 90, 90 degrees) and not just
+    // the most recent leg's bearing (90 degrees, due east).
+    const turningTrail = [
+      { ...USER, timestampMs: 0 },
+      { ...offsetMeters(USER, 200, 0), timestampMs: 15000 },
+      { ...offsetMeters(USER, 200, 100), timestampMs: 30000 },
+      { ...offsetMeters(USER, 200, 200), timestampMs: 45000 },
+    ];
+    const newest = offsetMeters(USER, 200, 200);
+
+    // 5km out along the actual 45-degree trend (3536m north + 3536m east,
+    // since 5000 * cos(45deg) = 5000 * sin(45deg) = 3535.5) -- 0 degrees
+    // off the trend, well inside the default 45-degree cone (22.5 degrees
+    // either side).
+    const onTrend = makeWeightedPoint(offsetMeters(newest, 3536, 3536), 0.8);
+    // Due east of the newest fix (90 degrees) -- the most recent leg's
+    // own direction, and exactly what the driver was just heading, but 45
+    // degrees off the overall 45-degree trend, outside the cone's
+    // 22.5-degree half-width. Excluding this proves the function used the
+    // overall trend, not the last leg alone.
+    const lastLegDirection = makeWeightedPoint(offsetMeters(newest, 0, 5000), 0.6);
+
+    const result = approachedWeightedPoints(turningTrail, [onTrend, lastLegDirection]);
+
+    expect(result).toEqual([onTrend]);
   });
 });

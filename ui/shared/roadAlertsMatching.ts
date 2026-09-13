@@ -1,5 +1,6 @@
 import type { Coordinates, RoadSignal } from './api/types';
 import { EARTH_RADIUS_METERS, bearingDegrees, haversineDistanceMeters, toRadians } from './geo';
+import type { TimedCoordinates } from './geo';
 
 /**
  * A street a user actually drives on a regular basis, per
@@ -139,4 +140,51 @@ export function findAlertsForWeightedPoints(
   }
 
   return [...triggeredBySignalId.values()];
+}
+
+export type ApproachOptions = {
+  /** Below this, the trail's two ends are too close for their bearing to mean anything -- ordinary GPS jitter, a stop light, a trip just starting. */
+  minTrailDisplacementMeters?: number;
+  /** Full cone width in degrees, same convention as isAhead's own coneDeg -- how far a candidate point's bearing from the trail's newest fix may differ from the trail's own trend bearing and still count as "consistent." */
+  approachConeDeg?: number;
+};
+
+export const DEFAULT_APPROACH_OPTIONS: Required<ApproachOptions> = {
+  minTrailDisplacementMeters: 50,
+  approachConeDeg: 45,
+};
+
+/**
+ * Narrows `weightedPoints` down to the ones a driver's recent movement
+ * (`trail`, oldest first) actually looks like it's heading toward --
+ * distinct from findAlertsForWeightedPoints's own geometric "is a hazard
+ * between here and there" check, which considers every weighted point
+ * regardless of whether the driver is actually trending that way.
+ *
+ * Falls back to returning every weighted point unfiltered when the trail
+ * doesn't have enough reliable signal yet (fewer than two samples, or too
+ * little displacement between the oldest and newest -- a trip just
+ * starting, or stopped at a light): this degrades to the same "check
+ * everything" behavior the caller had before this function existed,
+ * rather than silently going quiet.
+ */
+export function approachedWeightedPoints(
+  trail: TimedCoordinates[],
+  weightedPoints: WeightedPoint[],
+  options: ApproachOptions = {}
+): WeightedPoint[] {
+  const minTrailDisplacementMeters = options.minTrailDisplacementMeters ?? DEFAULT_APPROACH_OPTIONS.minTrailDisplacementMeters;
+  const approachConeDeg = options.approachConeDeg ?? DEFAULT_APPROACH_OPTIONS.approachConeDeg;
+  if (trail.length < 2) return weightedPoints;
+
+  const oldest = trail[0];
+  const newest = trail[trail.length - 1];
+  if (haversineDistanceMeters(oldest, newest) < minTrailDisplacementMeters) return weightedPoints;
+
+  const trendBearing = bearingDegrees(oldest, newest);
+  return weightedPoints.filter((point) => {
+    const bearingToPoint = bearingDegrees(newest, point);
+    const diff = Math.abs(((bearingToPoint - trendBearing + 540) % 360) - 180);
+    return diff <= approachConeDeg / 2;
+  });
 }
