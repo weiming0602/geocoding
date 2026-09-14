@@ -140,6 +140,12 @@ export const MILESTONES: Milestone[] = [
       'As long as the street, city, and state are given, an exact address can now be matched even without a ZIP code.',
   },
   {
+    date: 'Sep 14, 2026',
+    title: 'Spelled-out street suffixes now match',
+    description:
+      'Typing a street name in full -- "Circle" instead of "Cir", "Trail" instead of "Trl" -- now matches the same address as the abbreviated form.',
+  },
+  {
     date: 'Coming soon',
     title: 'New Hampshire accuracy upgrade',
     description: 'The same real per-house location data, for New Hampshire.',
