@@ -318,13 +318,18 @@ a.card:hover, button.card:hover { border-color: var(--color-accent); transform: 
 }
 .nav-item:hover:not(.active) { background: color-mix(in srgb, var(--color-text) 6%, transparent); }
 .nav-item-tile {
-  width: 32px; height: 32px; border-radius: 7px; flex: none;
+  /* Sized to exactly match the <Icon size={20}> it wraps (Layout.tsx) --
+     no bigger, since there's no background box to fill anymore, just the
+     glyph itself (icons.tsx draws every icon with stroke/fill:
+     currentColor, so this color is what the icon actually renders in).
+     A tile bigger than its icon here only pads out the gap to the label
+     text next to it, which is exactly the "gap looks too big" complaint
+     this was sized to fix -- keep the two in sync if either changes. */
+  width: 20px; height: 20px; border-radius: 7px; flex: none;
   display: flex; align-items: center; justify-content: center;
-  /* No tile/box behind the primary nav's icons -- just the glyph itself
-     (icons.tsx draws every icon with stroke/fill: currentColor, so this
-     color is what the icon actually renders in). Black by default; the
-     active tab's own icon is gold (see .nav-item.active .nav-item-tile
-     below), on top of its pill's own background/bold-text/hop-animation. */
+  /* Black by default; the active tab's own icon is gold (see
+     .nav-item.active .nav-item-tile below), on top of its pill's own
+     background/bold-text/hop-animation. */
   background: transparent; color: var(--color-text);
 }
 .nav-item.active { font-weight: 600; background: var(--color-icon-active-tint); color: var(--color-icon-active-tint-text); animation: nav-item-hop 0.545s; }
