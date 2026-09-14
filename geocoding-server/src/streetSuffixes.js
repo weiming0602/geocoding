@@ -34,4 +34,28 @@ function expandStreetSuffix(streetName) {
   return [...words.slice(0, -1), expansion].join(' ');
 }
 
-module.exports = { expandStreetSuffix };
+// The reverse of SUFFIX_EXPANSIONS, keyed by the lowercased full name --
+// e.g. 'circle' -> 'Cir'. Built once at module load, not per call.
+const SUFFIX_ABBREVIATIONS = Object.fromEntries(
+  Object.entries(SUFFIX_EXPANSIONS).map(([abbr, full]) => [
+    full.toLowerCase(),
+    abbr.charAt(0).toUpperCase() + abbr.slice(1),
+  ])
+);
+
+/** Abbreviates a trailing spelled-out street suffix (e.g. "Pequawket
+ * Trail" -> "Pequawket Trl") -- the reverse of expandStreetSuffix, needed
+ * because TIGER's own street_names.fullname always stores the
+ * abbreviated form (unlike Maine's E911 address_points, which spells it
+ * out), so a caller who types the suffix in full would otherwise never
+ * match it there. Returns the input unchanged if its last word isn't a
+ * known full suffix name (including when it's already abbreviated). */
+function abbreviateStreetSuffix(streetName) {
+  const words = streetName.split(' ');
+  const last = words[words.length - 1].replace(/\.$/, '').toLowerCase();
+  const abbreviation = SUFFIX_ABBREVIATIONS[last];
+  if (!abbreviation) return streetName;
+  return [...words.slice(0, -1), abbreviation].join(' ');
+}
+
+module.exports = { expandStreetSuffix, abbreviateStreetSuffix };
