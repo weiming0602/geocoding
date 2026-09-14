@@ -177,6 +177,21 @@ test('a name with no street_names entry at all does not match', async () => {
   await db.close();
 });
 
+test('a spelled-out suffix matches the same street as its TIGER-style abbreviation', async () => {
+  const db = await makeDb();
+  // street_names stores "Pequawket Trl" (TIGER's own abbreviated form,
+  // see helpers.js) -- a caller typing "Trail" in full must still match
+  // it here, the same way matchAddressPoint's own address_points path
+  // already tries both directions. No address_points row exists for
+  // this street/number, so this only exercises the interpolation path.
+  const byAbbreviation = await geocode(db, '997 Pequawket Trl, Standish, ME 04091');
+  const bySpelledOut = await geocode(db, '997 Pequawket Trail, Standish, ME 04091');
+
+  assert.equal(bySpelledOut.match.id, byAbbreviation.match.id);
+  assert.deepEqual(bySpelledOut.coordinates, byAbbreviation.coordinates);
+  await db.close();
+});
+
 test('an exact address_points match is preferred over interpolation', async () => {
   const db = await makeDb();
   const result = await geocode(db, '42 Test Point Lane, Testville, ME 00000');

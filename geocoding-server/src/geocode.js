@@ -1,6 +1,6 @@
 const { parseAddress } = require('./parseAddress');
 const { parseLinestring, interpolateAlongLine } = require('./interpolate');
-const { expandStreetSuffix } = require('./streetSuffixes');
+const { expandStreetSuffix, abbreviateStreetSuffix } = require('./streetSuffixes');
 const { NotFoundError, OutOfRangeError } = require('./errors');
 
 /**
@@ -14,14 +14,24 @@ const { NotFoundError, OutOfRangeError } = require('./errors');
  * state name. A single named street is typically split into many `edges`
  * segments, each covering a different address sub-range, so callers must
  * pick the segment whose range actually contains the target number.
+ *
+ * Also tries `streetName` with its suffix abbreviated (e.g. "Pequawket
+ * Trail" -> "Pequawket Trl") alongside the name as given: TIGER's own
+ * street_names.fullname always stores the abbreviated form, unlike Maine's
+ * E911 address_points (which matchAddressPoint already handles both
+ * directions for), so a caller who spells the suffix out in full would
+ * otherwise never match here at all. abbreviateStreetSuffix is a no-op
+ * when the input isn't a recognized full suffix name (including when
+ * it's already abbreviated), so trying both is always safe.
  */
 async function candidateStreets(db, streetName, zip, zipColumn, state) {
   if (zipColumn !== 'zipl' && zipColumn !== 'zipr') {
     throw new Error(`zipColumn must be 'zipl' or 'zipr', got ${zipColumn}`);
   }
   const stateColumn = state && state.length === 2 ? 'state_abbr' : 'state';
-  const stateClause = state ? `AND UPPER(street_names.${stateColumn}) = UPPER($3)` : '';
+  const stateClause = state ? `AND UPPER(street_names.${stateColumn}) = UPPER($4)` : '';
   const stateParam = state ? [state] : [];
+  const abbreviated = abbreviateStreetSuffix(streetName);
 
   // Driving the query from street_names (filtered by its own
   // UPPER(fullname)+zip+state composite index) rather than from streets
@@ -35,21 +45,19 @@ async function candidateStreets(db, streetName, zip, zipColumn, state) {
   const buildQuery = (nameClause) => `
     SELECT DISTINCT streets.* FROM street_names
     JOIN streets ON streets.tlid = street_names.tlid
-    WHERE ${nameClause} AND street_names.${zipColumn} = $2 ${stateClause}
+    WHERE ${nameClause} AND street_names.${zipColumn} = $3 ${stateClause}
   `;
 
-  const exact = await db.query(buildQuery('UPPER(street_names.fullname) = UPPER($1)'), [
-    streetName,
-    zip,
-    ...stateParam,
-  ]);
+  const exact = await db.query(
+    buildQuery('UPPER(street_names.fullname) IN (UPPER($1), UPPER($2))'),
+    [streetName, abbreviated, zip, ...stateParam]
+  );
   if (exact.rows.length > 0) return exact.rows;
 
-  const fallback = await db.query(buildQuery('UPPER(street_names.fullname) LIKE UPPER($1)'), [
-    `%${streetName}%`,
-    zip,
-    ...stateParam,
-  ]);
+  const fallback = await db.query(
+    buildQuery('(UPPER(street_names.fullname) LIKE UPPER($1) OR UPPER(street_names.fullname) LIKE UPPER($2))'),
+    [`%${streetName}%`, `%${abbreviated}%`, zip, ...stateParam]
+  );
   return fallback.rows;
 }
 
