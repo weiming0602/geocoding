@@ -119,7 +119,7 @@ export default function Layout({ children }: { children: ReactNode }) {
               }}
             >
               <span className="nav-item-tile">
-                <Icon name={entry.icon} size={12} />
+                <Icon name={entry.icon} size={20} />
               </span>
               {entry.label}
             </NavLink>
