@@ -146,6 +146,12 @@ export const MILESTONES: Milestone[] = [
       'Typing a street name in full -- "Circle" instead of "Cir", "Trail" instead of "Trl" -- now matches the same address as the abbreviated form.',
   },
   {
+    date: 'Sep 14, 2026',
+    title: 'Choose how much routine driving Road Alerts remembers',
+    description:
+      "A new setting lets you control how much of your driving pattern gets remembered -- from bare minimum to most complete -- so you can balance privacy against catching more relevant alerts.",
+  },
+  {
     date: 'Coming soon',
     title: 'New Hampshire accuracy upgrade',
     description: 'The same real per-house location data, for New Hampshire.',
