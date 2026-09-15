@@ -33,6 +33,7 @@ import PageHeader from '../components/PageHeader';
 import RoadAlertsRegistration from '../components/RoadAlertsRegistration';
 import RoadAlertsTabs from '../components/RoadAlertsTabs';
 import RoadRerouteMap, { ROUTE_COLORS } from '../components/RoadRerouteMap';
+import { playAlertChime, requestNotificationPermission, showAlertNotification } from '../roadAlertNotifications';
 import { clearStoredAccount, getStoredAccount, type StoredRoadAlertsAccount } from '../roadAlertsStorage';
 import { isSpeechRecognitionAvailable, listenOnce, matchesSaveCommand } from '../webSpeechRecognition';
 
@@ -142,6 +143,15 @@ function freshnessLabel(signal: RoadSignal): string {
 // is ever heard.
 function shouldAutoSpeak(severity: RoadSignalSeverity): boolean {
   return severity !== 'fun_to_know';
+}
+
+// Plain speech alone is easy to miss (muted, a background tab, not
+// paying attention) -- the chime + browser-notification treatment
+// (roadAlertNotifications.ts) is reserved for the tiers that actually
+// matter enough to interrupt someone over. `proximity` still auto-speaks
+// (shouldAutoSpeak above) but doesn't get the stronger treatment.
+function shouldStronglyAlert(severity: RoadSignalSeverity): boolean {
+  return severity === 'serious' || severity === 'need_to_know';
 }
 
 export default function RoadAlerts() {
@@ -462,6 +472,18 @@ export default function RoadAlerts() {
           const ahead = onRouteIds.has(signal.id) || isAhead(heading, bearing);
           spokenIdsRef.current.add(signal.id);
           if (ahead && shouldAutoSpeak(signal.severity)) {
+            if (shouldStronglyAlert(signal.severity)) {
+              playAlertChime();
+              // Only worth a real OS popup when the driver isn't already
+              // looking at this tab -- otherwise the fresh list entry and
+              // the speech about to play are already enough.
+              if (document.hidden) {
+                showAlertNotification(
+                  `${SEVERITY_LABELS[signal.severity]} road alert`,
+                  signal.speech.brief
+                );
+              }
+            }
             speakSignal(signal);
           }
         }
@@ -555,6 +577,11 @@ export default function RoadAlerts() {
       setError('This browser does not support geolocation.');
       return;
     }
+    // Ask once, here, rather than lazily the first time an alert would
+    // want to show one -- prompting mid-alert would be a jarring first
+    // ask. A no-op if already granted/denied, or if watching restarts
+    // later in the same page session.
+    requestNotificationPermission();
     isFirstPositionOfSessionRef.current = true;
     hasDetectedMovementRef.current = false;
     setHasDetectedMovement(false);
