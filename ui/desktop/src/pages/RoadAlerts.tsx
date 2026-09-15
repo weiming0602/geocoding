@@ -18,6 +18,7 @@ import {
 } from '../../../shared/api/client';
 import type {
   CrossStreetResponse,
+  RoadAlertsRoutineDensity,
   RoadAlertsTopicResponse,
   RoadRerouteResponse,
   RoadSignal,
@@ -41,6 +42,29 @@ const DETAIL_OPTIONS: { label: string; value: DetailLevel }[] = [
   { label: 'Brief', value: 'brief' },
   { label: 'Average', value: 'average' },
   { label: 'Deep', value: 'deep' },
+];
+
+// Copy verbatim from docs/ROAD_ALERTS_DESIGN.md's "User-facing setting:
+// how much routine is remembered" table -- drafted alongside the design,
+// reused here rather than rewritten.
+const ROUTINE_DENSITY_OPTIONS: { label: string; value: RoadAlertsRoutineDensity; description: string }[] = [
+  {
+    label: 'Minimal',
+    value: 'minimal',
+    description:
+      'Only streets driven almost every time are remembered. Fewest streets stored, strongest privacy -- may miss alerts on routes driven less often.',
+  },
+  {
+    label: 'Balanced',
+    value: 'balanced',
+    description: 'Streets driven regularly, not just constantly.',
+  },
+  {
+    label: 'Most complete',
+    value: 'most_complete',
+    description:
+      'Includes streets driven only occasionally. Most complete alert coverage, at the cost of remembering more of your driving habits.',
+  },
 ];
 
 const RADIUS_METERS = 10000;
@@ -144,6 +168,8 @@ export default function RoadAlerts() {
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [digestOptIn, setDigestOptIn] = useState(false);
   const [digestOptInSaving, setDigestOptInSaving] = useState(false);
+  const [routineDensity, setRoutineDensity] = useState<RoadAlertsRoutineDensity>('balanced');
+  const [routineDensitySaving, setRoutineDensitySaving] = useState(false);
   // null = fetched, not set yet; undefined = not fetched yet.
   const [username, setUsername] = useState<string | null | undefined>(undefined);
   const [usernameDraft, setUsernameDraft] = useState('');
@@ -315,15 +341,22 @@ export default function RoadAlerts() {
   useEffect(() => {
     if (!account) {
       setDigestOptIn(false);
+      setRoutineDensity('balanced');
       return;
     }
     let cancelled = false;
     (async () => {
       try {
         const response = await getRoadAlertsPreferences({ email: account.email, serviceKey: account.serviceKey });
-        if (!cancelled) setDigestOptIn(response.digestOptIn);
+        if (!cancelled) {
+          setDigestOptIn(response.digestOptIn);
+          setRoutineDensity(response.routineDensity);
+        }
       } catch {
-        if (!cancelled) setDigestOptIn(false);
+        if (!cancelled) {
+          setDigestOptIn(false);
+          setRoutineDensity('balanced');
+        }
       }
     })();
     return () => {
@@ -641,6 +674,27 @@ export default function RoadAlerts() {
       setDigestOptInSaving(false);
     }
   }, [digestOptIn, digestOptInSaving]);
+
+  const handleChangeRoutineDensity = useCallback(
+    async (next: RoadAlertsRoutineDensity) => {
+      const current = accountRef.current;
+      if (!current || routineDensitySaving || next === routineDensity) return;
+      setRoutineDensitySaving(true);
+      try {
+        const response = await updateRoadAlertsPreferences({
+          email: current.email,
+          serviceKey: current.serviceKey,
+          routineDensity: next,
+        });
+        setRoutineDensity(response.routineDensity);
+      } catch {
+        // Leave the setting at its last-known-good value on failure.
+      } finally {
+        setRoutineDensitySaving(false);
+      }
+    },
+    [routineDensity, routineDensitySaving]
+  );
 
   const handleSaveUsername = useCallback(async () => {
     const current = accountRef.current;
@@ -972,6 +1026,31 @@ export default function RoadAlerts() {
         >
           {digestOptInSaving ? 'Saving…' : digestOptIn ? 'Daily email digest: On' : 'Daily email digest: Off'}
         </button>
+
+        <div className="hr" />
+        <p className="card-body" style={{ margin: '0 0 var(--space-2)' }}>
+          How much of your routine driving Road Alerts remembers, to catch relevant hazards on
+          routes you actually drive.
+        </p>
+        <div className="seg" style={{ width: '100%', marginBottom: 'var(--space-2)' }}>
+          {ROUTINE_DENSITY_OPTIONS.map((opt) => (
+            <label key={opt.value} className="seg-opt" style={{ flex: 1, justifyContent: 'center' }}>
+              <input
+                type="radio"
+                name="routineDensity"
+                checked={routineDensity === opt.value}
+                onChange={() => handleChangeRoutineDensity(opt.value)}
+                disabled={routineDensitySaving}
+              />
+              {opt.label}
+            </label>
+          ))}
+        </div>
+        <p className="card-meta" style={{ margin: 0 }}>
+          {routineDensitySaving
+            ? 'Saving…'
+            : ROUTINE_DENSITY_OPTIONS.find((opt) => opt.value === routineDensity)?.description}
+        </p>
 
         {username ? (
           <p className="card-body" style={{ margin: 'var(--space-3) 0 0' }}>
