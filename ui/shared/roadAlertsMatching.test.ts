@@ -6,6 +6,7 @@ import {
   alongTrackDistanceMeters,
   findAlertsForWeightedPoints,
   hazardBetweenUserAndPoint,
+  shouldStronglyAlert,
   type WeightedPoint,
 } from './roadAlertsMatching';
 
@@ -68,6 +69,15 @@ function makeWeightedPoint(coords: Coordinates, weight: number, overrides: Parti
 // A routine street 5km due north of the user -- e.g. the road toward
 // somewhere they drive every day.
 const ROUTINE_POINT = offsetMeters(USER, 5000, 0);
+
+describe('shouldStronglyAlert', () => {
+  test('is true only for serious and need_to_know', () => {
+    expect(shouldStronglyAlert('serious')).toBe(true);
+    expect(shouldStronglyAlert('need_to_know')).toBe(true);
+    expect(shouldStronglyAlert('proximity')).toBe(false);
+    expect(shouldStronglyAlert('fun_to_know')).toBe(false);
+  });
+});
 
 describe('crossTrackDistanceMeters / alongTrackDistanceMeters', () => {
   test('a target on the straight path has ~zero cross-track and along-track equal to its distance from the user', () => {

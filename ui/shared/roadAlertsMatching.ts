@@ -1,4 +1,4 @@
-import type { Coordinates, RoadSignal } from './api/types';
+import type { Coordinates, RoadSignal, RoadSignalSeverity } from './api/types';
 import { EARTH_RADIUS_METERS, bearingDegrees, haversineDistanceMeters, toRadians } from './geo';
 import type { TimedCoordinates } from './geo';
 
@@ -36,6 +36,20 @@ export type TriggeredAlert = {
   matchedPoint: WeightedPoint;
   distanceAlongPathMeters: number;
 };
+
+/**
+ * Plain speech alone is easy to miss (muted, a background tab, not
+ * paying attention) -- the chime + browser-notification treatment is
+ * reserved for the tiers that actually matter enough to interrupt
+ * someone over. `proximity` still auto-speaks but doesn't get the
+ * stronger treatment. Moved here (was ui/desktop/src/pages/RoadAlerts.tsx
+ * only) so the server-side push-matching worker (see
+ * geocoding-server/src/roadAlertsMatching.js) uses the exact same
+ * definition as the client.
+ */
+export function shouldStronglyAlert(severity: RoadSignalSeverity): boolean {
+  return severity === 'serious' || severity === 'need_to_know';
+}
 
 /**
  * Signed angular cross-track distance of `target` from the great-circle
@@ -101,6 +115,10 @@ export function hazardBetweenUserAndPoint(
   const alongTrack = alongTrackDistanceMeters(user, point, target);
   return alongTrack >= 0 && alongTrack <= pathDistanceMeters;
 }
+
+// Mirrored (not imported -- Node has no TypeScript loader) at
+// geocoding-server/src/roadAlertsMatching.js's findAlertsForWeightedPoints.
+// Keep both in sync if this logic changes.
 
 /**
  * Cross-references live hazard signals against the user's routine

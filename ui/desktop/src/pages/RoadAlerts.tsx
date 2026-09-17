@@ -26,7 +26,12 @@ import type {
 } from '../../../shared/api/types';
 import { bearingDegrees, estimateSpeedMetersPerSecond, haversineDistanceMeters, isAhead } from '../../../shared/geo';
 import type { TimedCoordinates } from '../../../shared/geo';
-import { approachedWeightedPoints, findAlertsForWeightedPoints, type WeightedPoint } from '../../../shared/roadAlertsMatching';
+import {
+  approachedWeightedPoints,
+  findAlertsForWeightedPoints,
+  shouldStronglyAlert,
+  type WeightedPoint,
+} from '../../../shared/roadAlertsMatching';
 import { buildGoogleMapsDirectionsUrl } from '../../../shared/googleMapsDirections';
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
 import PageHeader from '../components/PageHeader';
@@ -143,15 +148,6 @@ function freshnessLabel(signal: RoadSignal): string {
 // is ever heard.
 function shouldAutoSpeak(severity: RoadSignalSeverity): boolean {
   return severity !== 'fun_to_know';
-}
-
-// Plain speech alone is easy to miss (muted, a background tab, not
-// paying attention) -- the chime + browser-notification treatment
-// (roadAlertNotifications.ts) is reserved for the tiers that actually
-// matter enough to interrupt someone over. `proximity` still auto-speaks
-// (shouldAutoSpeak above) but doesn't get the stronger treatment.
-function shouldStronglyAlert(severity: RoadSignalSeverity): boolean {
-  return severity === 'serious' || severity === 'need_to_know';
 }
 
 export default function RoadAlerts() {
