@@ -84,21 +84,21 @@ into the existing addendum silently.
 
 ### 1. PWA installability (frontend)
 
-- Add `vite-plugin-pwa` to `ui/desktop` — the standard, idiomatic way to
-  get a manifest + service worker out of a Vite project without hand-
-  rolling either. Configured in `injectManifest` mode (not
-  `generateSW`/Workbox precaching) since this app has no offline-caching
-  requirement yet — the service worker's only job is to exist and handle
-  `push`/`notificationclick` events.
-- `manifest.json`: name "Meridian", `display: "standalone"`, theme/
-  background colors matching the existing gold (`#f2a52d`) branding,
-  icons at 192×192 and 512×512 (generated from the existing logo asset).
-- `index.html` gets the iOS-specific meta tags Apple's Home Screen install
-  still keys off of independently of the manifest
-  (`apple-mobile-web-app-capable`, `apple-mobile-web-app-status-bar-style`,
-  `apple-touch-icon`).
-- A custom service worker source file (`src/sw.ts`, built by
-  `vite-plugin-pwa`'s `injectManifest` mode) with two listeners:
+**Correction from an earlier draft of this section**: this app is already
+a real installable PWA — `public/manifest.webmanifest` already exists,
+complete (`display: "standalone"`, both icon sizes, an existing
+`InstallAppBanner.tsx` prompting install), and `index.html` already
+carries every iOS-specific meta tag
+(`apple-mobile-web-app-capable`/`-status-bar-style`/`-title`,
+`apple-touch-icon`). None of that needs building. **The only missing
+piece is a service worker** — there is none anywhere in this app today.
+
+- No new dependency needed (no `vite-plugin-pwa`): Vite already serves
+  anything under `public/` verbatim at the site root (that's how
+  `manifest.webmanifest`/`robots.txt`/`sitemap.xml` are served today), so
+  a hand-written `public/sw.js` needs no build step — it's just a static
+  file, same as those.
+- `public/sw.js` with two listeners:
   - `push`: parses the payload, calls `self.registration.showNotification(title, { body })`.
   - `notificationclick`: focuses an existing client window if one is open,
     otherwise opens a new one to the Road Alerts page; closes the
