@@ -34,7 +34,7 @@
 
 **Interfaces:**
 - Consumes: nothing new.
-- Produces: `shouldStronglyAlert(severity: RoadSignalSeverity): boolean` exported from `ui/shared/roadAlertsMatching.ts`. `findAlertsForWeightedPoints(user, weightedPoints, signals, options)` and `SHOULD_STRONGLY_ALERT_SEVERITIES` (a `Set` of `'serious'`/`'need_to_know'`) exported from `geocoding-server/src/roadAlertsMatching.js`, used by Task 5.
+- Produces: `shouldStronglyAlert(severity: RoadSignalSeverity): boolean` exported from `ui/shared/roadAlertsMatching.ts`. `findAlertsForWeightedPoints(user, weightedPoints, signals, options)` and `shouldStronglyAlert(severity)` exported from `geocoding-server/src/roadAlertsMatching.js`, both consumed directly by Task 5's `runPushCheckOnce` (see its own Step 3 code, which calls `shouldStronglyAlert(alert.signal.severity)` — no separate Set type is needed or consumed anywhere in this plan).
 
 - [ ] **Step 1: Write the failing test for the moved `shouldStronglyAlert`**
 
@@ -1037,9 +1037,8 @@ git commit -m "Add push-subscribe and live-position endpoints"
 ### Task 5: Matching + push-send worker script
 
 **Files:**
-- Create: `geocoding-server/scripts/road-alerts-push-worker.js`
+- Create: `geocoding-server/scripts/road-alerts-push-worker.js` (exports its own dependency-injectable `runPushCheckOnce`, testable without a real timer — no changes to `roadAlertsPush.js` are needed, all its functions this task consumes already exist from Task 2)
 - Create: `geocoding-server/test/roadAlertsPushWorker.test.js`
-- Modify: `geocoding-server/src/roadAlertsPush.js` (export a new pure function for the worker's per-tick logic, so it's testable without a real timer)
 - Create: `ops/geocoding-road-alerts-push-worker.service`
 
 **Interfaces:**
@@ -1279,12 +1278,20 @@ async function runPushCheckOnce(pool, deps = {}) {
         body: alert.signal.speech.brief,
       });
 
+      // anySucceeded gates recordPushSent below -- ruled on during Task 5's
+      // review (an earlier draft of this step called recordPushSent
+      // unconditionally, which permanently and silently dropped a
+      // serious/need_to_know alert whenever an account had zero
+      // subscriptions yet, or every send failed with a transient
+      // non-410 error; neither case should count as "delivered").
+      let anySucceeded = false;
       for (const subscription of subscriptions) {
         try {
           await webPush.sendNotification(
             { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
             payload
           );
+          anySucceeded = true;
         } catch (err) {
           if (err.statusCode === 410) {
             await deleteSubscriptionByEndpoint(pool, subscription.endpoint);
@@ -1294,7 +1301,9 @@ async function runPushCheckOnce(pool, deps = {}) {
         }
       }
 
-      await recordPushSent(pool, position.account_id, alert.signal.id);
+      if (anySucceeded) {
+        await recordPushSent(pool, position.account_id, alert.signal.id);
+      }
     }
   }
 }
