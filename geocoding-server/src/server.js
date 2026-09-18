@@ -83,6 +83,7 @@ const {
   UpstreamError,
 } = require('./errors');
 const { isPushConfigured, getVapidPublicKey } = require('./pushKeys');
+const { ensureRoadAlertsPushTables, saveSubscription, upsertLivePosition, deleteLivePosition, clearPushSentForAccount } = require('./roadAlertsPush');
 
 // Unix socket, peer-authenticated (no password) -- the socket path must be
 // percent-encoded into the URI's host component (%2Fvar%2Frun%2Fpostgresql),
@@ -152,6 +153,7 @@ const usersDbPromise = openUsersDb(USERS_DSN).then(async (pool) => {
   await ensureTestWeightedPointsTable(pool);
   await ensureWeightedPointsTable(pool);
   await ensureTestRoadSignalsTable(pool);
+  await ensureRoadAlertsPushTables(pool);
   return pool;
 });
 
@@ -1092,6 +1094,108 @@ app.get('/road-signals/push-public-key', (req, res) => {
     return res.status(404).json({ error: 'push notifications are not configured on this server' });
   }
   res.json({ publicKey: getVapidPublicKey() });
+});
+
+// Stores a browser's Web Push subscription against its Road Alerts
+// account -- see docs/superpowers/specs/2026-09-17-road-alerts-background-push-design.md.
+// Same account-auth gate as every other Road Alerts account-scoped
+// endpoint (checkRoadAlertsAccess).
+app.post('/road-signals/push-subscribe', async (req, res) => {
+  const { email, serviceKey, subscription } = req.body || {};
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+    if (
+      !subscription ||
+      typeof subscription.endpoint !== 'string' ||
+      !subscription.keys ||
+      typeof subscription.keys.p256dh !== 'string' ||
+      typeof subscription.keys.auth !== 'string'
+    ) {
+      throw new ValidationError('subscription must include endpoint and keys.p256dh/keys.auth');
+    }
+
+    const usersDb = await usersDbPromise;
+    const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
+    await saveSubscription(usersDb, account.id, {
+      endpoint: subscription.endpoint,
+      p256dh: subscription.keys.p256dh,
+      auth: subscription.keys.auth,
+    });
+    res.json({ subscribed: true });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Ephemeral -- see the spec's Privacy model section. One row per
+// account, always overwritten, never a history table.
+app.post('/road-signals/live-position', async (req, res) => {
+  const { email, serviceKey, latitude, longitude, heading } = req.body || {};
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+    if (typeof latitude !== 'number' || Number.isNaN(latitude)) {
+      throw new ValidationError('latitude must be a number');
+    }
+    if (typeof longitude !== 'number' || Number.isNaN(longitude)) {
+      throw new ValidationError('longitude must be a number');
+    }
+
+    const usersDb = await usersDbPromise;
+    const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
+    await upsertLivePosition(usersDb, account.id, {
+      latitude,
+      longitude,
+      heading: typeof heading === 'number' && !Number.isNaN(heading) ? heading : null,
+    });
+    res.json({ updated: true });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Called on Stop -- removes the row immediately rather than waiting for
+// the worker's 10-minute staleness timeout, and clears this account's
+// push-dedup history so the same hazard can alert again on a later trip.
+app.delete('/road-signals/live-position', async (req, res) => {
+  const { email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
+    await deleteLivePosition(usersDb, account.id);
+    await clearPushSentForAccount(usersDb, account.id);
+    res.json({ deleted: true });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
 });
 
 // Emails one road alert to the account's own registered email, on
