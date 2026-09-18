@@ -82,6 +82,7 @@ const {
   UnauthorizedError,
   UpstreamError,
 } = require('./errors');
+const { isPushConfigured, getVapidPublicKey } = require('./pushKeys');
 
 // Unix socket, peer-authenticated (no password) -- the socket path must be
 // percent-encoded into the URI's host component (%2Fvar%2Frun%2Fpostgresql),
@@ -1080,6 +1081,17 @@ app.get('/road-signals/reroute', async (req, res) => {
     console.error(err);
     res.status(500).json({ error: 'internal error' });
   }
+});
+
+// Unauthenticated on purpose -- a VAPID public key is not a secret (it's
+// sent to the browser's push service on every subscribe by design), and
+// exposing it this way means the frontend doesn't need a rebuild if the
+// key is ever rotated.
+app.get('/road-signals/push-public-key', (req, res) => {
+  if (!isPushConfigured()) {
+    return res.status(404).json({ error: 'push notifications are not configured on this server' });
+  }
+  res.json({ publicKey: getVapidPublicKey() });
 });
 
 // Emails one road alert to the account's own registered email, on
