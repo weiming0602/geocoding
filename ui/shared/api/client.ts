@@ -368,6 +368,32 @@ export function markRoadAlertsNotificationsViewed(
   return postJson<RoadAlertsNotificationsViewedResponse>(baseUrl, '/road-alerts/notifications/viewed', params);
 }
 
+export function getRoadAlertsPushPublicKey(baseUrl = DEFAULT_API_BASE_URL): Promise<{ publicKey: string }> {
+  return getJson<{ publicKey: string }>(baseUrl, '/road-signals/push-public-key');
+}
+
+export function subscribeRoadAlertsPush(
+  params: { email: string; serviceKey: string; subscription: unknown },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<{ subscribed: boolean }> {
+  return postJson<{ subscribed: boolean }>(baseUrl, '/road-signals/push-subscribe', params);
+}
+
+export function postRoadAlertsLivePosition(
+  params: { email: string; serviceKey: string; latitude: number; longitude: number; heading: number | null },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<{ updated: boolean }> {
+  return postJson<{ updated: boolean }>(baseUrl, '/road-signals/live-position', params);
+}
+
+export function deleteRoadAlertsLivePosition(
+  params: { email: string; serviceKey: string },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<{ deleted: boolean }> {
+  const qs = new URLSearchParams({ email: params.email, serviceKey: params.serviceKey });
+  return deleteJson<{ deleted: boolean }>(baseUrl, `/road-signals/live-position?${qs.toString()}`);
+}
+
 // Test-only (see geocoding-server/src/testWeightedPoints.js) -- these
 // three 404 unless the server has ALLOW_TEST_WEIGHTED_POINTS set, which
 // is off by default. Never a real per-user routine store; just fake,

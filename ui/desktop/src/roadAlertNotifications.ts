@@ -62,6 +62,52 @@ export function isNotificationAvailable(): boolean {
 }
 
 /**
+ * Push requires a service worker plus the PushManager API -- false on
+ * iOS Safari unless the page is currently running in installed (Home
+ * Screen) mode, which is exactly the gate wanted here: no point asking
+ * for a push subscription from a regular browser tab, since it will
+ * simply fail. See docs/superpowers/specs/2026-09-17-road-alerts-background-push-design.md.
+ */
+export function isPushCapable(): boolean {
+  return 'serviceWorker' in navigator && 'PushManager' in window;
+}
+
+function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
+  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
+  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+  const rawData = window.atob(base64);
+  // A plain `new Uint8Array(length)` (rather than `Uint8Array.from`) is
+  // backed by a concrete ArrayBuffer, not the wider ArrayBufferLike (which
+  // also covers SharedArrayBuffer) TS infers for `.from` -- PushManager's
+  // `applicationServerKey` type requires the former.
+  const bytes = new Uint8Array(rawData.length);
+  for (let i = 0; i < rawData.length; i += 1) {
+    bytes[i] = rawData.charCodeAt(i);
+  }
+  return bytes;
+}
+
+/**
+ * Subscribes this browser to Web Push, returning the subscription object
+ * ready to POST to /road-signals/push-subscribe -- null if unsupported
+ * or the subscribe call itself fails (e.g. permission not granted),
+ * never throws, same graceful-degrade convention as the rest of this file.
+ */
+export async function subscribeToPush(publicKey: string): Promise<PushSubscriptionJSON | null> {
+  if (!isPushCapable()) return null;
+  try {
+    const registration = await navigator.serviceWorker.ready;
+    const subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlBase64ToUint8Array(publicKey),
+    });
+    return subscription.toJSON();
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Fire-and-forget -- only actually prompts the browser's permission
  * dialog the first time (Notification.permission === 'default'); a
  * previous grant or denial is left alone, never re-asked. Meant to be

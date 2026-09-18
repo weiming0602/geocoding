@@ -2,17 +2,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import {
   ApiError,
+  deleteRoadAlertsLivePosition,
   emailRoadAlert,
   getRoadAlertsCrossStreet,
   getRoadAlertsPreferences,
+  getRoadAlertsPushPublicKey,
   getRoadAlertsTopic,
   getRoadAlertsUsername,
   getRoadReroute,
   getRoadSignals,
   getWeightedPoints,
   markRoadAlertsNotificationsViewed,
+  postRoadAlertsLivePosition,
   postRoadAlertsStatement,
   postWeightedPointPing,
+  subscribeRoadAlertsPush,
   updateRoadAlertsPreferences,
   updateRoadAlertsUsername,
 } from '../../../shared/api/client';
@@ -38,7 +42,13 @@ import PageHeader from '../components/PageHeader';
 import RoadAlertsRegistration from '../components/RoadAlertsRegistration';
 import RoadAlertsTabs from '../components/RoadAlertsTabs';
 import RoadRerouteMap, { ROUTE_COLORS } from '../components/RoadRerouteMap';
-import { playAlertChime, requestNotificationPermission, showAlertNotification } from '../roadAlertNotifications';
+import {
+  isPushCapable,
+  playAlertChime,
+  requestNotificationPermission,
+  showAlertNotification,
+  subscribeToPush,
+} from '../roadAlertNotifications';
 import { clearStoredAccount, getStoredAccount, type StoredRoadAlertsAccount } from '../roadAlertsStorage';
 import { isSpeechRecognitionAvailable, listenOnce, matchesSaveCommand } from '../webSpeechRecognition';
 
@@ -419,6 +429,15 @@ export default function RoadAlerts() {
     trailRef.current = [];
     setOnRouteIds(new Set());
 
+    // Removes the ephemeral live-position row immediately rather than
+    // waiting for the worker's 10-minute staleness timeout.
+    const stoppedAccount = accountRef.current;
+    if (stoppedAccount) {
+      deleteRoadAlertsLivePosition({ email: stoppedAccount.email, serviceKey: stoppedAccount.serviceKey }).catch(() => {
+        // Best-effort -- see above.
+      });
+    }
+
     // The last known fix is this trip's destination -- reported with
     // isEndpoint so it's never recorded as a weighted point, same
     // reasoning as the origin ping in onPosition below.
@@ -440,6 +459,19 @@ export default function RoadAlerts() {
           email: current.email,
           serviceKey: current.serviceKey,
         });
+
+        // Piggybacks on the same throttled cadence fetchSignals already runs
+        // at (POLL_MIN_INTERVAL_MS) -- no separate timer needed.
+        postRoadAlertsLivePosition({
+          email: current.email,
+          serviceKey: current.serviceKey,
+          latitude,
+          longitude,
+          heading,
+        }).catch(() => {
+          // Best-effort -- a failed position update shouldn't block hazard display.
+        });
+
         setSignals(response.signals);
         setPartial(response.partial);
         setError(null);
@@ -578,6 +610,27 @@ export default function RoadAlerts() {
     // ask. A no-op if already granted/denied, or if watching restarts
     // later in the same page session.
     requestNotificationPermission();
+
+    // Best-effort, fire-and-forget -- a driver on a browser tab (not an
+    // installed PWA) simply never gets a subscription, and keeps exactly
+    // today's chime/in-tab-notification behavior. See
+    // docs/superpowers/specs/2026-09-17-road-alerts-background-push-design.md.
+    if (isPushCapable()) {
+      const current = accountRef.current;
+      if (current) {
+        getRoadAlertsPushPublicKey()
+          .then(({ publicKey }) => subscribeToPush(publicKey))
+          .then((subscription) => {
+            if (subscription) {
+              return subscribeRoadAlertsPush({ email: current.email, serviceKey: current.serviceKey, subscription });
+            }
+          })
+          .catch(() => {
+            // Best-effort -- push-public-key 404s (unconfigured server) land here too.
+          });
+      }
+    }
+
     isFirstPositionOfSessionRef.current = true;
     hasDetectedMovementRef.current = false;
     setHasDetectedMovement(false);
