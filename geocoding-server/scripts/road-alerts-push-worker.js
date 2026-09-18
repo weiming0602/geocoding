@@ -68,12 +68,14 @@ async function runPushCheckOnce(pool, deps = {}) {
         body: alert.signal.speech.brief,
       });
 
+      let anySucceeded = false;
       for (const subscription of subscriptions) {
         try {
           await webPush.sendNotification(
             { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
             payload
           );
+          anySucceeded = true;
         } catch (err) {
           if (err.statusCode === 410) {
             await deleteSubscriptionByEndpoint(pool, subscription.endpoint);
@@ -83,7 +85,13 @@ async function runPushCheckOnce(pool, deps = {}) {
         }
       }
 
-      await recordPushSent(pool, position.account_id, alert.signal.id);
+      // Only mark as sent once something was actually delivered -- zero
+      // subscriptions (never pushed at all) or every subscription failing
+      // with a transient (non-410) error must not permanently suppress a
+      // serious/need_to_know alert with no retry on the next tick.
+      if (anySucceeded) {
+        await recordPushSent(pool, position.account_id, alert.signal.id);
+      }
     }
   }
 }

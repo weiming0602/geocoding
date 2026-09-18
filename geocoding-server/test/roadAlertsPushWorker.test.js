@@ -170,3 +170,96 @@ test('runPushCheckOnce deletes a subscription on a 410 Gone response', async () 
   assert.equal(remaining.length, 0);
   await pool.close();
 });
+
+test('runPushCheckOnce does not record as sent when every send fails with a non-410 error', async () => {
+  const pool = await makeUsersDb();
+  await setUp(pool);
+  const account = await registerAccount(pool, 'driver@example.com');
+  await saveSubscription(pool, account.id, { endpoint: 'https://push.example/flaky', p256dh: 'k', auth: 'a' });
+  await recordWeightedPointPing(pool, 'driver@example.com', {
+    latitude: 43.677,
+    longitude: -70.2568,
+    isEndpoint: false,
+    routineDensity: 'balanced',
+  });
+  await recordWeightedPointPing(pool, 'driver@example.com', {
+    latitude: 43.677,
+    longitude: -70.2568,
+    isEndpoint: false,
+    routineDensity: 'balanced',
+  });
+  // A third ping to clear the 'balanced' tier's minPingsToQualify (3), so
+  // this point actually qualifies as a weighted point (see weightedPoints.js).
+  await recordWeightedPointPing(pool, 'driver@example.com', {
+    latitude: 43.677,
+    longitude: -70.2568,
+    isEndpoint: false,
+    routineDensity: 'balanced',
+  });
+  await upsertLivePosition(pool, account.id, { latitude: 43.6591, longitude: -70.2568, heading: null });
+
+  const fakeWebPush = {
+    sendNotification: async () => {
+      const err = new Error('Service Unavailable');
+      err.statusCode = 503;
+      throw err;
+    },
+  };
+  const fakeGetRoadSignals = async () => ({
+    signals: [{ id: 'signal-1', severity: 'serious', latitude: 43.668, longitude: -70.2568, speech: { brief: 'x' } }],
+    networks: [],
+    partial: false,
+    failedNetworks: [],
+    generatedAt: new Date().toISOString(),
+  });
+
+  await runPushCheckOnce(pool, { getRoadSignals: fakeGetRoadSignals, webPush: fakeWebPush });
+
+  assert.equal(await hasAlreadySentPush(pool, account.id, 'signal-1'), false);
+  await pool.close();
+});
+
+test('runPushCheckOnce does not record as sent when the matched account has zero push subscriptions', async () => {
+  const pool = await makeUsersDb();
+  await setUp(pool);
+  const account = await registerAccount(pool, 'driver@example.com');
+  // Deliberately no saveSubscription call -- an account can have a live
+  // position (from POST /road-signals/live-position) with no push
+  // subscription ever registered (POST /road-signals/push-subscribe is a
+  // separate, independent endpoint).
+  await recordWeightedPointPing(pool, 'driver@example.com', {
+    latitude: 43.677,
+    longitude: -70.2568,
+    isEndpoint: false,
+    routineDensity: 'balanced',
+  });
+  await recordWeightedPointPing(pool, 'driver@example.com', {
+    latitude: 43.677,
+    longitude: -70.2568,
+    isEndpoint: false,
+    routineDensity: 'balanced',
+  });
+  await recordWeightedPointPing(pool, 'driver@example.com', {
+    latitude: 43.677,
+    longitude: -70.2568,
+    isEndpoint: false,
+    routineDensity: 'balanced',
+  });
+  await upsertLivePosition(pool, account.id, { latitude: 43.6591, longitude: -70.2568, heading: null });
+
+  const sent = [];
+  const fakeWebPush = { sendNotification: async (subscription, payload) => sent.push({ subscription, payload }) };
+  const fakeGetRoadSignals = async () => ({
+    signals: [{ id: 'signal-1', severity: 'serious', latitude: 43.668, longitude: -70.2568, speech: { brief: 'x' } }],
+    networks: [],
+    partial: false,
+    failedNetworks: [],
+    generatedAt: new Date().toISOString(),
+  });
+
+  await runPushCheckOnce(pool, { getRoadSignals: fakeGetRoadSignals, webPush: fakeWebPush });
+
+  assert.equal(sent.length, 0);
+  assert.equal(await hasAlreadySentPush(pool, account.id, 'signal-1'), false);
+  await pool.close();
+});
