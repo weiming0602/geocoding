@@ -6,7 +6,11 @@ export function toRadians(degrees: number): number {
   return (degrees * Math.PI) / 180;
 }
 
-/** Great-circle distance between two points, in meters. */
+/**
+ * Great-circle distance between two points, in meters.
+ * Mirrored in geocoding-server/src/roadAlertsMatching.js (part of the
+ * findAlertsForWeightedPoints port) -- keep both in sync if the math changes.
+ */
 export function haversineDistanceMeters(a: Coordinates, b: Coordinates): number {
   const dLat = toRadians(b.latitude - a.latitude);
   const dLon = toRadians(b.longitude - a.longitude);
@@ -17,7 +21,11 @@ export function haversineDistanceMeters(a: Coordinates, b: Coordinates): number 
   return 2 * EARTH_RADIUS_METERS * Math.asin(Math.min(1, Math.sqrt(h)));
 }
 
-/** Initial compass bearing from `a` to `b`, in degrees [0, 360), true north. */
+/**
+ * Initial compass bearing from `a` to `b`, in degrees [0, 360), true north.
+ * Mirrored in geocoding-server/src/roadAlertsMatching.js (part of the
+ * findAlertsForWeightedPoints port) -- keep both in sync if the math changes.
+ */
 export function bearingDegrees(a: Coordinates, b: Coordinates): number {
   const lat1 = toRadians(a.latitude);
   const lat2 = toRadians(b.latitude);
