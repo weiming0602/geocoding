@@ -87,6 +87,30 @@ for the current session, is never written to a database or sent to the
 server as its own request, and is discarded the moment driving stops or
 the page/screen closes.
 
+**Addendum, 2026-09-17:** background push alerts (see
+`docs/superpowers/specs/2026-09-17-road-alerts-background-push-design.md`)
+introduce a genuinely new category of data leaving the browser -- unlike
+the 2026-09-12 trail above, which never leaves the device, an installed-PWA
+user's **current position** (a single point, not a trail) is sent to the
+server while a drive is actively in progress. This is real, and worth
+being explicit about rather than folding into the existing "no raw trip
+trace stored" language above:
+
+- It exists on the server **only while a drive is actively in progress**
+  (Start pressed through Stop pressed, or a 10-minute inactivity timeout)
+  and is **never appended to any history table** -- one row per account,
+  always overwritten in place, deleted (not merely marked inactive) on
+  Stop or timeout.
+- It is **opt-in twice over**: sent at all only if the driver has both
+  installed the app to their Home Screen/desktop *and* granted
+  notification permission. A driver who never installs the app sends no
+  live position, ever, and keeps exactly the chime/in-tab-notification
+  behavior from PR #62 unchanged.
+- It exists specifically because iOS has no background-sync API a closed
+  tab could use to re-check hazards on its own -- a real Web Push, sent
+  from a server that knows roughly where the driver currently is, is the
+  only way to reach a closed app on that platform at all.
+
 ### User-facing setting: how much routine is remembered
 
 Exposed as a single choice, not a raw "weight threshold" (users don't
