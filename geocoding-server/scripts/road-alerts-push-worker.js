@@ -41,6 +41,20 @@ async function runPushCheckOnce(pool, deps = {}) {
   const getWeightedPoints = deps.getWeightedPoints || realGetWeightedPoints;
   const webPush = deps.webPush || require('web-push');
 
+  // Sweep expired live-position rows before matching -- a driver whose tab
+  // was killed rather than cleanly Stopped otherwise leaves their row (and
+  // dedup history) behind forever, since getActiveLivePositions only
+  // *filters* stale rows out of its SELECT rather than deleting them. Same
+  // "delete + clear dedup together" pairing as the DELETE
+  // /road-signals/live-position handler uses on a clean Stop.
+  const { rows: expired } = await pool.query(
+    `DELETE FROM road_alerts_live_positions
+     WHERE updated_at <= now() - interval '10 minutes' RETURNING account_id`
+  );
+  for (const row of expired) {
+    await clearPushSentForAccount(pool, row.account_id);
+  }
+
   const activePositions = await getActiveLivePositions(pool);
 
   for (const position of activePositions) {
@@ -55,43 +69,53 @@ async function runPushCheckOnce(pool, deps = {}) {
       continue;
     }
 
-    const weightedPoints = await getWeightedPoints(pool, position.email);
-    const alerts = findAlertsForWeightedPoints(user, weightedPoints, signals);
-    const strongAlerts = alerts.filter((alert) => shouldStronglyAlert(alert.signal.severity));
+    // Everything below is a second, separate try/catch (distinct from the
+    // getRoadSignals one above, which already has its own continue) so a
+    // persistent per-account issue here (a bad weighted-point row, a
+    // malformed subscription, etc.) can't abort the whole tick and starve
+    // every other driver -- getActiveLivePositions has no ORDER BY, so
+    // that would nondeterministically deprive different accounts each run.
+    try {
+      const weightedPoints = await getWeightedPoints(pool, position.email);
+      const alerts = findAlertsForWeightedPoints(user, weightedPoints, signals);
+      const strongAlerts = alerts.filter((alert) => shouldStronglyAlert(alert.signal.severity));
 
-    for (const alert of strongAlerts) {
-      if (await hasAlreadySentPush(pool, position.account_id, alert.signal.id)) continue;
+      for (const alert of strongAlerts) {
+        if (await hasAlreadySentPush(pool, position.account_id, alert.signal.id)) continue;
 
-      const subscriptions = await getSubscriptionsForAccount(pool, position.account_id);
-      const payload = JSON.stringify({
-        title: `${alert.signal.severity === 'serious' ? 'Serious' : 'Need to know'} road alert`,
-        body: alert.signal.speech.brief,
-      });
+        const subscriptions = await getSubscriptionsForAccount(pool, position.account_id);
+        const payload = JSON.stringify({
+          title: `${alert.signal.severity === 'serious' ? 'Serious' : 'Need to know'} road alert`,
+          body: alert.signal.speech.brief,
+        });
 
-      let anySucceeded = false;
-      for (const subscription of subscriptions) {
-        try {
-          await webPush.sendNotification(
-            { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
-            payload
-          );
-          anySucceeded = true;
-        } catch (err) {
-          if (err.statusCode === 410) {
-            await deleteSubscriptionByEndpoint(pool, subscription.endpoint);
-          } else {
-            console.error(`Push send failed for account ${position.account_id}:`, err.message);
+        let anySucceeded = false;
+        for (const subscription of subscriptions) {
+          try {
+            await webPush.sendNotification(
+              { endpoint: subscription.endpoint, keys: { p256dh: subscription.p256dh, auth: subscription.auth } },
+              payload
+            );
+            anySucceeded = true;
+          } catch (err) {
+            if (err.statusCode === 410) {
+              await deleteSubscriptionByEndpoint(pool, subscription.endpoint);
+            } else {
+              console.error(`Push send failed for account ${position.account_id}:`, err.message);
+            }
           }
         }
-      }
 
-      // Only mark as sent once something was actually delivered -- zero
-      // subscriptions (never pushed at all) or every subscription failing
-      // with a transient (non-410) error must not permanently suppress a
-      // serious/need_to_know alert with no retry on the next tick.
-      if (anySucceeded) {
-        await recordPushSent(pool, position.account_id, alert.signal.id);
+        // Only mark as sent once something was actually delivered -- zero
+        // subscriptions (never pushed at all) or every subscription failing
+        // with a transient (non-410) error must not permanently suppress a
+        // serious/need_to_know alert with no retry on the next tick.
+        if (anySucceeded) {
+          await recordPushSent(pool, position.account_id, alert.signal.id);
+        }
       }
+    } catch (err) {
+      console.error(`Push matching/send failed for account ${position.account_id}:`, err.message);
     }
   }
 }
