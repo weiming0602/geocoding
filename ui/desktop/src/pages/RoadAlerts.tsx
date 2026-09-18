@@ -272,6 +272,19 @@ export default function RoadAlerts() {
   // useCallback closure registered once with watchPosition; the state
   // setter still runs alongside it, purely to trigger a re-render).
   const hasDetectedMovementRef = useRef(false);
+  // True only once the server has actually confirmed this browser's push
+  // subscription (i.e. subscribeRoadAlertsPush's POST resolved), not
+  // merely once subscribeToPush produced a local PushSubscription object.
+  // Gates whether onPosition's GPS-driven polling is allowed to also POST
+  // the driver's live position -- see
+  // docs/superpowers/specs/2026-09-17-road-alerts-background-push-design.md's
+  // "Ephemeral live position" section and the privacy addendum in
+  // docs/ROAD_ALERTS_DESIGN.md: the live position is sent only when a real
+  // push subscription exists, never unconditionally, and never from the
+  // manual "Check now" test path (handleManualCheck calls fetchSignals
+  // directly, bypassing onPosition entirely). Reset to false in
+  // handleStart (before re-subscribing) and in handleStop.
+  const pushSubscribedRef = useRef(false);
   // The previous GPS fix, used to estimate speed when the device doesn't
   // report GeolocationCoordinates.speed itself (see onPosition below).
   // Reset in handleStart so a stale fix from a prior trip can't be
@@ -429,6 +442,10 @@ export default function RoadAlerts() {
     trailRef.current = [];
     setOnRouteIds(new Set());
 
+    // A Stop-then-Start cycle should re-subscribe cleanly rather than
+    // assuming a stale subscription state carries over.
+    pushSubscribedRef.current = false;
+
     // Removes the ephemeral live-position row immediately rather than
     // waiting for the worker's 10-minute staleness timeout.
     const stoppedAccount = accountRef.current;
@@ -458,18 +475,6 @@ export default function RoadAlerts() {
           radiusMeters: RADIUS_METERS,
           email: current.email,
           serviceKey: current.serviceKey,
-        });
-
-        // Piggybacks on the same throttled cadence fetchSignals already runs
-        // at (POLL_MIN_INTERVAL_MS) -- no separate timer needed.
-        postRoadAlertsLivePosition({
-          email: current.email,
-          serviceKey: current.serviceKey,
-          latitude,
-          longitude,
-          heading,
-        }).catch(() => {
-          // Best-effort -- a failed position update shouldn't block hazard display.
         });
 
         setSignals(response.signals);
@@ -580,6 +585,24 @@ export default function RoadAlerts() {
         lastFetchAtRef.current = now;
         trailRef.current = [...trailRef.current, current].slice(-TRAIL_MAX_SAMPLES);
         fetchSignals(latitude, longitude, estimatedHeadingDeg);
+
+        // Only from real GPS-driven polling (never handleManualCheck's direct
+        // fetchSignals call), and only once a push subscription has actually
+        // been confirmed by the server -- see pushSubscribedRef's comment.
+        if (pushSubscribedRef.current) {
+          const subscribedAccount = accountRef.current;
+          if (subscribedAccount) {
+            postRoadAlertsLivePosition({
+              email: subscribedAccount.email,
+              serviceKey: subscribedAccount.serviceKey,
+              latitude,
+              longitude,
+              heading: estimatedHeadingDeg,
+            }).catch(() => {
+              // Best-effort -- a failed position update shouldn't block hazard display.
+            });
+          }
+        }
       }
 
       // The first fix after Start is this trip's origin -- reported with
@@ -615,6 +638,7 @@ export default function RoadAlerts() {
     // installed PWA) simply never gets a subscription, and keeps exactly
     // today's chime/in-tab-notification behavior. See
     // docs/superpowers/specs/2026-09-17-road-alerts-background-push-design.md.
+    pushSubscribedRef.current = false;
     if (isPushCapable()) {
       const current = accountRef.current;
       if (current) {
@@ -622,7 +646,11 @@ export default function RoadAlerts() {
           .then(({ publicKey }) => subscribeToPush(publicKey))
           .then((subscription) => {
             if (subscription) {
-              return subscribeRoadAlertsPush({ email: current.email, serviceKey: current.serviceKey, subscription });
+              return subscribeRoadAlertsPush({ email: current.email, serviceKey: current.serviceKey, subscription }).then(
+                () => {
+                  pushSubscribedRef.current = true;
+                }
+              );
             }
           })
           .catch(() => {
