@@ -62,6 +62,16 @@ read-write).
   records): `cd geocoding-server && node scripts/transactions-digest.js`
   -- see `ops/` for the systemd timer/service pair and a crontab
   alternative.
+- Road Alerts background push worker (matches every active driver's live
+  position against current hazards every 60 seconds and sends a Web Push
+  for any new `serious`/`need_to_know` match, so a driver with the app
+  closed on an installed PWA still gets alerted -- see
+  `docs/superpowers/specs/2026-09-17-road-alerts-background-push-design.md`):
+  `cd geocoding-server && node scripts/road-alerts-push-worker.js` -- see
+  `ops/` for the systemd service. Unlike every other script above, this
+  is a **long-running process** (`Type=simple`, restarts on crash/exit),
+  not a periodic one-shot triggered by a timer/cron -- it runs its own
+  internal 60-second loop for as long as it's up.
 - Mobile app: `cd ui/mobile && npm start`
 - Desktop app: `cd ui/desktop && npm run dev`
 - Desktop app tests: `cd ui/desktop && npm test` (vitest; `App.test.tsx` and
@@ -132,7 +142,13 @@ read-write).
   silently disabled, New England 511 continues to work as before),
   `HERE_BASE_URL` (default
   `https://data.traffic.hereapi.com/v7/incidents` -- override point for
-  testing).
+  testing), `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY`/`VAPID_SUBJECT` (unset
+  = Web Push for Road Alerts' background alerts is silently disabled,
+  same convention as `HERE_API_KEY` -- `GET /road-signals/push-public-key`
+  404s and `scripts/road-alerts-push-worker.js` runs but never sends
+  anything; generate the key pair once via `npx web-push
+  generate-vapid-keys`, `VAPID_SUBJECT` is a `mailto:` contact address the
+  push spec requires).
 - Frontend PayPal env vars, both optional and both default to sandbox:
   `VITE_PAYPAL_CLIENT_ID` (`ui/desktop`, e.g. via a gitignored
   `ui/desktop/.env.local`) / `EXPO_PUBLIC_PAYPAL_CLIENT_ID` (`ui/mobile`)
