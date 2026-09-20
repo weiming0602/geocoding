@@ -18,6 +18,7 @@ export default function FindPlaces() {
   const [center, setCenter] = useState<{ latitude: number; longitude: number } | null>(null);
   const [radiusMeters, setRadiusMeters] = useState(RADIUS_OPTIONS[1].meters);
   const [loading, setLoading] = useState(false);
+  const [locating, setLocating] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [results, setResults] = useState<PlaceResult[] | null>(null);
   const [skipped, setSkipped] = useState(0);
@@ -69,6 +70,29 @@ export default function FindPlaces() {
       setLoading(false);
     }
   }, [query, hasNearClause, center, radiusMeters]);
+
+  // One-shot, not a continuous watch (unlike Road Alerts' driving mode) --
+  // this just needs "where am I right now" to set the search center, the
+  // same way a map click does.
+  const handleUseMyLocation = useCallback(() => {
+    if (!('geolocation' in navigator)) {
+      setError('This browser does not support geolocation.');
+      return;
+    }
+    setLocating(true);
+    setError(null);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setCenter({ latitude: pos.coords.latitude, longitude: pos.coords.longitude });
+        setLocating(false);
+      },
+      (err) => {
+        setError(err.message || 'Could not get your current location.');
+        setLocating(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  }, []);
 
   const handleDownload = useCallback(() => {
     if (!results || results.length === 0) return;
@@ -200,6 +224,14 @@ export default function FindPlaces() {
         </div>
 
         <div>
+          <button
+            className="btn btn-secondary"
+            style={{ marginBottom: 'var(--space-3)' }}
+            onClick={handleUseMyLocation}
+            disabled={locating}
+          >
+            {locating ? 'Finding your location…' : 'Use my current location'}
+          </button>
           <div ref={mapWrapperRef}>
             <FindPlacesMapView
               center={center}
