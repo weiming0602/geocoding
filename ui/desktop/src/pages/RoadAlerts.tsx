@@ -178,6 +178,10 @@ export default function RoadAlerts() {
   // approachedWeightedPoints) most recently matched -- drives both the
   // auto-speak "ahead" override and the "on your route" list tag below.
   const [onRouteIds, setOnRouteIds] = useState<Set<string>>(new Set());
+  // The hazard whose chime/notification just fired, if any -- lets the list
+  // below highlight exactly which card triggered the alert the driver just
+  // heard, rather than making them scan the whole list to find it.
+  const [alertedSignalId, setAlertedSignalId] = useState<string | null>(null);
   // Spoken alerts default to the shortest form -- something you hear
   // while approaching a hazard should be as small as possible.
   const [detailLevel, setDetailLevel] = useState<DetailLevel>('brief');
@@ -503,9 +507,17 @@ export default function RoadAlerts() {
             { latitude: signal.latitude, longitude: signal.longitude }
           );
           const ahead = onRouteIds.has(signal.id) || isAhead(heading, bearing);
-          spokenIdsRef.current.add(signal.id);
+          // Only mark as handled once it's actually been evaluated as ahead
+          // and spoken -- marking it here unconditionally (the previous
+          // behavior) meant a hazard seen once while not yet ahead (e.g.
+          // heading still noisy right after Start) could never trigger the
+          // chime/speech later, even once clearly approached, while it kept
+          // showing in the list on every fetch regardless. That mismatch --
+          // visible in the list, but permanently silent -- was the bug.
           if (ahead && shouldAutoSpeak(signal.severity)) {
+            spokenIdsRef.current.add(signal.id);
             if (shouldStronglyAlert(signal.severity)) {
+              setAlertedSignalId(signal.id);
               playAlertChime();
               // Only worth a real OS popup when the driver isn't already
               // looking at this tab -- otherwise the fresh list entry and
@@ -665,6 +677,7 @@ export default function RoadAlerts() {
     lastFixRef.current = null;
     trailRef.current = [];
     setOnRouteIds(new Set());
+    setAlertedSignalId(null);
     const id = navigator.geolocation.watchPosition(
       onPosition,
       (err) => setError(err.message || 'Could not start watching your location.'),
@@ -1318,11 +1331,16 @@ export default function RoadAlerts() {
               : null;
           const topicState = topicBySignalId[signal.id];
 
+          const justAlerted = signal.id === alertedSignalId;
+
           return (
             <div
               key={signal.id}
               className="card elev-sm"
-              style={index === 0 ? { background: 'var(--color-accent-100)' } : undefined}
+              style={{
+                ...(index === 0 ? { background: 'var(--color-accent-100)' } : undefined),
+                ...(justAlerted ? { border: '2px solid var(--color-accent-600)' } : undefined),
+              }}
             >
               <div
                 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}
@@ -1330,6 +1348,7 @@ export default function RoadAlerts() {
                 <span className="card-kicker">
                   {distance !== null ? `${metersLabel(distance)} away` : 'distance unknown'}
                   {onRoute ? ' · on your route' : !ahead ? ' · behind you' : ''}
+                  {justAlerted ? ' · 🔔 just alerted' : ''}
                 </span>
                 <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
                   <span className={`tag ${SEVERITY_TAG_CLASS[signal.severity]}`}>
