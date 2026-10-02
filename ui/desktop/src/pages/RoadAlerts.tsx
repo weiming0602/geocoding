@@ -768,6 +768,19 @@ export default function RoadAlerts() {
     setManualHeading(heading != null ? String(heading) : '');
     setSettingsOpen(true);
     runManualCheck(latitude, longitude, heading);
+
+    // Also post this as a one-time live position, unlike handleManualCheck
+    // above (and unlike onPosition's own GPS-driven polling, which only
+    // posts once pushSubscribedRef confirms a real subscription -- see its
+    // own comment). Raising Alarm is specifically a test of the background
+    // push path end to end: without this, the push worker (which only ever
+    // looks at road_alerts_live_positions) would have nothing to evaluate
+    // for up to 10 minutes, until a real drive happened to report a fix.
+    // Best-effort, same as every other position/ping call in this file --
+    // a failure here shouldn't block the in-tab chime/list check above.
+    postRoadAlertsLivePosition({ email: account.email, serviceKey: account.serviceKey, latitude, longitude, heading }).catch(
+      () => {}
+    );
   }, [pendingAlarmTest, account, runManualCheck]);
 
   const handleListenForSaveCommand = useCallback(
