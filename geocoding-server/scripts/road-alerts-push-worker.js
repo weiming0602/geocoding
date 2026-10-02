@@ -24,7 +24,7 @@ const {
   getSubscriptionsForAccount,
   deleteSubscriptionByEndpoint,
 } = require('../src/roadAlertsPush');
-const { findAlertsForWeightedPoints, shouldStronglyAlert } = require('../src/roadAlertsMatching');
+const { findAlertsForWeightedPoints, shouldStronglyAlert, isAhead, bearingDegrees } = require('../src/roadAlertsMatching');
 const { isPushConfigured, configureWebPush } = require('../src/pushKeys');
 
 const CHECK_INTERVAL_MS = 60000;
@@ -77,7 +77,25 @@ async function runPushCheckOnce(pool, deps = {}) {
     // that would nondeterministically deprive different accounts each run.
     try {
       const weightedPoints = await getWeightedPoints(pool, position.email);
-      const alerts = findAlertsForWeightedPoints(user, weightedPoints, signals);
+      const routeAlerts = findAlertsForWeightedPoints(user, weightedPoints, signals);
+
+      // Route-matching alone only ever catches a hazard on the way to an
+      // already-qualified routine destination -- a driver with no
+      // qualified points yet, or simply not headed toward one right now,
+      // would otherwise never get a push no matter how directly ahead a
+      // hazard is. Mirrors RoadAlerts.tsx's own fetchSignals fallback
+      // (`onRouteIds.has(signal.id) || isAhead(heading, bearing)`) for any
+      // signal route-matching didn't already catch.
+      const routeMatchedIds = new Set(routeAlerts.map((alert) => alert.signal.id));
+      const aheadAlerts = signals
+        .filter((signal) => !routeMatchedIds.has(signal.id))
+        .filter((signal) => typeof signal.latitude === 'number' && typeof signal.longitude === 'number')
+        .filter((signal) =>
+          isAhead(position.heading, bearingDegrees(user, { latitude: signal.latitude, longitude: signal.longitude }))
+        )
+        .map((signal) => ({ signal, matchedPoint: null, distanceAlongPathMeters: null }));
+
+      const alerts = [...routeAlerts, ...aheadAlerts];
       const strongAlerts = alerts.filter((alert) => shouldStronglyAlert(alert.signal.severity));
 
       for (const alert of strongAlerts) {
