@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { findAlertsForWeightedPoints, shouldStronglyAlert } = require('../src/roadAlertsMatching');
+const { findAlertsForWeightedPoints, shouldStronglyAlert, isAhead, bearingDegrees } = require('../src/roadAlertsMatching');
 
 // Real Portland, ME coordinates, mirroring ui/shared/roadAlertsMatching.test.ts's own USER constant.
 const USER = { latitude: 43.6591, longitude: -70.2568 };
@@ -50,4 +50,23 @@ test('shouldStronglyAlert is true only for serious and need_to_know', () => {
   assert.equal(shouldStronglyAlert('need_to_know'), true);
   assert.equal(shouldStronglyAlert('proximity'), false);
   assert.equal(shouldStronglyAlert('fun_to_know'), false);
+});
+
+test('isAhead treats null/negative heading as "assume ahead", mirroring ui/shared/geo.ts', () => {
+  assert.equal(isAhead(null, 180), true);
+  assert.equal(isAhead(undefined, 45), true);
+  assert.equal(isAhead(-1, 270), true);
+});
+
+test('isAhead is true within the default 90deg cone and false outside it', () => {
+  assert.equal(isAhead(0, 0), true); // dead ahead
+  assert.equal(isAhead(0, 44), true); // just inside the half-cone
+  assert.equal(isAhead(0, 46), false); // just outside the half-cone
+  assert.equal(isAhead(0, 180), false); // directly behind
+});
+
+test('bearingDegrees points due north/east as expected', () => {
+  const origin = { latitude: 43.6591, longitude: -70.2568 };
+  assert.ok(Math.abs(bearingDegrees(origin, { latitude: 44, longitude: -70.2568 }) - 0) < 1); // north
+  assert.ok(Math.abs(bearingDegrees(origin, { latitude: 43.6591, longitude: -70 }) - 90) < 1); // east
 });
