@@ -13,13 +13,22 @@ function getAudioContextConstructor(): typeof AudioContext | null {
   return g.AudioContext ?? g.webkitAudioContext ?? null;
 }
 
+// A single two-tone pattern is ~0.3s, easy to miss over road/cabin noise --
+// repeated REPEAT_COUNT times (like a phone's ring cadence, not one single
+// blip) is what actually catches a driver's attention, rather than making
+// each tone itself longer. REPEAT_INTERVAL_SECONDS is spaced so the whole
+// sequence lands around 1.8s total.
+const REPEAT_COUNT = 3;
+const REPEAT_INTERVAL_SECONDS = 0.74;
+
 /**
- * A short, distinct two-tone chime -- synthesized via the Web Audio API
- * rather than an external audio file, so there's no asset to load or
- * license. Meant to be noticed (and make someone glance over) before the
- * spoken alert itself is even understood. Best-effort: a failure here
- * (no AudioContext, a browser autoplay restriction, etc.) never throws,
- * since the chime is a bonus on top of speech, not a replacement for it.
+ * A short, distinct two-tone chime, repeated a few times -- synthesized via
+ * the Web Audio API rather than an external audio file, so there's no asset
+ * to load or license. Meant to be noticed (and make someone glance over)
+ * before the spoken alert itself is even understood. Best-effort: a failure
+ * here (no AudioContext, a browser autoplay restriction, etc.) never
+ * throws, since the chime is a bonus on top of speech, not a replacement
+ * for it.
  */
 export function playAlertChime(): void {
   const Ctor = getAudioContextConstructor();
@@ -27,10 +36,14 @@ export function playAlertChime(): void {
   try {
     const context = new Ctor();
     const now = context.currentTime;
-    const tones = [
-      { frequency: 660, start: 0 },
-      { frequency: 880, start: 0.16 },
-    ];
+    const tones = Array.from({ length: REPEAT_COUNT }, (_, repeat) => {
+      const offset = repeat * REPEAT_INTERVAL_SECONDS;
+      return [
+        { frequency: 660, start: offset },
+        { frequency: 880, start: offset + 0.16 },
+      ];
+    }).flat();
+    let latestStop = 0;
     for (const { frequency, start } of tones) {
       const oscillator = context.createOscillator();
       const gain = context.createGain();
@@ -45,13 +58,17 @@ export function playAlertChime(): void {
       gain.connect(context.destination);
       oscillator.start(now + start);
       oscillator.stop(now + start + 0.16);
+      latestStop = Math.max(latestStop, start + 0.16);
     }
     // Browsers cap how many AudioContexts can exist at once -- close this
-    // one once both tones have finished playing so repeated alerts don't
+    // one once every repeat has finished playing so repeated alerts don't
     // leak them.
-    setTimeout(() => {
-      context.close().catch(() => {});
-    }, 400);
+    setTimeout(
+      () => {
+        context.close().catch(() => {});
+      },
+      latestStop * 1000 + 200
+    );
   } catch {
     // Best-effort -- see the module comment above.
   }
