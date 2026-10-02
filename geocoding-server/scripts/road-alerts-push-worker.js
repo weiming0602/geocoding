@@ -102,9 +102,14 @@ async function runPushCheckOnce(pool, deps = {}) {
         if (await hasAlreadySentPush(pool, position.account_id, alert.signal.id)) continue;
 
         const subscriptions = await getSubscriptionsForAccount(pool, position.account_id);
+        // Roadway in the title and the fuller `average` tier (not `brief`)
+        // in the body -- a bare "Serious road alert" / "Closed" told a
+        // driver nothing they could act on; this is what's actually
+        // visible in iOS's Notification Center.
+        const roadwaySuffix = alert.signal.roadway ? ` on ${alert.signal.roadway}` : '';
         const payload = JSON.stringify({
-          title: `${alert.signal.severity === 'serious' ? 'Serious' : 'Need to know'} road alert`,
-          body: alert.signal.speech.brief,
+          title: `${alert.signal.severity === 'serious' ? 'Serious' : 'Need to know'} road alert${roadwaySuffix}`,
+          body: alert.signal.speech.average,
         });
 
         let anySucceeded = false;

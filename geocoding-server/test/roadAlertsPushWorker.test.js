@@ -59,9 +59,10 @@ test('runPushCheckOnce sends a push for a serious hazard matched to an active dr
       {
         id: 'signal-1',
         severity: 'serious',
+        roadway: 'I-295',
         latitude: 43.668, // ~1km along the path north -- inside the corridor
         longitude: -70.2568,
-        speech: { brief: 'Serious hazard ahead' },
+        speech: { brief: 'Serious hazard ahead', average: 'Serious hazard ahead, right lane closed' },
       },
     ],
     networks: [],
@@ -74,6 +75,9 @@ test('runPushCheckOnce sends a push for a serious hazard matched to an active dr
 
   assert.equal(sent.length, 1);
   assert.equal(sent[0].subscription.endpoint, 'https://push.example/abc');
+  const payload = JSON.parse(sent[0].payload);
+  assert.equal(payload.title, 'Serious road alert on I-295');
+  assert.equal(payload.body, 'Serious hazard ahead, right lane closed');
   assert.equal(await hasAlreadySentPush(pool, account.id, 'signal-1'), true);
   await pool.close();
 });
