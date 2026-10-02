@@ -12,7 +12,16 @@ self.addEventListener('push', (event) => {
     // Best-effort -- a malformed payload still shows a generic notification
     // rather than throwing and dropping the push entirely.
   }
-  event.waitUntil(self.registration.showNotification(data.title, { body: data.body }));
+  // icon/badge are ignored on iOS (which always uses the installed PWA's
+  // own Home Screen icon for a push notification, full stop) but are
+  // respected on Android/desktop Chrome -- harmless to include either way.
+  event.waitUntil(
+    self.registration.showNotification(data.title, {
+      body: data.body,
+      icon: '/icons/icon-192.png',
+      badge: '/icons/icon-192.png',
+    })
+  );
 });
 
 self.addEventListener('notificationclick', (event) => {
