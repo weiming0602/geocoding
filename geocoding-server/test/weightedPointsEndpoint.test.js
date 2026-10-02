@@ -115,6 +115,88 @@ test('GET /road-alerts/weighted-points returns points once qualified (pinged eno
     { seedStreets: false }
   ));
 
+test('POST /road-alerts/weighted-points uses the account\'s own routine-density setting to decide qualification', () =>
+  withTestServer(
+    async ({ port, usersDb }) => {
+      const { registerAccount, updateRoutineDensity } = require('../src/roadAlertsAccounts');
+      const account = await registerAccount(usersDb, TEST_EMAIL);
+      await updateRoutineDensity(usersDb, TEST_EMAIL, 'minimal');
+
+      // Balanced would qualify at 3 pings; minimal (6 pings) should not yet.
+      for (let i = 0; i < 3; i++) {
+        await fetch(`http://127.0.0.1:${port}/road-alerts/weighted-points`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: TEST_EMAIL, serviceKey: account.service_key, latitude: 43.9, longitude: -69.8 }),
+        });
+      }
+
+      const response = await fetch(weightedPointsUrl(port, { serviceKey: account.service_key }));
+      const body = await response.json();
+      assert.equal(body.weightedPoints.length, 0, 'minimal tier should not qualify at only 3 pings');
+    },
+    { seedStreets: false }
+  ));
+
+test('GET /road-alerts/weighted-points/candidates returns every tracked point, qualified or not', () =>
+  withTestServer(
+    async ({ port, usersDb }) => {
+      const serviceKey = await registerTestAccount(usersDb);
+
+      // Point A: qualifies (3 pings).
+      for (let i = 0; i < 3; i++) {
+        await fetch(`http://127.0.0.1:${port}/road-alerts/weighted-points`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email: TEST_EMAIL, serviceKey, latitude: 43.9, longitude: -69.8 }),
+        });
+      }
+      // Point B: does not qualify (1 ping), far enough to be a separate row.
+      await fetch(`http://127.0.0.1:${port}/road-alerts/weighted-points`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: TEST_EMAIL, serviceKey, latitude: 44.8, longitude: -68.8 }),
+      });
+
+      const response = await fetch(
+        `http://127.0.0.1:${port}/road-alerts/weighted-points/candidates?email=${TEST_EMAIL}&serviceKey=${serviceKey}`
+      );
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      assert.equal(body.routineDensity, 'balanced');
+      assert.equal(body.tier.minPingsToQualify, 3);
+      assert.equal(body.tier.qualifyingWindowDays, 7);
+      assert.equal(body.points.length, 2);
+      assert.equal(body.points.filter((p) => p.qualified).length, 1);
+      assert.equal(body.points.filter((p) => !p.qualified).length, 1);
+    },
+    { seedStreets: false }
+  ));
+
+test('GET /road-alerts/weighted-points/candidates rejects a wrong service key', () =>
+  withTestServer(
+    async ({ port, usersDb }) => {
+      await registerTestAccount(usersDb);
+
+      const response = await fetch(
+        `http://127.0.0.1:${port}/road-alerts/weighted-points/candidates?email=${TEST_EMAIL}&serviceKey=wrong`
+      );
+      assert.equal(response.status, 401);
+    },
+    { seedStreets: false }
+  ));
+
+test('GET /road-alerts/weighted-points/candidates rejects an unregistered email with 404', () =>
+  withTestServer(
+    async ({ port }) => {
+      const response = await fetch(
+        `http://127.0.0.1:${port}/road-alerts/weighted-points/candidates?email=${TEST_EMAIL}&serviceKey=mk_whatever`
+      );
+      assert.equal(response.status, 404);
+    },
+    { seedStreets: false }
+  ));
+
 test('GET /road-alerts/weighted-points requires a valid email format', () =>
   withTestServer(
     async ({ port }) => {

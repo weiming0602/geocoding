@@ -24,3 +24,6 @@ data/*
 *.sqlite-wal
 *.sqlite-shm
 .pytest_cache/
+
+# Local git worktrees created for isolated feature work
+.worktrees/

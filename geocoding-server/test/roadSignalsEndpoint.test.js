@@ -74,13 +74,20 @@ const FAR_INCIDENT = incidentXml({
 // real incidents across tests in this same file/process -- clearing
 // roadSignals.js's own cache entry here forces a fresh module (and a
 // fresh, empty cache) each time server.js is re-required.
-function withFetch(networkResponses, fn) {
+function withFetch(networkResponses, fn, { hereResponse } = {}) {
   return async (ctx) => {
     delete require.cache[require.resolve('../src/roadSignals')];
+    delete require.cache[require.resolve('../src/hereTraffic')];
     const saved = global.fetch;
     global.fetch = (url, ...args) => {
       if (typeof url === 'string' && url.includes('127.0.0.1')) {
         return saved(url, ...args);
+      }
+      if (typeof url === 'string' && url.includes('data.traffic.hereapi.com')) {
+        if (!hereResponse) {
+          return Promise.resolve({ ok: false, status: 500 });
+        }
+        return hereResponse();
       }
       const match = /networks=([A-Za-z]+)/.exec(url);
       const network = match ? match[1] : null;
@@ -96,6 +103,10 @@ function withFetch(networkResponses, fn) {
       global.fetch = saved;
     }
   };
+}
+
+function hereJsonOk(results) {
+  return async () => ({ ok: true, json: async () => ({ results }) });
 }
 
 function xmlOk(xml) {
@@ -266,6 +277,138 @@ test(
           assert.equal(body.partial, true);
           assert.deepEqual(body.failedNetworks, ['NewHampshire']);
           assert.equal(body.signals.length, 1);
+        },
+        { seedStreets: false }
+      )
+  )
+);
+
+// A real Dallas, TX incident (construction, minor severity), same shape
+// captured live this session -- see hereTraffic.test.js for the full
+// object this is trimmed from.
+const HERE_DALLAS_INCIDENT = {
+  location: { shape: { links: [{ points: [{ lat: 32.81818, lng: -96.84479 }] }] } },
+  incidentDetails: {
+    id: '2021742316625632607',
+    entryTime: '2026-09-03T15:32:50Z',
+    roadClosed: false,
+    criticality: 'minor',
+    type: 'construction',
+    typeDescription: { value: 'Road construction' },
+    description: { value: 'At W Mockingbird Ln - Construction work' },
+    summary: { value: 'Construction work' },
+  },
+};
+
+test(
+  'GET /road-signals routes a Texas location to HERE when HERE_API_KEY is set',
+  withFetch(
+    {},
+    () =>
+      withTestServer(
+        async ({ port, usersDb }) => {
+          const savedKey = process.env.HERE_API_KEY;
+          process.env.HERE_API_KEY = 'test-key';
+          try {
+            const serviceKey = await registerTestAccount(usersDb);
+            const response = await fetch(
+              roadSignalsUrl(port, { serviceKey, latitude: 32.8626698, longitude: -96.7601162, radiusMeters: 10000 })
+            );
+            assert.equal(response.status, 200);
+            const body = await response.json();
+            assert.equal(body.signals.length, 1);
+            assert.equal(body.signals[0].roadway, 'W Mockingbird Ln');
+            assert.equal(body.signals[0].network, 'HERE');
+            assert.deepEqual(body.networks, ['HERE']);
+            assert.equal(body.partial, false);
+          } finally {
+            if (savedKey !== undefined) process.env.HERE_API_KEY = savedKey;
+            else delete process.env.HERE_API_KEY;
+          }
+        },
+        { seedStreets: false }
+      ),
+    { hereResponse: hereJsonOk([HERE_DALLAS_INCIDENT]) }
+  )
+);
+
+test(
+  'GET /road-signals returns an empty, non-error result for a Texas location when HERE_API_KEY is unset',
+  withFetch({}, () =>
+    withTestServer(
+      async ({ port, usersDb }) => {
+        const savedKey = process.env.HERE_API_KEY;
+        delete process.env.HERE_API_KEY;
+        try {
+          const serviceKey = await registerTestAccount(usersDb);
+          const response = await fetch(
+            roadSignalsUrl(port, { serviceKey, latitude: 32.8626698, longitude: -96.7601162, radiusMeters: 10000 })
+          );
+          assert.equal(response.status, 200);
+          const body = await response.json();
+          assert.deepEqual(body.signals, []);
+          assert.equal(body.partial, false);
+        } finally {
+          if (savedKey !== undefined) process.env.HERE_API_KEY = savedKey;
+        }
+      },
+      { seedStreets: false }
+    )
+  )
+);
+
+test(
+  'GET /road-signals returns 502 for a Texas location when the HERE fetch fails',
+  withFetch(
+    {},
+    () =>
+      withTestServer(
+        async ({ port, usersDb }) => {
+          const savedKey = process.env.HERE_API_KEY;
+          process.env.HERE_API_KEY = 'test-key';
+          try {
+            const serviceKey = await registerTestAccount(usersDb);
+            const response = await fetch(
+              roadSignalsUrl(port, { serviceKey, latitude: 32.8626698, longitude: -96.7601162, radiusMeters: 10000 })
+            );
+            assert.equal(response.status, 502);
+          } finally {
+            if (savedKey !== undefined) process.env.HERE_API_KEY = savedKey;
+            else delete process.env.HERE_API_KEY;
+          }
+        },
+        { seedStreets: false }
+      ),
+    { hereResponse: async () => ({ ok: false, status: 500 }) }
+  )
+);
+
+test(
+  'GET /road-signals still routes a Maine location to New England 511, even when HERE_API_KEY is set',
+  withFetch(
+    {
+      Maine: xmlOk(statusXml([NEAR_INCIDENT])),
+      NewHampshire: xmlOk(statusXml([])),
+      Vermont: xmlOk(statusXml([])),
+    },
+    () =>
+      withTestServer(
+        async ({ port, usersDb }) => {
+          const savedKey = process.env.HERE_API_KEY;
+          process.env.HERE_API_KEY = 'test-key';
+          try {
+            const serviceKey = await registerTestAccount(usersDb);
+            const response = await fetch(
+              roadSignalsUrl(port, { serviceKey, latitude: 43.66, longitude: -70.26, radiusMeters: 5000 })
+            );
+            assert.equal(response.status, 200);
+            const body = await response.json();
+            assert.equal(body.signals.length, 1);
+            assert.deepEqual(body.networks, ['Maine', 'NewHampshire', 'Vermont']);
+          } finally {
+            if (savedKey !== undefined) process.env.HERE_API_KEY = savedKey;
+            else delete process.env.HERE_API_KEY;
+          }
         },
         { seedStreets: false }
       )

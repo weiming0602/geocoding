@@ -6,6 +6,7 @@ const {
   ensureWeightedPointsTable,
   recordWeightedPointPing,
   getWeightedPoints,
+  getAllWeightedPointCandidates,
 } = require('../src/weightedPoints');
 
 const EMAIL = 'alice@example.com';
@@ -30,6 +31,79 @@ test('a single ping creates a tracked row, but is not yet qualified', async () =
     // getWeightedPoints must not surface it.
     const points = await getWeightedPoints(db, EMAIL);
     assert.equal(points.length, 0);
+  } finally {
+    await db.close();
+  }
+});
+
+test('the "minimal" tier requires more pings within the window to qualify than "balanced"', async () => {
+  const db = await makeUsersDb();
+  try {
+    await ensureWeightedPointsTable(db);
+    // Balanced (default) qualifies at 3 pings -- confirmed by the
+    // existing test above. Minimal should still be unqualified at 3.
+    for (let i = 0; i < 3; i++) {
+      await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8, routineDensity: 'minimal' });
+    }
+    let points = await getWeightedPoints(db, EMAIL);
+    assert.equal(points.length, 0, 'minimal should not qualify at only 3 pings');
+
+    for (let i = 0; i < 3; i++) {
+      await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8, routineDensity: 'minimal' });
+    }
+    points = await getWeightedPoints(db, EMAIL);
+    assert.equal(points.length, 1, 'minimal should qualify once enough pings accumulate');
+  } finally {
+    await db.close();
+  }
+});
+
+test('the "most_complete" tier qualifies with fewer pings than "balanced"', async () => {
+  const db = await makeUsersDb();
+  try {
+    await ensureWeightedPointsTable(db);
+    await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8, routineDensity: 'most_complete' });
+    let points = await getWeightedPoints(db, EMAIL);
+    assert.equal(points.length, 0, 'a single ping should not be enough even for most_complete');
+
+    await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8, routineDensity: 'most_complete' });
+    points = await getWeightedPoints(db, EMAIL);
+    assert.equal(points.length, 1, 'most_complete should qualify at just 2 pings');
+  } finally {
+    await db.close();
+  }
+});
+
+test('an unrecognized routineDensity value falls back to "balanced" behavior', async () => {
+  const db = await makeUsersDb();
+  try {
+    await ensureWeightedPointsTable(db);
+    for (let i = 0; i < 2; i++) {
+      await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8, routineDensity: 'not_a_real_tier' });
+    }
+    let points = await getWeightedPoints(db, EMAIL);
+    assert.equal(points.length, 0, 'balanced fallback should not qualify at 2 pings');
+
+    await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8, routineDensity: 'not_a_real_tier' });
+    points = await getWeightedPoints(db, EMAIL);
+    assert.equal(points.length, 1, 'balanced fallback should qualify at the 3rd ping');
+  } finally {
+    await db.close();
+  }
+});
+
+test('omitting routineDensity entirely defaults to "balanced" behavior', async () => {
+  const db = await makeUsersDb();
+  try {
+    await ensureWeightedPointsTable(db);
+    await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8 });
+    await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8 });
+    let points = await getWeightedPoints(db, EMAIL);
+    assert.equal(points.length, 0, 'balanced should not qualify at 2 pings');
+
+    await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8 });
+    points = await getWeightedPoints(db, EMAIL);
+    assert.equal(points.length, 1, 'balanced should qualify at the 3rd ping');
   } finally {
     await db.close();
   }
@@ -151,6 +225,64 @@ test('getWeightedPoints returns qualified points sorted by weight, heaviest firs
     assert.equal(points.length, 2);
     assert.ok(Number(points[0].weight) > Number(points[1].weight));
     assert.equal(points[0].latitude, 44.8);
+  } finally {
+    await db.close();
+  }
+});
+
+test('getAllWeightedPointCandidates includes unqualified points, unlike getWeightedPoints', async () => {
+  const db = await makeUsersDb();
+  try {
+    await ensureWeightedPointsTable(db);
+    await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8 });
+    await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8 });
+
+    const qualifiedOnly = await getWeightedPoints(db, EMAIL);
+    assert.equal(qualifiedOnly.length, 0, 'sanity check: two pings should not qualify under balanced');
+
+    const candidates = await getAllWeightedPointCandidates(db, EMAIL);
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].qualified, false);
+    assert.equal(candidates[0].windowPingCount, 2);
+    assert.equal(candidates[0].qualifiedAt, null);
+  } finally {
+    await db.close();
+  }
+});
+
+test('getAllWeightedPointCandidates marks a qualified point as qualified, with a qualifiedAt timestamp', async () => {
+  const db = await makeUsersDb();
+  try {
+    await ensureWeightedPointsTable(db);
+    for (let i = 0; i < 3; i++) {
+      await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8 });
+    }
+
+    const candidates = await getAllWeightedPointCandidates(db, EMAIL);
+    assert.equal(candidates.length, 1);
+    assert.equal(candidates[0].qualified, true);
+    assert.equal(candidates[0].windowPingCount, 3);
+    assert.ok(candidates[0].qualifiedAt);
+  } finally {
+    await db.close();
+  }
+});
+
+test('getAllWeightedPointCandidates returns both qualified and unqualified points together', async () => {
+  const db = await makeUsersDb();
+  try {
+    await ensureWeightedPointsTable(db);
+    // Point A: qualifies (3 pings).
+    for (let i = 0; i < 3; i++) {
+      await recordWeightedPointPing(db, EMAIL, { latitude: 43.9, longitude: -69.8 });
+    }
+    // Point B: does not qualify (1 ping), far enough away to be a separate row.
+    await recordWeightedPointPing(db, EMAIL, { latitude: 44.8, longitude: -68.8 });
+
+    const candidates = await getAllWeightedPointCandidates(db, EMAIL);
+    assert.equal(candidates.length, 2);
+    const qualifiedCount = candidates.filter((c) => c.qualified).length;
+    assert.equal(qualifiedCount, 1);
   } finally {
     await db.close();
   }

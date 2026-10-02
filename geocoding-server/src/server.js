@@ -24,6 +24,7 @@ const {
   checkAccess: checkRoadAlertsAccess,
   updateDigestOptIn,
   updateUsername,
+  updateRoutineDensity,
   markNotificationsViewed,
 } = require('./roadAlertsAccounts');
 const {
@@ -49,6 +50,9 @@ const {
   ensureWeightedPointsTable,
   recordWeightedPointPing,
   getWeightedPoints,
+  getAllWeightedPointCandidates,
+  ROUTINE_DENSITY_TIERS,
+  resolveRoutineDensityTier,
 } = require('./weightedPoints');
 const {
   ensureTestRoadSignalsTable,
@@ -78,6 +82,8 @@ const {
   UnauthorizedError,
   UpstreamError,
 } = require('./errors');
+const { isPushConfigured, getVapidPublicKey } = require('./pushKeys');
+const { ensureRoadAlertsPushTables, saveSubscription, upsertLivePosition, deleteLivePosition, clearPushSentForAccount } = require('./roadAlertsPush');
 
 // Unix socket, peer-authenticated (no password) -- the socket path must be
 // percent-encoded into the URI's host component (%2Fvar%2Frun%2Fpostgresql),
@@ -147,6 +153,7 @@ const usersDbPromise = openUsersDb(USERS_DSN).then(async (pool) => {
   await ensureTestWeightedPointsTable(pool);
   await ensureWeightedPointsTable(pool);
   await ensureTestRoadSignalsTable(pool);
+  await ensureRoadAlertsPushTables(pool);
   return pool;
 });
 
@@ -611,7 +618,7 @@ app.get('/road-alerts/preferences', async (req, res) => {
     const usersDb = await usersDbPromise;
     const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
 
-    res.json({ digestOptIn: account.digest_opt_in });
+    res.json({ digestOptIn: account.digest_opt_in, routineDensity: account.routine_density });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
@@ -621,8 +628,12 @@ app.get('/road-alerts/preferences', async (req, res) => {
   }
 });
 
+// digestOptIn and routineDensity are independent settings sharing one
+// endpoint (same reasoning as their shared GET above) -- each is only
+// validated/updated when present in the body, so a caller changing one
+// never has to also resend the other's current value.
 app.post('/road-alerts/preferences', async (req, res) => {
-  const { email, serviceKey, digestOptIn } = req.body || {};
+  const { email, serviceKey, digestOptIn, routineDensity } = req.body || {};
   try {
     if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
       throw new ValidationError('email must be a valid email address');
@@ -630,15 +641,27 @@ app.post('/road-alerts/preferences', async (req, res) => {
     if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
       throw new ValidationError('serviceKey must be a non-empty string');
     }
-    if (typeof digestOptIn !== 'boolean') {
+    if (digestOptIn === undefined && routineDensity === undefined) {
+      throw new ValidationError('must include digestOptIn and/or routineDensity');
+    }
+    if (digestOptIn !== undefined && typeof digestOptIn !== 'boolean') {
       throw new ValidationError('digestOptIn must be a boolean');
+    }
+    if (routineDensity !== undefined && !Object.prototype.hasOwnProperty.call(ROUTINE_DENSITY_TIERS, routineDensity)) {
+      throw new ValidationError(`routineDensity must be one of: ${Object.keys(ROUTINE_DENSITY_TIERS).join(', ')}`);
     }
 
     const usersDb = await usersDbPromise;
     await checkRoadAlertsAccess(usersDb, email, serviceKey);
-    const account = await updateDigestOptIn(usersDb, email, digestOptIn);
+    let account;
+    if (digestOptIn !== undefined) {
+      account = await updateDigestOptIn(usersDb, email, digestOptIn);
+    }
+    if (routineDensity !== undefined) {
+      account = await updateRoutineDensity(usersDb, email, routineDensity);
+    }
 
-    res.json({ digestOptIn: account.digest_opt_in });
+    res.json({ digestOptIn: account.digest_opt_in, routineDensity: account.routine_density });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
@@ -1062,6 +1085,119 @@ app.get('/road-signals/reroute', async (req, res) => {
   }
 });
 
+// Unauthenticated on purpose -- a VAPID public key is not a secret (it's
+// sent to the browser's push service on every subscribe by design), and
+// exposing it this way means the frontend doesn't need a rebuild if the
+// key is ever rotated.
+app.get('/road-signals/push-public-key', (req, res) => {
+  if (!isPushConfigured()) {
+    return res.status(404).json({ error: 'push notifications are not configured on this server' });
+  }
+  res.json({ publicKey: getVapidPublicKey() });
+});
+
+// Stores a browser's Web Push subscription against its Road Alerts
+// account -- see docs/superpowers/specs/2026-09-17-road-alerts-background-push-design.md.
+// Same account-auth gate as every other Road Alerts account-scoped
+// endpoint (checkRoadAlertsAccess).
+app.post('/road-signals/push-subscribe', async (req, res) => {
+  const { email, serviceKey, subscription } = req.body || {};
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+    if (
+      !subscription ||
+      typeof subscription.endpoint !== 'string' ||
+      !subscription.keys ||
+      typeof subscription.keys.p256dh !== 'string' ||
+      typeof subscription.keys.auth !== 'string'
+    ) {
+      throw new ValidationError('subscription must include endpoint and keys.p256dh/keys.auth');
+    }
+
+    const usersDb = await usersDbPromise;
+    const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
+    await saveSubscription(usersDb, account.id, {
+      endpoint: subscription.endpoint,
+      p256dh: subscription.keys.p256dh,
+      auth: subscription.keys.auth,
+    });
+    res.json({ subscribed: true });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Ephemeral -- see the spec's Privacy model section. One row per
+// account, always overwritten, never a history table.
+app.post('/road-signals/live-position', async (req, res) => {
+  const { email, serviceKey, latitude, longitude, heading } = req.body || {};
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+    if (typeof latitude !== 'number' || Number.isNaN(latitude)) {
+      throw new ValidationError('latitude must be a number');
+    }
+    if (typeof longitude !== 'number' || Number.isNaN(longitude)) {
+      throw new ValidationError('longitude must be a number');
+    }
+
+    const usersDb = await usersDbPromise;
+    const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
+    await upsertLivePosition(usersDb, account.id, {
+      latitude,
+      longitude,
+      heading: typeof heading === 'number' && !Number.isNaN(heading) ? heading : null,
+    });
+    res.json({ updated: true });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Called on Stop -- removes the row immediately rather than waiting for
+// the worker's 10-minute staleness timeout, and clears this account's
+// push-dedup history so the same hazard can alert again on a later trip.
+app.delete('/road-signals/live-position', async (req, res) => {
+  const { email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
+    await deleteLivePosition(usersDb, account.id);
+    await clearPushSentForAccount(usersDb, account.id);
+    res.json({ deleted: true });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
 // Emails one road alert to the account's own registered email, on
 // request -- the "save this" voice command in RoadAlertsForm.tsx, or any
 // other on-demand save. The `signal` is passed in by the client from the
@@ -1230,13 +1366,14 @@ app.post('/road-alerts/weighted-points', async (req, res) => {
     }
 
     const usersDb = await usersDbPromise;
-    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+    const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
 
     const point = await recordWeightedPointPing(usersDb, email, {
       latitude: typeof latitude === 'number' ? latitude : Number(latitude),
       longitude: typeof longitude === 'number' ? longitude : Number(longitude),
       tlid: typeof tlid === 'string' ? tlid : null,
       isEndpoint: Boolean(isEndpoint),
+      routineDensity: account.routine_density,
     });
 
     res.json({ point });
@@ -1264,6 +1401,37 @@ app.get('/road-alerts/weighted-points', async (req, res) => {
 
     const weightedPoints = await getWeightedPoints(usersDb, email);
     res.json({ weightedPoints });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Debug/test-tooling counterpart to GET /road-alerts/weighted-points above
+// (see getAllWeightedPointCandidates's own doc comment) -- the Road Alert
+// Test page uses this one so a low- or no-qualified-point account is
+// still visible enough to evaluate the qualification logic against.
+// Never consumed by the real driving pages, which rely on the other
+// route's qualified-only contract for actual alerting.
+app.get('/road-alerts/weighted-points/candidates', async (req, res) => {
+  const { email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    const account = await checkRoadAlertsAccess(usersDb, email, serviceKey);
+    const { qualifyingWindowDays, minPingsToQualify } = resolveRoutineDensityTier(account.routine_density);
+
+    const points = await getAllWeightedPointCandidates(usersDb, email);
+    res.json({ routineDensity: account.routine_density, tier: { qualifyingWindowDays, minPingsToQualify }, points });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });

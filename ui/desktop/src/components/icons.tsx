@@ -9,6 +9,8 @@ export type IconName =
   | 'reverseGeocode'
   | 'findPlaces'
   | 'roadAlerts'
+  | 'neighborhood'
+  | 'weightedPoints'
   | 'importAddresses'
   | 'batch'
   | 'planQuota'
@@ -66,6 +68,29 @@ export function Icon({ name, size = 20 }: IconProps) {
           <path d="M12 3.5 21 19.5H3L12 3.5Z" />
           <path d="M12 9.5v4.4" />
           <circle cx="12" cy="16.6" r="1" fill="currentColor" stroke="none" />
+        </svg>
+      );
+    // A small house inside a boundary circle -- the "neighborhood radius"
+    // a home area's hazards are scanned within, distinct from both the
+    // plain house used for 'overview' and the warning triangle used for
+    // the main 'roadAlerts' tab.
+    case 'neighborhood':
+      return (
+        <svg {...props}>
+          <circle cx="12" cy="12" r="8.5" />
+          <path d="M9 15v-3.2l3-2.3 3 2.3V15" />
+          <path d="M10 15v-2h4v2" />
+        </svg>
+      );
+    // Three filled dots of different sizes -- reads as "points with
+    // different weights" rather than a generic location/test glyph, and
+    // the filled style stands apart from every outlined icon around it.
+    case 'weightedPoints':
+      return (
+        <svg {...props}>
+          <circle cx="7" cy="16" r="2" fill="currentColor" stroke="none" />
+          <circle cx="13" cy="9" r="3.2" fill="currentColor" stroke="none" />
+          <circle cx="18" cy="15" r="1.4" fill="currentColor" stroke="none" />
         </svg>
       );
     case 'importAddresses':

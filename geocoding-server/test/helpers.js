@@ -348,6 +348,13 @@ async function withTestServer(callback, { seedStreets = true, geoOptions = {}, g
   const savedAdminPasscode = process.env.ADMIN_PASSCODE;
   delete process.env.ADMIN_PASSCODE;
 
+  // Same rationale again -- a real .env's HERE_API_KEY should never make
+  // the "HERE_API_KEY unset" tests pass for the wrong reason, or make an
+  // unrelated test's Texas-location request silently start hitting the
+  // real HERE API instead of the fake fetch above.
+  const savedHereApiKey = process.env.HERE_API_KEY;
+  delete process.env.HERE_API_KEY;
+
   try {
     return await callback({ port: httpServer.address().port, db: server.db, usersDb });
   } finally {
@@ -367,6 +374,7 @@ async function withTestServer(callback, { seedStreets = true, geoOptions = {}, g
     if (savedAllowTestWeightedPoints !== undefined)
       process.env.ALLOW_TEST_WEIGHTED_POINTS = savedAllowTestWeightedPoints;
     if (savedAdminPasscode !== undefined) process.env.ADMIN_PASSCODE = savedAdminPasscode;
+    if (savedHereApiKey !== undefined) process.env.HERE_API_KEY = savedHereApiKey;
   }
 }
 
