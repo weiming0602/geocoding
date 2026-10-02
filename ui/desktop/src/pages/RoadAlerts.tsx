@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router';
 
 import {
   ApiError,
@@ -160,9 +161,20 @@ function shouldAutoSpeak(severity: RoadSignalSeverity): boolean {
   return severity !== 'fun_to_know';
 }
 
+type AlarmTestCoords = { latitude: number; longitude: number; heading: number | null };
+
 export default function RoadAlerts() {
+  const location = useLocation();
   const [account, setAccount] = useState<StoredRoadAlertsAccount | null>(() => getStoredAccount());
   const [registrationReason, setRegistrationReason] = useState<string | null>(null);
+  // Captured once on mount, same "never re-read on a later re-render" trick
+  // Batch.tsx uses for its own forwarded-file router state -- see
+  // RoadAlertsAlarmTest.tsx, the sender. A plain revisit to /road-alerts
+  // (no state) or a remount later in the session won't re-trigger this.
+  const [pendingAlarmTest] = useState<AlarmTestCoords | null>(
+    () => (location.state as { alarmTestCoords?: AlarmTestCoords } | null)?.alarmTestCoords ?? null
+  );
+  const alarmTestRanRef = useRef(false);
 
   const [watching, setWatching] = useState(false);
   const [position, setPosition] = useState<{ latitude: number; longitude: number; heading: number | null } | null>(
@@ -698,6 +710,28 @@ export default function RoadAlerts() {
     }
   }, [account, handleStart]);
 
+  // Shared by the typed-coordinates form below and the Raising Alarm tab's
+  // auto-triggered check (see the effect below it) -- same real
+  // fetch/match/chime path either way, just a different source for the
+  // coordinates.
+  const runManualCheck = useCallback(
+    async (latitude: number, longitude: number, heading: number | null) => {
+      setError(null);
+      setPosition({ latitude, longitude, heading });
+      // Re-announces every match on each run, unlike the GPS-driven path
+      // above -- repeatedly checking the same coordinates should keep
+      // speaking/chiming, not go silent the second time.
+      spokenIdsRef.current.clear();
+      setManualChecking(true);
+      try {
+        await fetchSignals(latitude, longitude, heading);
+      } finally {
+        setManualChecking(false);
+      }
+    },
+    [fetchSignals]
+  );
+
   const handleManualCheck = useCallback(async () => {
     const latitude = Number(manualLatitude);
     const longitude = Number(manualLongitude);
@@ -717,19 +751,24 @@ export default function RoadAlerts() {
       return;
     }
 
-    setError(null);
-    setPosition({ latitude, longitude, heading });
-    // Re-announces every match on each press, unlike the GPS-driven path
-    // above -- repeatedly checking the same typed coordinates should
-    // keep speaking, not go silent the second time.
-    spokenIdsRef.current.clear();
-    setManualChecking(true);
-    try {
-      await fetchSignals(latitude, longitude, heading);
-    } finally {
-      setManualChecking(false);
-    }
-  }, [manualLatitude, manualLongitude, manualHeading, fetchSignals]);
+    await runManualCheck(latitude, longitude, heading);
+  }, [manualLatitude, manualLongitude, manualHeading, runManualCheck]);
+
+  // Raising Alarm tab handoff: once an account is loaded, run the real
+  // check immediately against the coords it captured, and pre-fill the
+  // manual-check fields so the settings panel shows what triggered it.
+  // Guarded by alarmTestRanRef so this only ever fires once per visit --
+  // pendingAlarmTest itself never changes after mount (see above).
+  useEffect(() => {
+    if (!pendingAlarmTest || !account || alarmTestRanRef.current) return;
+    alarmTestRanRef.current = true;
+    const { latitude, longitude, heading } = pendingAlarmTest;
+    setManualLatitude(String(latitude));
+    setManualLongitude(String(longitude));
+    setManualHeading(heading != null ? String(heading) : '');
+    setSettingsOpen(true);
+    runManualCheck(latitude, longitude, heading);
+  }, [pendingAlarmTest, account, runManualCheck]);
 
   const handleListenForSaveCommand = useCallback(
     async (signal: RoadSignal) => {

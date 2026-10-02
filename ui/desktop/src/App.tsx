@@ -15,6 +15,7 @@ import PrivacyPolicy from './pages/PrivacyPolicy';
 import Progress from './pages/Progress';
 import ReverseGeocode from './pages/ReverseGeocode';
 import RoadAlerts from './pages/RoadAlerts';
+import RoadAlertsAlarmTest from './pages/RoadAlertsAlarmTest';
 import RoadAlertsHomeBoard from './pages/RoadAlertsHomeBoard';
 import RoadAlertsSandbox from './pages/RoadAlertsSandbox';
 import RoadAlertsTest from './pages/RoadAlertsTest';
@@ -41,6 +42,7 @@ export default function App() {
                   own explainer for why. */}
               <Route path="/road-alerts-sandbox" element={<RoadAlertsSandbox />} />
               <Route path="/road-alert-test" element={<RoadAlertsTest />} />
+              <Route path="/road-alerts-alarm-test" element={<RoadAlertsAlarmTest />} />
               <Route path="/road-alerts-home-board" element={<RoadAlertsHomeBoard />} />
               <Route path="/import-addresses" element={<ImportAddresses />} />
               <Route path="/batch" element={<Batch />} />
