@@ -90,10 +90,13 @@ function buildOverpassQuery(words, latitude, longitude, radiusMeters) {
 /**
  * Builds a Meridian-format address line ("123 Main St, Portland, ME
  * 04101") from an Overpass node's tags, or null if there isn't enough
- * to form one -- parseAddress.js requires a leading house number and a
- * 5-digit ZIP, so a node missing addr:housenumber, addr:street, or
- * addr:postcode can't produce a geocodable line no matter what else it
- * has (a name and a coordinate alone aren't enough).
+ * to form one -- addr:housenumber and addr:street are required (a name
+ * and a coordinate alone aren't enough). addr:postcode is also required
+ * here, by this function's own deliberate choice, not parseAddress.js's:
+ * parseAddress itself no longer requires a ZIP (it can match an exact
+ * Maine E911 address point by town alone), but that hasn't been
+ * carried through to this OSM-derived path -- left as-is, out of scope
+ * for that change.
  */
 function addressLineFromTags(tags) {
   const houseNumber = tags['addr:housenumber'];

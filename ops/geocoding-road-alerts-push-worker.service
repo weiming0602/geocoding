@@ -1,0 +1,31 @@
+# systemd service for geocoding-server/scripts/road-alerts-push-worker.js
+# -- a long-running process (not a one-shot triggered by a .timer, unlike
+# geocoding-road-alerts-digest.service) that checks every active driver's
+# live position against current hazards every 60 seconds and sends a Web
+# Push for any new serious/need_to_know match. See
+# docs/superpowers/specs/2026-09-17-road-alerts-background-push-design.md.
+#
+# Install (adjust WorkingDirectory/paths/DSN for the actual box):
+#   sudo cp ops/geocoding-road-alerts-push-worker.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now geocoding-road-alerts-push-worker
+#
+# Check status / logs:
+#   systemctl status geocoding-road-alerts-push-worker
+#   journalctl -u geocoding-road-alerts-push-worker -f
+
+[Unit]
+Description=Road Alerts background push-matching worker
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=my_ai
+Group=my_ai
+WorkingDirectory=/home/my_ai/geocoding/geocoding-server
+ExecStart=/usr/bin/node scripts/road-alerts-push-worker.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

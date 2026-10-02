@@ -225,13 +225,19 @@ export type RoadAlertsRegisterResponse = {
   digestOptIn: boolean;
 };
 
+// The three tiers of docs/ROAD_ALERTS_DESIGN.md's "how much routine is
+// remembered" setting (see geocoding-server/src/weightedPoints.js's
+// ROUTINE_DENSITY_TIERS, which is what actually interprets this value).
+export type RoadAlertsRoutineDensity = 'minimal' | 'balanced' | 'most_complete';
+
 // GET/POST /road-alerts/preferences -- the account's opt-in flag for the
 // daily email digest (see geocoding-server/src/roadAlertsDigest.js).
 // Default false; only alerts explicitly saved via the voice
 // "save"/"keep"/"email" command are ever included, never every alert
-// spoken automatically.
+// spoken automatically. routineDensity defaults to 'balanced'.
 export type RoadAlertsPreferencesResponse = {
   digestOptIn: boolean;
+  routineDensity: RoadAlertsRoutineDensity;
 };
 
 // GET/POST /road-alerts/username -- the display name shown alongside
@@ -333,6 +339,31 @@ export type WeightedPointRecord = {
 
 export type WeightedPointsResponse = {
   weightedPoints: WeightedPointRecord[];
+};
+
+// GET /road-alerts/weighted-points/candidates -- debug/test-tooling
+// counterpart to WeightedPointsResponse above, for the Road Alert Test
+// page only. Unlike that route, this one returns *every* tracked point
+// (qualified or not) with the diagnostic fields that explain why --
+// windowPingCount vs. tier.minPingsToQualify, qualifiedAt, etc. Never
+// used by the real driving pages. See geocoding-server/src/
+// weightedPoints.js's getAllWeightedPointCandidates.
+export type WeightedPointCandidate = {
+  latitude: number;
+  longitude: number;
+  weight: number;
+  tlid: string | null;
+  qualified: boolean;
+  qualifiedAt: string | null;
+  windowStartedAt: string;
+  windowPingCount: number;
+  lastPingedAt: string;
+};
+
+export type WeightedPointCandidatesResponse = {
+  routineDensity: RoadAlertsRoutineDensity;
+  tier: { qualifyingWindowDays: number; minPingsToQualify: number };
+  points: WeightedPointCandidate[];
 };
 
 // `point` is null when the ping was a trip endpoint (isEndpoint: true)

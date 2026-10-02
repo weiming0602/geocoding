@@ -1,34 +1,55 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation } from 'react-router';
 
 import {
   ApiError,
+  deleteRoadAlertsLivePosition,
   emailRoadAlert,
   getRoadAlertsCrossStreet,
   getRoadAlertsPreferences,
+  getRoadAlertsPushPublicKey,
   getRoadAlertsTopic,
   getRoadAlertsUsername,
   getRoadReroute,
   getRoadSignals,
   getWeightedPoints,
   markRoadAlertsNotificationsViewed,
+  postRoadAlertsLivePosition,
   postRoadAlertsStatement,
   postWeightedPointPing,
+  subscribeRoadAlertsPush,
   updateRoadAlertsPreferences,
   updateRoadAlertsUsername,
 } from '../../../shared/api/client';
 import type {
   CrossStreetResponse,
+  RoadAlertsRoutineDensity,
   RoadAlertsTopicResponse,
   RoadRerouteResponse,
   RoadSignal,
   RoadSignalSeverity,
 } from '../../../shared/api/types';
-import { bearingDegrees, haversineDistanceMeters, isAhead } from '../../../shared/geo';
+import { bearingDegrees, estimateSpeedMetersPerSecond, haversineDistanceMeters, isAhead } from '../../../shared/geo';
+import type { TimedCoordinates } from '../../../shared/geo';
+import {
+  approachedWeightedPoints,
+  findAlertsForWeightedPoints,
+  shouldStronglyAlert,
+  type WeightedPoint,
+} from '../../../shared/roadAlertsMatching';
 import { buildGoogleMapsDirectionsUrl } from '../../../shared/googleMapsDirections';
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
 import PageHeader from '../components/PageHeader';
 import RoadAlertsRegistration from '../components/RoadAlertsRegistration';
+import RoadAlertsTabs from '../components/RoadAlertsTabs';
 import RoadRerouteMap, { ROUTE_COLORS } from '../components/RoadRerouteMap';
+import {
+  isPushCapable,
+  playAlertChime,
+  requestNotificationPermission,
+  showAlertNotification,
+  subscribeToPush,
+} from '../roadAlertNotifications';
 import { clearStoredAccount, getStoredAccount, type StoredRoadAlertsAccount } from '../roadAlertsStorage';
 import { isSpeechRecognitionAvailable, listenOnce, matchesSaveCommand } from '../webSpeechRecognition';
 
@@ -40,6 +61,29 @@ const DETAIL_OPTIONS: { label: string; value: DetailLevel }[] = [
   { label: 'Deep', value: 'deep' },
 ];
 
+// Copy verbatim from docs/ROAD_ALERTS_DESIGN.md's "User-facing setting:
+// how much routine is remembered" table -- drafted alongside the design,
+// reused here rather than rewritten.
+const ROUTINE_DENSITY_OPTIONS: { label: string; value: RoadAlertsRoutineDensity; description: string }[] = [
+  {
+    label: 'Minimal',
+    value: 'minimal',
+    description:
+      'Only streets driven almost every time are remembered. Fewest streets stored, strongest privacy -- may miss alerts on routes driven less often.',
+  },
+  {
+    label: 'Balanced',
+    value: 'balanced',
+    description: 'Streets driven regularly, not just constantly.',
+  },
+  {
+    label: 'Most complete',
+    value: 'most_complete',
+    description:
+      'Includes streets driven only occasionally. Most complete alert coverage, at the cost of remembering more of your driving habits.',
+  },
+];
+
 const RADIUS_METERS = 10000;
 // Ties polling to real movement (the watch callback firing again) rather
 // than a separate timer, but still caps how often the free public 511
@@ -48,6 +92,28 @@ const POLL_MIN_INTERVAL_MS = 15000;
 // Mirrors ui/mobile's RoadAlertsForm.tsx exactly -- see that file's own
 // comment for why this is much coarser than POLL_MIN_INTERVAL_MS.
 const WEIGHTED_POINT_PING_INTERVAL_MS = 3 * 60 * 1000;
+// Watching auto-starts as soon as an account is ready (see the effect
+// below) -- someone who just opened this page while parked shouldn't see
+// a hazard list for wherever they happen to be sitting. "Hazards in the
+// Neighborhood" already covers that passive/not-driving case; this tab
+// only starts checking once real movement is detected. ~7.8 mph: safely
+// above GPS jitter and a brisk walk/jog (which could otherwise trip this
+// while carrying the phone), comfortably below the slowest realistic
+// driving speed (a car easing out of a driveway).
+const MOVING_SPEED_THRESHOLD_MPS = 3.5;
+// Below this distance between two consecutive GPS fixes, ordinary jitter
+// dominates -- neither the speed nor the bearing computed between them is
+// trustworthy. 15m comfortably exceeds typical enableHighAccuracy jitter
+// (commonly 5-15m outdoors) while still being covered in ~2s at even a
+// slow-moving car's speed, so real movement is still detected promptly.
+const MIN_RELIABLE_DISPLACEMENT_METERS = 15;
+// How many recent position samples the in-memory route-approach trail
+// keeps -- ~60 seconds at the existing ~15s hazard-check cadence. Short
+// on purpose: a real route change (a turn) should outweigh the pre-turn
+// direction quickly, not stay diluted by many minutes of stale samples.
+// Never persisted anywhere -- see docs/ROAD_ALERTS_DESIGN.md's Privacy
+// model section.
+const TRAIL_MAX_SAMPLES = 4;
 
 const SEVERITY_LABELS: Record<RoadSignalSeverity, string> = {
   serious: 'Serious',
@@ -95,21 +161,47 @@ function shouldAutoSpeak(severity: RoadSignalSeverity): boolean {
   return severity !== 'fun_to_know';
 }
 
+type AlarmTestCoords = { latitude: number; longitude: number; heading: number | null };
+
 export default function RoadAlerts() {
+  const location = useLocation();
   const [account, setAccount] = useState<StoredRoadAlertsAccount | null>(() => getStoredAccount());
   const [registrationReason, setRegistrationReason] = useState<string | null>(null);
+  // Captured once on mount, same "never re-read on a later re-render" trick
+  // Batch.tsx uses for its own forwarded-file router state -- see
+  // RoadAlertsAlarmTest.tsx, the sender. A plain revisit to /road-alerts
+  // (no state) or a remount later in the session won't re-trigger this.
+  const [pendingAlarmTest] = useState<AlarmTestCoords | null>(
+    () => (location.state as { alarmTestCoords?: AlarmTestCoords } | null)?.alarmTestCoords ?? null
+  );
+  const alarmTestRanRef = useRef(false);
 
   const [watching, setWatching] = useState(false);
   const [position, setPosition] = useState<{ latitude: number; longitude: number; heading: number | null } | null>(
     null
   );
+  // True once a GPS fix shows real movement (see MOVING_SPEED_THRESHOLD_MPS)
+  // since the last Start press -- hazard checks are held back until then
+  // (see onPosition below), so opening this page while parked doesn't
+  // surface a hazard list for a stationary location.
+  const [hasDetectedMovement, setHasDetectedMovement] = useState(false);
   const [signals, setSignals] = useState<RoadSignal[]>([]);
+  // Signal ids findAlertsForWeightedPoints (narrowed by
+  // approachedWeightedPoints) most recently matched -- drives both the
+  // auto-speak "ahead" override and the "on your route" list tag below.
+  const [onRouteIds, setOnRouteIds] = useState<Set<string>>(new Set());
+  // The hazard whose chime/notification just fired, if any -- lets the list
+  // below highlight exactly which card triggered the alert the driver just
+  // heard, rather than making them scan the whole list to find it.
+  const [alertedSignalId, setAlertedSignalId] = useState<string | null>(null);
   // Spoken alerts default to the shortest form -- something you hear
   // while approaching a hazard should be as small as possible.
   const [detailLevel, setDetailLevel] = useState<DetailLevel>('brief');
   const [voiceEnabled, setVoiceEnabled] = useState(true);
   const [digestOptIn, setDigestOptIn] = useState(false);
   const [digestOptInSaving, setDigestOptInSaving] = useState(false);
+  const [routineDensity, setRoutineDensity] = useState<RoadAlertsRoutineDensity>('balanced');
+  const [routineDensitySaving, setRoutineDensitySaving] = useState(false);
   // null = fetched, not set yet; undefined = not fetched yet.
   const [username, setUsername] = useState<string | null | undefined>(undefined);
   const [usernameDraft, setUsernameDraft] = useState('');
@@ -191,6 +283,38 @@ export default function RoadAlerts() {
   // endpoint -- a ref (not just the `position` state) so handleStop
   // doesn't need `position` in its own dependency array.
   const positionRef = useRef<{ latitude: number; longitude: number } | null>(null);
+  // Mirrors hasDetectedMovement -- read/written directly inside onPosition
+  // (a ref, not the state value, since onPosition is a long-lived
+  // useCallback closure registered once with watchPosition; the state
+  // setter still runs alongside it, purely to trigger a re-render).
+  const hasDetectedMovementRef = useRef(false);
+  // True only once the server has actually confirmed this browser's push
+  // subscription (i.e. subscribeRoadAlertsPush's POST resolved), not
+  // merely once subscribeToPush produced a local PushSubscription object.
+  // Gates whether onPosition's GPS-driven polling is allowed to also POST
+  // the driver's live position -- see
+  // docs/superpowers/specs/2026-09-17-road-alerts-background-push-design.md's
+  // "Ephemeral live position" section and the privacy addendum in
+  // docs/ROAD_ALERTS_DESIGN.md: the live position is sent only when a real
+  // push subscription exists, never unconditionally, and never from the
+  // manual "Check now" test path (handleManualCheck calls fetchSignals
+  // directly, bypassing onPosition entirely). Reset to false in
+  // handleStart (before re-subscribing) and in handleStop.
+  const pushSubscribedRef = useRef(false);
+  // The previous GPS fix, used to estimate speed when the device doesn't
+  // report GeolocationCoordinates.speed itself (see onPosition below).
+  // Reset in handleStart so a stale fix from a prior trip can't be
+  // compared against this trip's first one.
+  const lastFixRef = useRef<{ latitude: number; longitude: number; timestampMs: number } | null>(null);
+  // Short in-memory trail for approachedWeightedPoints -- capped at
+  // TRAIL_MAX_SAMPLES, oldest dropped first. Never persisted. Reset in
+  // handleStart, same as lastFixRef.
+  const trailRef = useRef<TimedCoordinates[]>([]);
+  // This account's real, already-qualified weighted points -- populated
+  // by refreshRealWeightedPoints below. A ref, not state: nothing here
+  // renders directly from it, it's only read inside the long-lived
+  // fetchSignals closure.
+  const weightedPointsRef = useRef<WeightedPoint[]>([]);
   useEffect(() => {
     voiceEnabledRef.current = voiceEnabled;
   }, [voiceEnabled]);
@@ -201,21 +325,40 @@ export default function RoadAlerts() {
     accountRef.current = account;
   }, [account]);
 
-  // One-shot fetch of this account's real, already-qualified weighted
-  // points -- re-fetched from pingWeightedPoint below whenever a new ping
-  // might have just pushed a point past its qualifying threshold. Not
-  // otherwise used on this page yet (unlike ui/mobile's route-matching);
-  // fetched here only so a ping's own refresh call has a home and this
-  // page's data stays consistent with what pinging is actually building.
+  // This account's real, already-qualified weighted points, used to
+  // narrow (approachedWeightedPoints) and then match
+  // (findAlertsForWeightedPoints) hazards against routine destinations --
+  // see fetchSignals below. Re-fetched from pingWeightedPoint whenever a
+  // new ping might have just pushed a point past its qualifying
+  // threshold, so a route that becomes routine *during* this same
+  // session is usable without waiting for the next sign-in. Mirrors
+  // ui/mobile's RoadAlertsForm.tsx's own refreshRealWeightedPoints.
   const refreshRealWeightedPoints = useCallback(async () => {
     const current = accountRef.current;
     if (!current) return;
     try {
-      await getWeightedPoints({ email: current.email, serviceKey: current.serviceKey });
+      const response = await getWeightedPoints({ email: current.email, serviceKey: current.serviceKey });
+      weightedPointsRef.current = response.weightedPoints.map((p) => ({
+        latitude: p.latitude,
+        longitude: p.longitude,
+        weight: p.weight,
+        tlid: p.tlid ?? undefined,
+      }));
     } catch {
       // Best-effort -- see pingWeightedPoint's own comment below.
     }
   }, []);
+
+  // One-shot fetch as soon as an account is ready -- without this, a
+  // fresh sign-in would have an empty weightedPointsRef until the first
+  // qualifying ping (WEIGHTED_POINT_PING_INTERVAL_MS into a drive).
+  useEffect(() => {
+    if (!account) {
+      weightedPointsRef.current = [];
+      return;
+    }
+    refreshRealWeightedPoints();
+  }, [account, refreshRealWeightedPoints]);
 
   // Reports one GPS ping toward the account's routine-route model (see
   // geocoding-server/src/weightedPoints.js). Fire-and-forget: a failure
@@ -243,15 +386,22 @@ export default function RoadAlerts() {
   useEffect(() => {
     if (!account) {
       setDigestOptIn(false);
+      setRoutineDensity('balanced');
       return;
     }
     let cancelled = false;
     (async () => {
       try {
         const response = await getRoadAlertsPreferences({ email: account.email, serviceKey: account.serviceKey });
-        if (!cancelled) setDigestOptIn(response.digestOptIn);
+        if (!cancelled) {
+          setDigestOptIn(response.digestOptIn);
+          setRoutineDensity(response.routineDensity);
+        }
       } catch {
-        if (!cancelled) setDigestOptIn(false);
+        if (!cancelled) {
+          setDigestOptIn(false);
+          setRoutineDensity('balanced');
+        }
       }
     })();
     return () => {
@@ -303,6 +453,24 @@ export default function RoadAlerts() {
     window.speechSynthesis?.cancel();
     setWatching(false);
 
+    // Discard the trail and any in-progress route match the moment
+    // driving stops -- see docs/ROAD_ALERTS_DESIGN.md's privacy model.
+    trailRef.current = [];
+    setOnRouteIds(new Set());
+
+    // A Stop-then-Start cycle should re-subscribe cleanly rather than
+    // assuming a stale subscription state carries over.
+    pushSubscribedRef.current = false;
+
+    // Removes the ephemeral live-position row immediately rather than
+    // waiting for the worker's 10-minute staleness timeout.
+    const stoppedAccount = accountRef.current;
+    if (stoppedAccount) {
+      deleteRoadAlertsLivePosition({ email: stoppedAccount.email, serviceKey: stoppedAccount.serviceKey }).catch(() => {
+        // Best-effort -- see above.
+      });
+    }
+
     // The last known fix is this trip's destination -- reported with
     // isEndpoint so it's never recorded as a weighted point, same
     // reasoning as the origin ping in onPosition below.
@@ -324,9 +492,24 @@ export default function RoadAlerts() {
           email: current.email,
           serviceKey: current.serviceKey,
         });
+
         setSignals(response.signals);
         setPartial(response.partial);
         setError(null);
+
+        // Which of this account's routine destinations recent movement
+        // actually looks like it's heading toward, then which hazards
+        // fall between here and one of those -- see
+        // docs/superpowers/specs/2026-09-12-road-alerts-route-approach-design.md.
+        // A route match is treated as "ahead" unconditionally below: the
+        // corridor-to-a-routine-point geometry already proves relevance,
+        // so it shouldn't get silently dropped by a momentary bad heading
+        // reading (e.g. stopped at a light) the way a plain cone check
+        // would. Mirrors ui/mobile's RoadAlertsForm.tsx exactly.
+        const candidatePoints = approachedWeightedPoints(trailRef.current, weightedPointsRef.current);
+        const routeAlerts = findAlertsForWeightedPoints({ latitude, longitude }, candidatePoints, response.signals);
+        const onRouteIds = new Set(routeAlerts.map((a) => a.signal.id));
+        setOnRouteIds(onRouteIds);
 
         for (const signal of response.signals) {
           if (spokenIdsRef.current.has(signal.id)) continue;
@@ -335,9 +518,29 @@ export default function RoadAlerts() {
             { latitude, longitude },
             { latitude: signal.latitude, longitude: signal.longitude }
           );
-          const ahead = isAhead(heading, bearing);
-          spokenIdsRef.current.add(signal.id);
+          const ahead = onRouteIds.has(signal.id) || isAhead(heading, bearing);
+          // Only mark as handled once it's actually been evaluated as ahead
+          // and spoken -- marking it here unconditionally (the previous
+          // behavior) meant a hazard seen once while not yet ahead (e.g.
+          // heading still noisy right after Start) could never trigger the
+          // chime/speech later, even once clearly approached, while it kept
+          // showing in the list on every fetch regardless. That mismatch --
+          // visible in the list, but permanently silent -- was the bug.
           if (ahead && shouldAutoSpeak(signal.severity)) {
+            spokenIdsRef.current.add(signal.id);
+            if (shouldStronglyAlert(signal.severity)) {
+              setAlertedSignalId(signal.id);
+              playAlertChime();
+              // Only worth a real OS popup when the driver isn't already
+              // looking at this tab -- otherwise the fresh list entry and
+              // the speech about to play are already enough.
+              if (document.hidden) {
+                showAlertNotification(
+                  `${SEVERITY_LABELS[signal.severity]} road alert`,
+                  signal.speech.brief
+                );
+              }
+            }
             speakSignal(signal);
           }
         }
@@ -357,14 +560,73 @@ export default function RoadAlerts() {
 
   const onPosition = useCallback(
     (pos: GeolocationPosition) => {
-      const { latitude, longitude, heading } = pos.coords;
-      setPosition({ latitude, longitude, heading });
+      const { latitude, longitude, heading, speed } = pos.coords;
+      const current = { latitude, longitude, timestampMs: pos.timestamp };
+      const previous = lastFixRef.current;
+      lastFixRef.current = current;
+
+      // A derived speed/heading between two fixes is only trustworthy
+      // once they're far enough apart that ordinary GPS jitter (a few
+      // meters, even with enableHighAccuracy) is small relative to the
+      // real movement being measured -- a short enough interval can
+      // otherwise make jitter alone look like highway speed, and a
+      // near-zero displacement gives a meaningless, noise-dominated
+      // bearing rather than an accurate one.
+      const displacementMeters = previous ? haversineDistanceMeters(previous, current) : null;
+      const reliable = displacementMeters !== null && displacementMeters >= MIN_RELIABLE_DISPLACEMENT_METERS;
+
+      // Prefers the device's own reported speed/heading -- reliable
+      // regardless of fix spacing -- and only falls back to a fix-pair
+      // estimate when the device doesn't report one at all. Heading in
+      // particular is null on virtually every desktop browser and many
+      // mobile ones too; without this fallback, isAhead's own "can't
+      // tell, assume ahead" default would forward every hazard in range
+      // regardless of actual direction, which is far less accurate than
+      // a real bearing derived from where the driver just came from.
+      const estimatedSpeedMps =
+        typeof speed === 'number' && !Number.isNaN(speed)
+          ? speed
+          : reliable
+            ? estimateSpeedMetersPerSecond(previous!, current)
+            : null;
+      const estimatedHeadingDeg =
+        typeof heading === 'number' && heading >= 0 ? heading : reliable ? bearingDegrees(previous!, current) : null;
+
+      setPosition({ latitude, longitude, heading: estimatedHeadingDeg });
       positionRef.current = { latitude, longitude };
 
+      if (
+        !hasDetectedMovementRef.current &&
+        estimatedSpeedMps !== null &&
+        estimatedSpeedMps >= MOVING_SPEED_THRESHOLD_MPS
+      ) {
+        hasDetectedMovementRef.current = true;
+        setHasDetectedMovement(true);
+      }
+
       const now = Date.now();
-      if (now - lastFetchAtRef.current >= POLL_MIN_INTERVAL_MS) {
+      if (hasDetectedMovementRef.current && now - lastFetchAtRef.current >= POLL_MIN_INTERVAL_MS) {
         lastFetchAtRef.current = now;
-        fetchSignals(latitude, longitude, heading);
+        trailRef.current = [...trailRef.current, current].slice(-TRAIL_MAX_SAMPLES);
+        fetchSignals(latitude, longitude, estimatedHeadingDeg);
+
+        // Only from real GPS-driven polling (never handleManualCheck's direct
+        // fetchSignals call), and only once a push subscription has actually
+        // been confirmed by the server -- see pushSubscribedRef's comment.
+        if (pushSubscribedRef.current) {
+          const subscribedAccount = accountRef.current;
+          if (subscribedAccount) {
+            postRoadAlertsLivePosition({
+              email: subscribedAccount.email,
+              serviceKey: subscribedAccount.serviceKey,
+              latitude,
+              longitude,
+              heading: estimatedHeadingDeg,
+            }).catch(() => {
+              // Best-effort -- a failed position update shouldn't block hazard display.
+            });
+          }
+        }
       }
 
       // The first fix after Start is this trip's origin -- reported with
@@ -390,7 +652,44 @@ export default function RoadAlerts() {
       setError('This browser does not support geolocation.');
       return;
     }
+    // Ask once, here, rather than lazily the first time an alert would
+    // want to show one -- prompting mid-alert would be a jarring first
+    // ask. A no-op if already granted/denied, or if watching restarts
+    // later in the same page session.
+    requestNotificationPermission();
+
+    // Best-effort, fire-and-forget -- a driver on a browser tab (not an
+    // installed PWA) simply never gets a subscription, and keeps exactly
+    // today's chime/in-tab-notification behavior. See
+    // docs/superpowers/specs/2026-09-17-road-alerts-background-push-design.md.
+    pushSubscribedRef.current = false;
+    if (isPushCapable()) {
+      const current = accountRef.current;
+      if (current) {
+        getRoadAlertsPushPublicKey()
+          .then(({ publicKey }) => subscribeToPush(publicKey))
+          .then((subscription) => {
+            if (subscription) {
+              return subscribeRoadAlertsPush({ email: current.email, serviceKey: current.serviceKey, subscription }).then(
+                () => {
+                  pushSubscribedRef.current = true;
+                }
+              );
+            }
+          })
+          .catch(() => {
+            // Best-effort -- push-public-key 404s (unconfigured server) land here too.
+          });
+      }
+    }
+
     isFirstPositionOfSessionRef.current = true;
+    hasDetectedMovementRef.current = false;
+    setHasDetectedMovement(false);
+    lastFixRef.current = null;
+    trailRef.current = [];
+    setOnRouteIds(new Set());
+    setAlertedSignalId(null);
     const id = navigator.geolocation.watchPosition(
       onPosition,
       (err) => setError(err.message || 'Could not start watching your location.'),
@@ -411,6 +710,28 @@ export default function RoadAlerts() {
     }
   }, [account, handleStart]);
 
+  // Shared by the typed-coordinates form below and the Raising Alarm tab's
+  // auto-triggered check (see the effect below it) -- same real
+  // fetch/match/chime path either way, just a different source for the
+  // coordinates.
+  const runManualCheck = useCallback(
+    async (latitude: number, longitude: number, heading: number | null) => {
+      setError(null);
+      setPosition({ latitude, longitude, heading });
+      // Re-announces every match on each run, unlike the GPS-driven path
+      // above -- repeatedly checking the same coordinates should keep
+      // speaking/chiming, not go silent the second time.
+      spokenIdsRef.current.clear();
+      setManualChecking(true);
+      try {
+        await fetchSignals(latitude, longitude, heading);
+      } finally {
+        setManualChecking(false);
+      }
+    },
+    [fetchSignals]
+  );
+
   const handleManualCheck = useCallback(async () => {
     const latitude = Number(manualLatitude);
     const longitude = Number(manualLongitude);
@@ -430,19 +751,24 @@ export default function RoadAlerts() {
       return;
     }
 
-    setError(null);
-    setPosition({ latitude, longitude, heading });
-    // Re-announces every match on each press, unlike the GPS-driven path
-    // above -- repeatedly checking the same typed coordinates should
-    // keep speaking, not go silent the second time.
-    spokenIdsRef.current.clear();
-    setManualChecking(true);
-    try {
-      await fetchSignals(latitude, longitude, heading);
-    } finally {
-      setManualChecking(false);
-    }
-  }, [manualLatitude, manualLongitude, manualHeading, fetchSignals]);
+    await runManualCheck(latitude, longitude, heading);
+  }, [manualLatitude, manualLongitude, manualHeading, runManualCheck]);
+
+  // Raising Alarm tab handoff: once an account is loaded, run the real
+  // check immediately against the coords it captured, and pre-fill the
+  // manual-check fields so the settings panel shows what triggered it.
+  // Guarded by alarmTestRanRef so this only ever fires once per visit --
+  // pendingAlarmTest itself never changes after mount (see above).
+  useEffect(() => {
+    if (!pendingAlarmTest || !account || alarmTestRanRef.current) return;
+    alarmTestRanRef.current = true;
+    const { latitude, longitude, heading } = pendingAlarmTest;
+    setManualLatitude(String(latitude));
+    setManualLongitude(String(longitude));
+    setManualHeading(heading != null ? String(heading) : '');
+    setSettingsOpen(true);
+    runManualCheck(latitude, longitude, heading);
+  }, [pendingAlarmTest, account, runManualCheck]);
 
   const handleListenForSaveCommand = useCallback(
     async (signal: RoadSignal) => {
@@ -504,6 +830,27 @@ export default function RoadAlerts() {
       setDigestOptInSaving(false);
     }
   }, [digestOptIn, digestOptInSaving]);
+
+  const handleChangeRoutineDensity = useCallback(
+    async (next: RoadAlertsRoutineDensity) => {
+      const current = accountRef.current;
+      if (!current || routineDensitySaving || next === routineDensity) return;
+      setRoutineDensitySaving(true);
+      try {
+        const response = await updateRoadAlertsPreferences({
+          email: current.email,
+          serviceKey: current.serviceKey,
+          routineDensity: next,
+        });
+        setRoutineDensity(response.routineDensity);
+      } catch {
+        // Leave the setting at its last-known-good value on failure.
+      } finally {
+        setRoutineDensitySaving(false);
+      }
+    },
+    [routineDensity, routineDensitySaving]
+  );
 
   const handleSaveUsername = useCallback(async () => {
     const current = accountRef.current;
@@ -768,6 +1115,7 @@ export default function RoadAlerts() {
     return (
       <div>
         <PageHeader icon="roadAlerts">Road Alerts</PageHeader>
+        <RoadAlertsTabs />
         <p className="text-muted" style={{ marginBottom: 'var(--space-6)' }}>
           Live traffic hazards near you, spoken aloud as you approach them.
         </p>
@@ -779,6 +1127,7 @@ export default function RoadAlerts() {
   return (
     <div style={{ maxWidth: 720 }}>
       <PageHeader icon="roadAlerts">Road Alerts</PageHeader>
+      <RoadAlertsTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         Live traffic hazards near you, spoken aloud as you approach them.
       </p>
@@ -833,6 +1182,31 @@ export default function RoadAlerts() {
         >
           {digestOptInSaving ? 'Saving…' : digestOptIn ? 'Daily email digest: On' : 'Daily email digest: Off'}
         </button>
+
+        <div className="hr" />
+        <p className="card-body" style={{ margin: '0 0 var(--space-2)' }}>
+          How much of your routine driving Road Alerts remembers, to catch relevant hazards on
+          routes you actually drive.
+        </p>
+        <div className="seg" style={{ width: '100%', marginBottom: 'var(--space-2)' }}>
+          {ROUTINE_DENSITY_OPTIONS.map((opt) => (
+            <label key={opt.value} className="seg-opt" style={{ flex: 1, justifyContent: 'center' }}>
+              <input
+                type="radio"
+                name="routineDensity"
+                checked={routineDensity === opt.value}
+                onChange={() => handleChangeRoutineDensity(opt.value)}
+                disabled={routineDensitySaving}
+              />
+              {opt.label}
+            </label>
+          ))}
+        </div>
+        <p className="card-meta" style={{ margin: 0 }}>
+          {routineDensitySaving
+            ? 'Saving…'
+            : ROUTINE_DENSITY_OPTIONS.find((opt) => opt.value === routineDensity)?.description}
+        </p>
 
         {username ? (
           <p className="card-body" style={{ margin: 'var(--space-3) 0 0' }}>
@@ -962,14 +1336,23 @@ export default function RoadAlerts() {
         </p>
       )}
 
-      <h5 className="text-muted" style={{ letterSpacing: '0.06em', textTransform: 'uppercase' }}>
-        {signals.length} alert{signals.length === 1 ? '' : 's'} within {metersLabel(RADIUS_METERS)}
-      </h5>
+      {watching && !hasDetectedMovement && signals.length === 0 ? (
+        <p className="text-muted">
+          Waiting to confirm you're actually driving before checking for hazards -- start moving, or use
+          "Test a location manually" in Settings to check a spot right away.
+        </p>
+      ) : (
+        <>
+          <h5 className="text-muted" style={{ letterSpacing: '0.06em', textTransform: 'uppercase' }}>
+            {signals.length} alert{signals.length === 1 ? '' : 's'} within {metersLabel(RADIUS_METERS)}
+          </h5>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
         {signals.map((signal, index) => {
+          const onRoute = onRouteIds.has(signal.id);
           const ahead =
-            position && typeof signal.latitude === 'number' && typeof signal.longitude === 'number'
+            onRoute ||
+            (position && typeof signal.latitude === 'number' && typeof signal.longitude === 'number'
               ? isAhead(
                   position.heading,
                   bearingDegrees(
@@ -977,7 +1360,7 @@ export default function RoadAlerts() {
                     { latitude: signal.latitude, longitude: signal.longitude }
                   )
                 )
-              : true;
+              : true);
           const distance =
             position && typeof signal.latitude === 'number' && typeof signal.longitude === 'number'
               ? haversineDistanceMeters(
@@ -987,18 +1370,24 @@ export default function RoadAlerts() {
               : null;
           const topicState = topicBySignalId[signal.id];
 
+          const justAlerted = signal.id === alertedSignalId;
+
           return (
             <div
               key={signal.id}
               className="card elev-sm"
-              style={index === 0 ? { background: 'var(--color-accent-100)' } : undefined}
+              style={{
+                ...(index === 0 ? { background: 'var(--color-accent-100)' } : undefined),
+                ...(justAlerted ? { border: '2px solid var(--color-accent-600)' } : undefined),
+              }}
             >
               <div
                 style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 4 }}
               >
                 <span className="card-kicker">
                   {distance !== null ? `${metersLabel(distance)} away` : 'distance unknown'}
-                  {!ahead ? ' · behind you' : ''}
+                  {onRoute ? ' · on your route' : !ahead ? ' · behind you' : ''}
+                  {justAlerted ? ' · 🔔 just alerted' : ''}
                 </span>
                 <span style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 2 }}>
                   <span className={`tag ${SEVERITY_TAG_CLASS[signal.severity]}`}>
@@ -1286,7 +1675,9 @@ export default function RoadAlerts() {
             </div>
           );
         })}
-      </div>
+          </div>
+        </>
+      )}
     </div>
   );
 }

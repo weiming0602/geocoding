@@ -38,12 +38,25 @@ const ADD_NOTIFICATIONS_VIEWED_AT_COLUMN_SQL = `
 ALTER TABLE road_alerts_accounts ADD COLUMN IF NOT EXISTS notifications_viewed_at TIMESTAMPTZ;
 `;
 
+// How much of an account's driving routine gets remembered as weighted
+// points -- see docs/ROAD_ALERTS_DESIGN.md's "how much routine is
+// remembered" setting and weightedPoints.js's ROUTINE_DENSITY_TIERS,
+// which is what actually interprets this value. Validated app-side
+// (ValidationError in server.js), not DB-enforced -- same convention as
+// every other enum-shaped column in this codebase. Defaults to
+// 'balanced', matching the qualification thresholds every account used
+// before this setting existed.
+const ADD_ROUTINE_DENSITY_COLUMN_SQL = `
+ALTER TABLE road_alerts_accounts ADD COLUMN IF NOT EXISTS routine_density TEXT NOT NULL DEFAULT 'balanced';
+`;
+
 /** Creates the road_alerts_accounts table if it doesn't already exist. */
 async function ensureRoadAlertsAccountsTable(pool) {
   await pool.query(CREATE_ROAD_ALERTS_ACCOUNTS_TABLE_SQL);
   await pool.query(ADD_DIGEST_OPT_IN_COLUMN_SQL);
   await pool.query(ADD_USERNAME_COLUMN_SQL);
   await pool.query(ADD_NOTIFICATIONS_VIEWED_AT_COLUMN_SQL);
+  await pool.query(ADD_ROUTINE_DENSITY_COLUMN_SQL);
 }
 
 async function getAccount(pool, email) {
@@ -122,6 +135,15 @@ async function updateUsername(pool, email, username) {
   return rows[0];
 }
 
+/** Updates an account's routine-density setting (see ADD_ROUTINE_DENSITY_COLUMN_SQL above). */
+async function updateRoutineDensity(pool, email, routineDensity) {
+  const { rows } = await pool.query(
+    `UPDATE road_alerts_accounts SET routine_density = $1 WHERE email = $2 RETURNING *`,
+    [routineDensity, email]
+  );
+  return rows[0];
+}
+
 /** Marks everything up to now as seen, resetting the reply-notification count to 0. */
 async function markNotificationsViewed(pool, email) {
   const { rows } = await pool.query(
@@ -138,5 +160,6 @@ module.exports = {
   checkAccess,
   updateDigestOptIn,
   updateUsername,
+  updateRoutineDensity,
   markNotificationsViewed,
 };

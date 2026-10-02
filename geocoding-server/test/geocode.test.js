@@ -177,6 +177,21 @@ test('a name with no street_names entry at all does not match', async () => {
   await db.close();
 });
 
+test('a spelled-out suffix matches the same street as its TIGER-style abbreviation', async () => {
+  const db = await makeDb();
+  // street_names stores "Pequawket Trl" (TIGER's own abbreviated form,
+  // see helpers.js) -- a caller typing "Trail" in full must still match
+  // it here, the same way matchAddressPoint's own address_points path
+  // already tries both directions. No address_points row exists for
+  // this street/number, so this only exercises the interpolation path.
+  const byAbbreviation = await geocode(db, '997 Pequawket Trl, Standish, ME 04091');
+  const bySpelledOut = await geocode(db, '997 Pequawket Trail, Standish, ME 04091');
+
+  assert.equal(bySpelledOut.match.id, byAbbreviation.match.id);
+  assert.deepEqual(bySpelledOut.coordinates, byAbbreviation.coordinates);
+  await db.close();
+});
+
 test('an exact address_points match is preferred over interpolation', async () => {
   const db = await makeDb();
   const result = await geocode(db, '42 Test Point Lane, Testville, ME 00000');
@@ -248,6 +263,38 @@ test('an address_points match under a state street_names/the point itself contra
   await assert.rejects(
     () => geocode(db, '42 Test Point Lane, Testville, NH 00000'),
     NotFoundError
+  );
+  await db.close();
+});
+
+test('a no-ZIP address still matches an exact address point by town + street + number', async () => {
+  const db = await makeDb();
+  // matchAddressPoint keys on town, not ZIP -- parseAddress now allows a
+  // missing ZIP, so this must succeed exactly like the ZIP'd version above.
+  const result = await geocode(db, '42 Test Point Lane, Testville, ME');
+  assert.equal(result.source, 'address_point');
+  await db.close();
+});
+
+test('a no-ZIP address with no address point falls through to interpolation and throws a clear error', async () => {
+  const db = await makeDb();
+  // "Pequawket Trl" house 996 has no address_points row (only house 500
+  // does, under a different tlid/range) -- with no ZIP, candidateStreets
+  // has nothing to filter on, so this must fail with a message telling
+  // the caller why a ZIP is needed here, not the generic
+  // "no street found ... in ZIP null" candidateStreets would otherwise
+  // produce (still technically matches /zip/i, so this checks for the
+  // literal "null" candidateStreets' own error interpolates in, and
+  // requires it be absent -- a real regression check, not just an
+  // easy-to-satisfy substring match).
+  await assert.rejects(
+    () => geocode(db, '996 Pequawket Trl, Standish, ME'),
+    (err) => {
+      assert.ok(err instanceof NotFoundError);
+      assert.match(err.message, /zip/i);
+      assert.doesNotMatch(err.message, /\bnull\b/);
+      return true;
+    }
   );
   await db.close();
 });

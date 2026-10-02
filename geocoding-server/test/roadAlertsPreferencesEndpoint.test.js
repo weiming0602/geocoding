@@ -24,6 +24,65 @@ test('GET /road-alerts/preferences returns false by default', () =>
       assert.equal(response.status, 200);
       const body = await response.json();
       assert.equal(body.digestOptIn, false);
+      assert.equal(body.routineDensity, 'balanced');
+    },
+    { seedStreets: false }
+  ));
+
+test('POST /road-alerts/preferences updates routineDensity', () =>
+  withTestServer(
+    async ({ port, usersDb }) => {
+      const serviceKey = await registerTestAccount(usersDb);
+
+      const response = await fetch(`http://127.0.0.1:${port}/road-alerts/preferences`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: TEST_EMAIL, serviceKey, routineDensity: 'most_complete' }),
+      });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).routineDensity, 'most_complete');
+
+      const getAfter = await fetch(
+        `http://127.0.0.1:${port}/road-alerts/preferences?email=${TEST_EMAIL}&serviceKey=${serviceKey}`
+      );
+      assert.equal((await getAfter.json()).routineDensity, 'most_complete');
+    },
+    { seedStreets: false }
+  ));
+
+test('POST /road-alerts/preferences rejects an unrecognized routineDensity value', () =>
+  withTestServer(
+    async ({ port, usersDb }) => {
+      const serviceKey = await registerTestAccount(usersDb);
+
+      const response = await fetch(`http://127.0.0.1:${port}/road-alerts/preferences`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: TEST_EMAIL, serviceKey, routineDensity: 'extreme' }),
+      });
+      assert.equal(response.status, 400);
+    },
+    { seedStreets: false }
+  ));
+
+test('POST /road-alerts/preferences updates digestOptIn and routineDensity independently', () =>
+  withTestServer(
+    async ({ port, usersDb }) => {
+      const serviceKey = await registerTestAccount(usersDb);
+
+      await fetch(`http://127.0.0.1:${port}/road-alerts/preferences`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: TEST_EMAIL, serviceKey, routineDensity: 'minimal' }),
+      });
+      const response = await fetch(`http://127.0.0.1:${port}/road-alerts/preferences`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: TEST_EMAIL, serviceKey, digestOptIn: true }),
+      });
+      const body = await response.json();
+      assert.equal(body.digestOptIn, true, 'updating digestOptIn should not require routineDensity');
+      assert.equal(body.routineDensity, 'minimal', 'routineDensity set earlier should be unaffected');
     },
     { seedStreets: false }
   ));
