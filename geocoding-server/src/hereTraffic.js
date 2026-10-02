@@ -136,10 +136,19 @@ function normalizeHereIncident(raw) {
 
   normalized.severity = mapHereSeverity(details);
   normalized.hazardCategory = categorizeHereIncident(details);
+  // HERE's own summary ("Closed", "Closed due to road construction") never
+  // mentions a road name -- brief now always says *where*, mirroring
+  // roadSignals.js's New England 511 buildSpeech, instead of a bare
+  // summary with no location at all. average/deep prefer the fuller native
+  // description (commonly "At {roadway} - {detail}", already location-
+  // bearing) when HERE provides one.
+  const summary = details.summary?.value || details.typeDescription?.value || 'Traffic incident';
+  const roadwayPhrase = roadway ? `on ${roadway}` : 'nearby';
+  const fullDescription = details.description?.value || null;
   normalized.speech = {
-    brief: details.summary?.value || details.typeDescription?.value || 'Traffic incident nearby.',
-    average: details.description?.value || details.summary?.value || 'Traffic incident nearby.',
-    deep: details.description?.value || details.summary?.value || 'Traffic incident nearby.',
+    brief: `${summary} ${roadwayPhrase}.`,
+    average: fullDescription || `${summary} ${roadwayPhrase}.`,
+    deep: fullDescription || `${summary} ${roadwayPhrase}.`,
   };
 
   return normalized;
