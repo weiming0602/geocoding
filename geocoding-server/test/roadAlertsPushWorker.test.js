@@ -59,9 +59,10 @@ test('runPushCheckOnce sends a push for a serious hazard matched to an active dr
       {
         id: 'signal-1',
         severity: 'serious',
+        roadway: 'I-295',
         latitude: 43.668, // ~1km along the path north -- inside the corridor
         longitude: -70.2568,
-        speech: { brief: 'Serious hazard ahead' },
+        speech: { brief: 'Serious hazard ahead', average: 'Serious hazard ahead, right lane closed' },
       },
     ],
     networks: [],
@@ -74,6 +75,9 @@ test('runPushCheckOnce sends a push for a serious hazard matched to an active dr
 
   assert.equal(sent.length, 1);
   assert.equal(sent[0].subscription.endpoint, 'https://push.example/abc');
+  const payload = JSON.parse(sent[0].payload);
+  assert.equal(payload.title, 'Serious road alert on I-295');
+  assert.equal(payload.body, 'Serious hazard ahead, right lane closed');
   assert.equal(await hasAlreadySentPush(pool, account.id, 'signal-1'), true);
   await pool.close();
 });
@@ -335,6 +339,79 @@ test('runPushCheckOnce deletes a stale (>10 minute) live-position row and clears
   const { rows } = await pool.query('SELECT * FROM road_alerts_live_positions WHERE account_id = $1', [account.id]);
   assert.equal(rows.length, 0);
   assert.equal(await hasAlreadySentPush(pool, account.id, 'signal-1'), false);
+  await pool.close();
+});
+
+test('runPushCheckOnce sends a push for a hazard straight ahead of the driver, with no weighted-point route match at all', async () => {
+  const pool = await makeUsersDb();
+  await setUp(pool);
+  const account = await registerAccount(pool, 'driver@example.com');
+  await saveSubscription(pool, account.id, { endpoint: 'https://push.example/abc', p256dh: 'k', auth: 'a' });
+  // Deliberately no recordWeightedPointPing calls -- this driver has zero
+  // qualified routine points, so findAlertsForWeightedPoints alone would
+  // never match anything no matter where the hazard is.
+  await upsertLivePosition(pool, account.id, { latitude: 43.6591, longitude: -70.2568, heading: 0 }); // facing due north
+
+  const sent = [];
+  const fakeWebPush = { sendNotification: async (subscription, payload) => sent.push({ subscription, payload }) };
+  const fakeGetRoadSignals = async () => ({
+    signals: [{ id: 'signal-1', severity: 'serious', latitude: 43.668, longitude: -70.2568, speech: { brief: 'x' } }], // ~1km due north, i.e. straight ahead
+    networks: [],
+    partial: false,
+    failedNetworks: [],
+    generatedAt: new Date().toISOString(),
+  });
+
+  await runPushCheckOnce(pool, { getRoadSignals: fakeGetRoadSignals, webPush: fakeWebPush });
+
+  assert.equal(sent.length, 1);
+  assert.equal(await hasAlreadySentPush(pool, account.id, 'signal-1'), true);
+  await pool.close();
+});
+
+test('runPushCheckOnce does not send for a hazard behind the driver with no route match', async () => {
+  const pool = await makeUsersDb();
+  await setUp(pool);
+  const account = await registerAccount(pool, 'driver@example.com');
+  await saveSubscription(pool, account.id, { endpoint: 'https://push.example/abc', p256dh: 'k', auth: 'a' });
+  await upsertLivePosition(pool, account.id, { latitude: 43.6591, longitude: -70.2568, heading: 180 }); // facing due south
+
+  const sent = [];
+  const fakeWebPush = { sendNotification: async (subscription, payload) => sent.push({ subscription, payload }) };
+  const fakeGetRoadSignals = async () => ({
+    signals: [{ id: 'signal-1', severity: 'serious', latitude: 43.668, longitude: -70.2568, speech: { brief: 'x' } }], // due north -- behind a driver facing south
+    networks: [],
+    partial: false,
+    failedNetworks: [],
+    generatedAt: new Date().toISOString(),
+  });
+
+  await runPushCheckOnce(pool, { getRoadSignals: fakeGetRoadSignals, webPush: fakeWebPush });
+
+  assert.equal(sent.length, 0);
+  await pool.close();
+});
+
+test('runPushCheckOnce treats a null heading as "assume ahead" for the fallback, same as the route path', async () => {
+  const pool = await makeUsersDb();
+  await setUp(pool);
+  const account = await registerAccount(pool, 'driver@example.com');
+  await saveSubscription(pool, account.id, { endpoint: 'https://push.example/abc', p256dh: 'k', auth: 'a' });
+  await upsertLivePosition(pool, account.id, { latitude: 43.6591, longitude: -70.2568, heading: null });
+
+  const sent = [];
+  const fakeWebPush = { sendNotification: async (subscription, payload) => sent.push({ subscription, payload }) };
+  const fakeGetRoadSignals = async () => ({
+    signals: [{ id: 'signal-1', severity: 'serious', latitude: 43.668, longitude: -70.2568, speech: { brief: 'x' } }],
+    networks: [],
+    partial: false,
+    failedNetworks: [],
+    generatedAt: new Date().toISOString(),
+  });
+
+  await runPushCheckOnce(pool, { getRoadSignals: fakeGetRoadSignals, webPush: fakeWebPush });
+
+  assert.equal(sent.length, 1);
   await pool.close();
 });
 

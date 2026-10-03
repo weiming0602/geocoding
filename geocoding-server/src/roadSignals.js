@@ -121,7 +121,11 @@ function buildSpeech(normalized) {
   const where = normalized.roadway ? `on ${normalized.roadway}` : 'nearby';
   const brief = `${what} ${where}.`;
 
-  const lane = normalized.affectedLanes ? `, ${normalized.affectedLanes}` : '';
+  // affectedLanes is the raw XML-parsed object (e.g. {"@_lane1": "true"}) --
+  // affectedLanesDetail is the already-formatted human string (see
+  // formatLaneDetail below). Using the former here used to stringify to a
+  // literal "[object Object]".
+  const lane = normalized.affectedLanesDetail ? `, ${normalized.affectedLanesDetail}` : '';
   const dir = normalized.direction ? `, ${normalized.direction} direction` : '';
   const average = `${what} ${where}${lane}${dir}.`;
 

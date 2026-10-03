@@ -41,6 +41,7 @@ import { buildGoogleMapsDirectionsUrl } from '../../../shared/googleMapsDirectio
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
 import PageHeader from '../components/PageHeader';
 import RoadAlertsRegistration from '../components/RoadAlertsRegistration';
+import RoadAlertsSandboxMap, { type SandboxPoint } from '../components/RoadAlertsSandboxMap';
 import RoadAlertsTabs from '../components/RoadAlertsTabs';
 import RoadRerouteMap, { ROUTE_COLORS } from '../components/RoadRerouteMap';
 import {
@@ -194,6 +195,13 @@ export default function RoadAlerts() {
   // below highlight exactly which card triggered the alert the driver just
   // heard, rather than making them scan the whole list to find it.
   const [alertedSignalId, setAlertedSignalId] = useState<string | null>(null);
+  // Which alert's card was clicked -- drives the map's focusPoint below
+  // (and the reverse: clicking a map marker drives this and scrolls the
+  // matching card into view). Same pattern as RoadAlertsHomeBoard.tsx's
+  // own selectedSignalId/RoadAlertsSandboxMap pairing.
+  const [selectedSignalId, setSelectedSignalId] = useState<string | null>(null);
+  const cardRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const mapContainerRef = useRef<HTMLDivElement>(null);
   // Spoken alerts default to the shortest form -- something you hear
   // while approaching a hazard should be as small as possible.
   const [detailLevel, setDetailLevel] = useState<DetailLevel>('brief');
@@ -768,6 +776,19 @@ export default function RoadAlerts() {
     setManualHeading(heading != null ? String(heading) : '');
     setSettingsOpen(true);
     runManualCheck(latitude, longitude, heading);
+
+    // Also post this as a one-time live position, unlike handleManualCheck
+    // above (and unlike onPosition's own GPS-driven polling, which only
+    // posts once pushSubscribedRef confirms a real subscription -- see its
+    // own comment). Raising Alarm is specifically a test of the background
+    // push path end to end: without this, the push worker (which only ever
+    // looks at road_alerts_live_positions) would have nothing to evaluate
+    // for up to 10 minutes, until a real drive happened to report a fix.
+    // Best-effort, same as every other position/ping call in this file --
+    // a failure here shouldn't block the in-tab chime/list check above.
+    postRoadAlertsLivePosition({ email: account.email, serviceKey: account.serviceKey, latitude, longitude, heading }).catch(
+      () => {}
+    );
   }, [pendingAlarmTest, account, runManualCheck]);
 
   const handleListenForSaveCommand = useCallback(
@@ -1111,6 +1132,41 @@ export default function RoadAlerts() {
     };
   }, []);
 
+  const mapPoints = useMemo<SandboxPoint[]>(
+    () =>
+      signals
+        .filter((s): s is RoadSignal & { latitude: number; longitude: number } =>
+          typeof s.latitude === 'number' && typeof s.longitude === 'number'
+        )
+        .map((s) => ({
+          id: s.id,
+          latitude: s.latitude,
+          longitude: s.longitude,
+          color: '#a4402a',
+          label: `${SEVERITY_LABELS[s.severity]} -- ${s.roadway ?? 'Unknown road'}`,
+        })),
+    [signals]
+  );
+
+  const selectedSignal = signals.find((s) => s.id === selectedSignalId) ?? null;
+  const focusPoint =
+    selectedSignal && typeof selectedSignal.latitude === 'number' && typeof selectedSignal.longitude === 'number'
+      ? { latitude: selectedSignal.latitude, longitude: selectedSignal.longitude }
+      : null;
+
+  const handleSelectSignal = (id: string) => {
+    setSelectedSignalId(id);
+    mapContainerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
+  // The reverse direction: clicking a map marker selects it (same focus
+  // behavior) and scrolls its card into view, mirroring
+  // RoadAlertsHomeBoard.tsx's own handleMarkerClick exactly.
+  const handleMarkerClick = (id: string) => {
+    setSelectedSignalId(id);
+    cardRefs.current[id]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  };
+
   if (account === null) {
     return (
       <div>
@@ -1347,6 +1403,17 @@ export default function RoadAlerts() {
             {signals.length} alert{signals.length === 1 ? '' : 's'} within {metersLabel(RADIUS_METERS)}
           </h5>
 
+          {mapPoints.length > 0 && (
+            <div ref={mapContainerRef} style={{ marginBottom: 'var(--space-4)' }}>
+              <RoadAlertsSandboxMap
+                points={mapPoints}
+                driverPosition={position}
+                focusPoint={focusPoint}
+                onPointClick={handleMarkerClick}
+              />
+            </div>
+          )}
+
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)' }}>
         {signals.map((signal, index) => {
           const onRoute = onRouteIds.has(signal.id);
@@ -1371,14 +1438,22 @@ export default function RoadAlerts() {
           const topicState = topicBySignalId[signal.id];
 
           const justAlerted = signal.id === alertedSignalId;
+          const selected = signal.id === selectedSignalId;
+          const hasCoordinates = typeof signal.latitude === 'number' && typeof signal.longitude === 'number';
 
           return (
             <div
               key={signal.id}
+              ref={(el) => {
+                cardRefs.current[signal.id] = el;
+              }}
               className="card elev-sm"
+              onClick={hasCoordinates ? () => handleSelectSignal(signal.id) : undefined}
               style={{
+                cursor: hasCoordinates ? 'pointer' : undefined,
                 ...(index === 0 ? { background: 'var(--color-accent-100)' } : undefined),
                 ...(justAlerted ? { border: '2px solid var(--color-accent-600)' } : undefined),
+                ...(selected ? { outline: '2px solid var(--color-accent-500)' } : undefined),
               }}
             >
               <div
