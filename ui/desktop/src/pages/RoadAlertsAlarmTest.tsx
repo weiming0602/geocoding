@@ -49,11 +49,15 @@ export default function RoadAlertsAlarmTest() {
       <PageHeader icon="roadAlerts">Raising Alarm</PageHeader>
       <RoadAlertsTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
-        Step 1 of debugging why alarms aren't reliably firing: confirms the chime sound and the
-        alert list both work. This grabs your real current location, then runs the exact same
-        hazard check the Road Alerts page's own "Test a location manually" card does -- same
-        fetch, same matching, same chime -- against whatever real hazards are actually near you
-        right now, just triggered with one click instead of typing coordinates by hand.
+        Debugging aid for "alarms aren't reliably firing": confirms the chime sound, the alert
+        list, and a real Notification Center push all work. This grabs your real current
+        location, then runs the exact same hazard check the Road Alerts page's own "Test a
+        location manually" card does -- same fetch, same matching, same chime -- against whatever
+        real hazards are actually near you right now, just triggered with one click instead of
+        typing coordinates by hand. It also reports this as a one-time live position, so the
+        background push worker has something to evaluate on its next ~60s check -- if a
+        serious/need-to-know hazard is ahead of you (or on the way to one of your routine
+        destinations), expect a push even with the app fully closed, not just the in-tab chime.
       </p>
 
       <div className="card elev-sm" style={{ maxWidth: 480 }}>

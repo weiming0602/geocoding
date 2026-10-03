@@ -218,7 +218,10 @@ test('buildSpeech produces non-empty brief/average/deep, with deep at least as l
   const normalized = {
     roadway: 'Stillwater Avenue',
     direction: 'Northbound',
-    affectedLanes: 'Right lane closed',
+    // affectedLanes is the raw XML-parsed object real incidents actually
+    // have (see normalizeIncident/parseIncidentsXml) -- a bare string here
+    // would mask the real "[object Object]" bug this is meant to catch.
+    affectedLanes: { '@_lane1': 'true', '@_lane2': 'true' },
     affectedLanesDetail: 'Right lane closed between mile 12 and 13',
     weightRestriction: '30 Ton',
     description: 'Bridge posted to 30 Ton',
@@ -230,6 +233,10 @@ test('buildSpeech produces non-empty brief/average/deep, with deep at least as l
   assert.ok(speech.deep.length > 0);
   assert.ok(speech.deep.length >= speech.brief.length);
   assert.match(speech.brief, /Weight Restriction on Stillwater Avenue/);
+  // average must use the formatted lane-detail string, not the raw
+  // affectedLanes object stringified to "[object Object]".
+  assert.ok(speech.average.includes('Right lane closed between mile 12 and 13'));
+  assert.ok(!speech.average.includes('[object Object]'));
 });
 
 test('buildSpeech falls back to average when no long-form fields are present', () => {

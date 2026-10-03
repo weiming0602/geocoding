@@ -185,7 +185,9 @@ test('normalizeHereIncident maps a real construction incident to the RoadSignal 
   assert.equal(normalized.lastUpdatedAt, '2026-09-03T15:32:50Z');
   assert.equal(normalized.severity, 'proximity');
   assert.equal(normalized.hazardCategory, 'construction');
-  assert.equal(normalized.speech.brief, 'Construction work');
+  assert.equal(normalized.speech.brief, 'Construction work on W Mockingbird Ln.');
+  assert.equal(normalized.speech.average, 'At W Mockingbird Ln - Construction work');
+  assert.equal(normalized.speech.deep, 'At W Mockingbird Ln - Construction work');
   assert.equal(normalized.raw511EventType, 'Road construction');
   assert.equal(normalized.raw511Severity, null);
   assert.equal(normalized.status, null);
@@ -207,6 +209,11 @@ test('normalizeHereIncident maps a real road closure incident to severity seriou
   assert.equal(normalized.hazardCategory, 'closure');
   assert.equal(normalized.latitude, 32.90477);
   assert.equal(normalized.longitude, -96.68286);
+  // No "At X - Y" pattern in this incident's description (just "Closed"),
+  // so no roadway was extracted -- brief falls back to "nearby" rather
+  // than silently omitting location context altogether.
+  assert.equal(normalized.speech.brief, 'Closed nearby.');
+  assert.equal(normalized.speech.average, 'Closed');
 });
 
 test('normalizeHereIncident returns null latitude/longitude when there is no shape data', () => {
