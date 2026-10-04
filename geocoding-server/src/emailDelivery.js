@@ -248,6 +248,42 @@ async function sendTransactionsDigestEmail(transactions) {
   });
 }
 
+/**
+ * Notifies the owner (TRANSACTIONS_NOTIFY_EMAIL, same recipient as
+ * sendTransactionsDigestEmail -- this is the same "tell me about account
+ * activity" channel, not a separate one) immediately when a real,
+ * authenticated batch geocode run spends an account's quota. Never
+ * called for the unauthenticated smoke-test path
+ * ALLOW_TEST_EMPTY_SERVICE_KEY enables (see server.js's call sites) --
+ * that path never touches quota at all, so there'd be nothing real to
+ * report. Best-effort, same stub-when-unconfigured convention as every
+ * other notification here; the batch response itself has already
+ * succeeded by the time this is called, so a failed send here is only
+ * logged, never surfaced to the caller.
+ */
+async function sendBatchRunNotification({ email, addressCount, successCount, source }) {
+  const failedCount = addressCount - successCount;
+  const text =
+    `${email} ran a batch geocode (${source}): ${addressCount.toLocaleString()} address${addressCount === 1 ? '' : 'es'}, ` +
+    `${successCount.toLocaleString()} succeeded${failedCount > 0 ? `, ${failedCount.toLocaleString()} failed` : ''}.\n`;
+
+  if (!isEmailConfigured() || !process.env.TRANSACTIONS_NOTIFY_EMAIL) {
+    console.log('[emailDelivery stub] would notify owner of a batch geocode run', {
+      email,
+      addressCount,
+      successCount,
+      source,
+    });
+    return { delivered: false, stubbed: true };
+  }
+
+  return sendPlainTextEmail({
+    to: process.env.TRANSACTIONS_NOTIFY_EMAIL,
+    subject: `Batch geocode run: ${addressCount.toLocaleString()} addresses by ${email}`,
+    text,
+  });
+}
+
 module.exports = {
   sendResultsEmail,
   sendServiceKeyEmail,
@@ -256,4 +292,5 @@ module.exports = {
   sendRoadAlertsDigestEmail,
   sendFeedbackNotification,
   sendTransactionsDigestEmail,
+  sendBatchRunNotification,
 };

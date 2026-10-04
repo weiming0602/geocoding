@@ -6,6 +6,7 @@ const {
   sendRoadAlertEmail,
   sendFeedbackNotification,
   sendTransactionsDigestEmail,
+  sendBatchRunNotification,
 } = require('../src/emailDelivery');
 
 // sendServiceKeyEmail only calls Resend's API when both env vars are
@@ -261,6 +262,74 @@ test(
           created_at: new Date().toISOString(),
         },
       ]);
+
+      assert.deepEqual(result, { delivered: false, stubbed: true });
+      assert.equal(fetchMock.mock.callCount(), 0);
+    } finally {
+      if (savedNotifyEmail !== undefined) process.env.TRANSACTIONS_NOTIFY_EMAIL = savedNotifyEmail;
+    }
+  })
+);
+
+test(
+  'sendBatchRunNotification sends to TRANSACTIONS_NOTIFY_EMAIL when configured, including failure count',
+  withResendConfigured({ TRANSACTIONS_NOTIFY_EMAIL: 'owner@example.com' }, async (t) => {
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 200 }));
+
+    const result = await sendBatchRunNotification({
+      email: 'alice@example.com',
+      addressCount: 100,
+      successCount: 97,
+      source: 'batch/download',
+    });
+
+    assert.deepEqual(result, { delivered: true, stubbed: false });
+    assert.equal(fetchMock.mock.callCount(), 1);
+
+    const [, options] = fetchMock.mock.calls[0].arguments;
+    const body = JSON.parse(options.body);
+    assert.deepEqual(body.to, ['owner@example.com']);
+    assert.match(body.text, /alice@example\.com/);
+    assert.match(body.text, /100 addresses/);
+    assert.match(body.text, /97 succeeded/);
+    assert.match(body.text, /3 failed/);
+    assert.match(body.subject, /100 addresses by alice@example\.com/);
+  })
+);
+
+test(
+  'sendBatchRunNotification omits the failed count entirely when every address succeeded',
+  withResendConfigured({ TRANSACTIONS_NOTIFY_EMAIL: 'owner@example.com' }, async (t) => {
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 200 }));
+
+    await sendBatchRunNotification({
+      email: 'alice@example.com',
+      addressCount: 1,
+      successCount: 1,
+      source: 'batch',
+    });
+
+    const [, options] = fetchMock.mock.calls[0].arguments;
+    const body = JSON.parse(options.body);
+    assert.match(body.text, /1 address, 1 succeeded\.\n/);
+    assert.doesNotMatch(body.text, /failed/);
+  })
+);
+
+test(
+  'sendBatchRunNotification falls back to the stub when TRANSACTIONS_NOTIFY_EMAIL is missing',
+  withResendConfigured({}, async (t) => {
+    const savedNotifyEmail = process.env.TRANSACTIONS_NOTIFY_EMAIL;
+    delete process.env.TRANSACTIONS_NOTIFY_EMAIL;
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 200 }));
+
+    try {
+      const result = await sendBatchRunNotification({
+        email: 'alice@example.com',
+        addressCount: 10,
+        successCount: 10,
+        source: 'batch/email',
+      });
 
       assert.deepEqual(result, { delivered: false, stubbed: true });
       assert.equal(fetchMock.mock.callCount(), 0);
