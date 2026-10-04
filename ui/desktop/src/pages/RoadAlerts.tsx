@@ -1408,6 +1408,7 @@ export default function RoadAlerts() {
               <RoadAlertsSandboxMap
                 points={mapPoints}
                 driverPosition={position}
+                driverLabel="Your current position"
                 focusPoint={focusPoint}
                 onPointClick={handleMarkerClick}
               />
