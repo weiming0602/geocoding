@@ -536,7 +536,7 @@ export default function RoadAlerts() {
           // visible in the list, but permanently silent -- was the bug.
           if (ahead && shouldAutoSpeak(signal.severity)) {
             spokenIdsRef.current.add(signal.id);
-            if (shouldStronglyAlert(signal.severity)) {
+            if (shouldStronglyAlert(signal.severity, signal.hazardCategory)) {
               setAlertedSignalId(signal.id);
               playAlertChime();
               // Only worth a real OS popup when the driver isn't already
