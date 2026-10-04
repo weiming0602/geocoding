@@ -313,6 +313,42 @@ test('runPushCheckOnce does not send a push for a proximity-severity hazard', as
   await pool.close();
 });
 
+test('runPushCheckOnce does not send a push for a serious-severity congestion hazard', async () => {
+  const pool = await makeUsersDb();
+  await setUp(pool);
+  const account = await registerAccount(pool, 'driver@example.com');
+  await saveSubscription(pool, account.id, { endpoint: 'https://push.example/abc', p256dh: 'k', auth: 'a' });
+  // Deliberately no weighted points -- relies on the ahead-fallback path,
+  // the one a driver stopped at a red light actually hits: the traffic
+  // they're sitting in is often reported as congestion right at their
+  // own position, which should never chime/push regardless of severity.
+  await upsertLivePosition(pool, account.id, { latitude: 43.6591, longitude: -70.2568, heading: 0 });
+
+  const sent = [];
+  const fakeWebPush = { sendNotification: async (subscription, payload) => sent.push({ subscription, payload }) };
+  const fakeGetRoadSignals = async () => ({
+    signals: [
+      {
+        id: 'signal-1',
+        severity: 'serious',
+        hazardCategory: 'congestion',
+        latitude: 43.668,
+        longitude: -70.2568,
+        speech: { brief: 'Heavy traffic' },
+      },
+    ],
+    networks: [],
+    partial: false,
+    failedNetworks: [],
+    generatedAt: new Date().toISOString(),
+  });
+
+  await runPushCheckOnce(pool, { getRoadSignals: fakeGetRoadSignals, webPush: fakeWebPush });
+
+  assert.equal(sent.length, 0);
+  await pool.close();
+});
+
 test('runPushCheckOnce deletes a stale (>10 minute) live-position row and clears its push-sent dedup history', async () => {
   const pool = await makeUsersDb();
   await setUp(pool);

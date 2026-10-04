@@ -21,12 +21,14 @@ import RoadAlertsSandbox from './pages/RoadAlertsSandbox';
 import RoadAlertsTest from './pages/RoadAlertsTest';
 import SiteMap from './pages/SiteMap';
 import TermsOfUse from './pages/TermsOfUse';
+import ServiceWorkerNavigation from './components/ServiceWorkerNavigation';
 import { ImportAddressesStateProvider } from './state/ImportAddressesState';
 import { RecentLookupsProvider } from './state/RecentLookups';
 
 export default function App() {
   return (
     <Router>
+      <ServiceWorkerNavigation />
       <RecentLookupsProvider>
         <ImportAddressesStateProvider>
           <Layout>

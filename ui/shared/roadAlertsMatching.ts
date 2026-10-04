@@ -1,4 +1,4 @@
-import type { Coordinates, RoadSignal, RoadSignalSeverity } from './api/types';
+import type { Coordinates, HazardCategory, RoadSignal, RoadSignalSeverity } from './api/types';
 import { EARTH_RADIUS_METERS, bearingDegrees, haversineDistanceMeters, toRadians } from './geo';
 import type { TimedCoordinates } from './geo';
 
@@ -46,9 +46,17 @@ export type TriggeredAlert = {
  * only) so the server-side push-matching worker (see
  * geocoding-server/src/roadAlertsMatching.js) uses the exact same
  * definition as the client.
+ *
+ * `congestion` is excluded regardless of severity -- a traffic jam isn't
+ * a one-time, avoidable-by-rerouting event the way a closure/accident/
+ * hazmat spill is, and it's frequently the very queue the driver is
+ * already sitting in (e.g. stopped at a red light), which the chime was
+ * confusingly firing for -- the driver is already experiencing it, not
+ * approaching something new. Still shown in the list and spoken (if
+ * auto-speak otherwise applies), just without the chime/push interrupt.
  */
-export function shouldStronglyAlert(severity: RoadSignalSeverity): boolean {
-  return severity === 'serious' || severity === 'need_to_know';
+export function shouldStronglyAlert(severity: RoadSignalSeverity, hazardCategory?: HazardCategory): boolean {
+  return (severity === 'serious' || severity === 'need_to_know') && hazardCategory !== 'congestion';
 }
 
 /**

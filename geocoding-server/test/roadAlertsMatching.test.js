@@ -52,6 +52,16 @@ test('shouldStronglyAlert is true only for serious and need_to_know', () => {
   assert.equal(shouldStronglyAlert('fun_to_know'), false);
 });
 
+test('shouldStronglyAlert is false for congestion regardless of severity', () => {
+  assert.equal(shouldStronglyAlert('serious', 'congestion'), false);
+  assert.equal(shouldStronglyAlert('need_to_know', 'congestion'), false);
+});
+
+test('shouldStronglyAlert is still true for a non-congestion category at a strong severity', () => {
+  assert.equal(shouldStronglyAlert('serious', 'accident'), true);
+  assert.equal(shouldStronglyAlert('need_to_know', 'closure'), true);
+});
+
 test('isAhead treats null/negative heading as "assume ahead", mirroring ui/shared/geo.ts', () => {
   assert.equal(isAhead(null, 180), true);
   assert.equal(isAhead(undefined, 45), true);
