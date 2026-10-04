@@ -123,9 +123,9 @@ function findAlertsForWeightedPoints(user, weightedPoints, signals, options = {}
   return [...triggeredBySignalId.values()];
 }
 
-/** Mirrors ui/shared/roadAlertsMatching.ts's shouldStronglyAlert exactly -- see the module comment above. */
-function shouldStronglyAlert(severity) {
-  return severity === 'serious' || severity === 'need_to_know';
+/** Mirrors ui/shared/roadAlertsMatching.ts's shouldStronglyAlert exactly -- see the module comment above, including why `congestion` is excluded regardless of severity. */
+function shouldStronglyAlert(severity, hazardCategory) {
+  return (severity === 'serious' || severity === 'need_to_know') && hazardCategory !== 'congestion';
 }
 
 /** Mirrors ui/shared/geo.ts's isAhead exactly -- see the module comment above. */

@@ -26,11 +26,20 @@ export type SandboxPoint = {
 type Props = {
   points: SandboxPoint[];
   driverPosition?: { latitude: number; longitude: number } | null;
+  // Hover label for the driver marker -- defaults to the sandbox's own
+  // "Simulated driver position" wording; a caller showing a real GPS fix
+  // (e.g. RoadAlerts.tsx) should override this, since that copy would
+  // otherwise be actively misleading there.
+  driverLabel?: string;
   onMapClick?: (coordinates: { latitude: number; longitude: number }) => void;
-  // Flies the camera to this coordinate whenever it changes -- e.g. a
-  // caller's own list-item click driving the map to that item's dot,
-  // like RoadAlertsHomeBoard.tsx's hazard list. Distinct from the
-  // initial fit-to-all-points behavior below, which only ever fires once.
+  // Flies/fits the camera to this coordinate whenever it changes -- e.g. a
+  // caller's own list-item click driving the map to that item's dot, like
+  // RoadAlertsHomeBoard.tsx's hazard list. Distinct from the initial
+  // fit-to-all-points behavior below, which only ever fires once. When
+  // driverPosition is also known at that moment, fits bounds to include
+  // both points instead of flying to focusPoint alone -- otherwise a
+  // close-in zoom can crop the driver's own position out of frame
+  // entirely once they're any real distance from the focused point.
   focusPoint?: { latitude: number; longitude: number } | null;
   // The reverse direction of focusPoint -- clicking a point's own marker
   // notifies the caller (by that point's `id`) instead of the caller
@@ -43,7 +52,14 @@ type Props = {
 // (you're placing them by hand), so the per-point DOM cost that layer
 // exists to avoid never actually applies here, and per-point color/hover
 // label is far simpler to express this way.
-export default function RoadAlertsSandboxMap({ points, driverPosition, onMapClick, focusPoint, onPointClick }: Props) {
+export default function RoadAlertsSandboxMap({
+  points,
+  driverPosition,
+  driverLabel = 'Simulated driver position',
+  onMapClick,
+  focusPoint,
+  onPointClick,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const [ready, setReady] = useState(false);
@@ -54,6 +70,11 @@ export default function RoadAlertsSandboxMap({ points, driverPosition, onMapClic
   const onPointClickRef = useRef(onPointClick);
   onPointClickRef.current = onPointClick;
   const hasFitOnceRef = useRef(false);
+  // Read, not reacted to, by the focusPoint effect below -- a click should
+  // fit both points as of that moment, not re-fit (disruptively, mid-
+  // drive) every time the live position ticks afterward.
+  const driverPositionRef = useRef(driverPosition);
+  driverPositionRef.current = driverPosition;
 
   useEffect(() => {
     const container = containerRef.current;
@@ -145,7 +166,7 @@ export default function RoadAlertsSandboxMap({ points, driverPosition, onMapClic
       driverMarkerRef.current = new Marker({ element: el })
         .setLngLat([driverPosition.longitude, driverPosition.latitude])
         .addTo(map);
-      attachHoverLabel(driverMarkerRef.current, map, 'Simulated driver position');
+      attachHoverLabel(driverMarkerRef.current, map, driverLabel);
     } else {
       driverMarkerRef.current.setLngLat([driverPosition.longitude, driverPosition.latitude]);
     }
@@ -154,7 +175,16 @@ export default function RoadAlertsSandboxMap({ points, driverPosition, onMapClic
   useEffect(() => {
     const map = mapRef.current;
     if (!map || !ready || !focusPoint) return;
-    map.flyTo({ center: [focusPoint.longitude, focusPoint.latitude], zoom: 15, essential: true });
+    const driver = driverPositionRef.current;
+    if (driver) {
+      const bounds = new LngLatBounds(
+        [focusPoint.longitude, focusPoint.latitude],
+        [focusPoint.longitude, focusPoint.latitude]
+      ).extend([driver.longitude, driver.latitude]);
+      map.fitBounds(bounds, { padding: 80, maxZoom: 15 });
+    } else {
+      map.flyTo({ center: [focusPoint.longitude, focusPoint.latitude], zoom: 15, essential: true });
+    }
   }, [focusPoint, ready]);
 
   return (
