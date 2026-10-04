@@ -283,16 +283,36 @@ read-write).
   for one page. The page asks for it once and remembers it in that
   browser's `localStorage`.
 - `TRANSACTIONS_NOTIFY_EMAIL` (optional -- unset = stub) is where the
-  transactions digest script (see `scripts/transactions-digest.js`
-  above) emails a summary of purchases completed since the last digest;
-  uses the same Resend credentials above. Every completed purchase is
-  saved in `geocoding_users`' `transactions` table regardless (see
-  `transactions.js`, written from `POST /billing/purchase` right after
-  `addToTier` grants the quota) -- these rows are financial records and
-  are never deleted, only marked `notified_at` once a digest email for
-  them succeeds. Only a purchase that actually captured via PayPal and
-  granted quota is ever recorded; a failed/abandoned checkout attempt
-  never appears here.
+  owner is told about account activity -- two separate things share this
+  one recipient:
+  1. **Purchases/registrations**: `POST /billing/purchase` now emails
+     this address immediately, right after `addToTier` grants the quota
+     and the purchase is saved in `geocoding_users`' `transactions`
+     table (see `transactions.js`) -- these rows are financial records,
+     never deleted. It's marked `notified_at` right then (reusing
+     `emailDelivery.js`'s `sendTransactionsDigestEmail` for a
+     single-transaction send) -- a delivered real send *or* an
+     unconfigured stub both count as "handled" (same convention as
+     `transactionsDigest.js`'s own digest run below), so only a genuine
+     send failure leaves a row pending. The transactions digest script
+     (`scripts/transactions-digest.js`) still exists as the safety net
+     for exactly that case -- it emails a summary of anything still
+     pending (`notified_at IS NULL`) since the last run, which in normal
+     operation is nothing, since the immediate send above already
+     handled it. Only a purchase that actually captured via PayPal and
+     granted quota is ever recorded; a failed/abandoned checkout attempt
+     never appears here.
+  2. **Batch geocode runs**: all three batch endpoints
+     (`/geocode/batch`, `/geocode/batch/download`, `/geocode/batch/email`)
+     now also email this address immediately after a real, authenticated
+     run actually spends an account's quota (`emailDelivery.js`'s
+     `sendBatchRunNotification`) -- address count, how many succeeded/
+     failed, and which endpoint. Never fired for the unauthenticated
+     smoke-test path `ALLOW_TEST_EMPTY_SERVICE_KEY` enables (no email at
+     all, no quota touched -- nothing real to report), and these runs
+     aren't persisted anywhere the way purchases are -- this is a
+     notify-only, fire-and-forget send with no retry/digest fallback if
+     it fails.
 - `ALLOW_TEST_EMPTY_SERVICE_KEY` (optional, default off) lets all three
   batch endpoints accept an empty `serviceKey` for any known email,
   purely to skip looking one up while testing (see `quota.js`'s

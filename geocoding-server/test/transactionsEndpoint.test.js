@@ -81,7 +81,11 @@ test('POST /billing/purchase records a transaction row', () =>
       assert.equal(rows[0].address_count, 1000);
       assert.equal(rows[0].price_cents, 1500);
       assert.equal(rows[0].tier, 1000);
-      assert.equal(rows[0].notified_at, null);
+      // Immediately notified (and marked as such) right in the purchase
+      // handler now -- the stub still counts as "handled", same
+      // delivered-or-stubbed convention as transactionsDigest.js's own
+      // runDailyTransactionsDigest.
+      assert.notEqual(rows[0].notified_at, null);
     },
     { seedStreets: false }
   ));

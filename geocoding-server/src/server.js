@@ -62,7 +62,12 @@ const {
 } = require('./testRoadSignals');
 const { openUsersDb, getUser, ensureCurrentPeriod, addToTier } = require('./users');
 const { ensureFeedbackTable, submitFeedback } = require('./feedback');
-const { ensureTransactionsTable, recordTransaction, listTransactions } = require('./transactions');
+const {
+  ensureTransactionsTable,
+  recordTransaction,
+  listTransactions,
+  markTransactionsNotified,
+} = require('./transactions');
 const { checkQuota, useQuota } = require('./quota');
 const {
   sendResultsEmail,
@@ -70,6 +75,8 @@ const {
   sendRoadAlertsWelcomeEmail,
   sendRoadAlertEmail,
   sendFeedbackNotification,
+  sendTransactionsDigestEmail,
+  sendBatchRunNotification,
 } = require('./emailDelivery');
 const { findTier } = require('./pricing');
 const { captureOrder } = require('./billing');
@@ -221,6 +228,16 @@ app.post('/geocode/batch', async (req, res) => {
     const results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
     await useQuota(usersDb, email, addresses.length);
 
+    // Only reached once a real account's quota has actually been spent
+    // -- never for the emailProvided-false smoke-test branch above,
+    // which returns before this point.
+    await sendBatchRunNotification({
+      email,
+      addressCount: addresses.length,
+      successCount: results.filter((r) => r.success).length,
+      source: 'batch',
+    });
+
     const current = await ensureCurrentPeriod(usersDb, await getUser(usersDb, email));
     res.json({
       results,
@@ -260,6 +277,12 @@ app.post('/geocode/batch/download', async (req, res) => {
       user = await checkQuota(usersDb, email, serviceKey, addresses.length);
       results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
       await useQuota(usersDb, email, addresses.length);
+      await sendBatchRunNotification({
+        email,
+        addressCount: addresses.length,
+        successCount: results.filter((r) => r.success).length,
+        source: 'batch/download',
+      });
     } else {
       // testMode with no email at all -- a pure smoke test, no
       // account/quota involved.
@@ -316,6 +339,12 @@ app.post('/geocode/batch/email', async (req, res) => {
     ]);
 
     await useQuota(usersDb, email, addresses.length);
+    await sendBatchRunNotification({
+      email,
+      addressCount: addresses.length,
+      successCount: results.filter((r) => r.success).length,
+      source: 'batch/email',
+    });
     const delivery = await sendResultsEmail(email, zipBuffer, { addressCount: addresses.length });
 
     res.setHeader('Content-Type', 'application/zip');
@@ -402,13 +431,28 @@ app.post('/billing/purchase', async (req, res) => {
     // send just below -- a real financial record of this purchase
     // matters more than any downstream step failing, so it's recorded
     // right after the quota grant, before the (best-effort) email send.
-    await recordTransaction(usersDb, {
+    const transactionRow = await recordTransaction(usersDb, {
       email: user.email,
       orderId,
       addressCount: tier.addressCount,
       priceCents: tier.priceCents,
       tier: user.tier,
     });
+
+    // Notifies the owner immediately, same pattern as
+    // sendFeedbackNotification -- not just the periodic
+    // scripts/transactions-digest.js run. Reuses that same send function
+    // (it already handles a single-transaction array correctly) and
+    // marks the row notified the same way transactionsDigest.js's own
+    // runDailyTransactionsDigest does (delivered OR stubbed both count
+    // as "handled" -- only a genuine failure leaves it pending), so that
+    // script's own getUnnotifiedTransactions query normally has nothing
+    // left to do here; it's still the safety net for a transaction whose
+    // immediate send genuinely failed (Resend down, etc.).
+    const ownerNotifyResult = await sendTransactionsDigestEmail([transactionRow]);
+    if (ownerNotifyResult.delivered || ownerNotifyResult.stubbed) {
+      await markTransactionsNotified(usersDb, [transactionRow.id]);
+    }
 
     // The purchase itself has already succeeded (money captured, quota
     // granted) by this point -- an email hiccup shouldn't undo that or
