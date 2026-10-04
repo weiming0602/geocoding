@@ -77,6 +77,16 @@ describe('shouldStronglyAlert', () => {
     expect(shouldStronglyAlert('proximity')).toBe(false);
     expect(shouldStronglyAlert('fun_to_know')).toBe(false);
   });
+
+  test('is false for congestion regardless of severity -- a traffic jam is not a chime-worthy interrupt', () => {
+    expect(shouldStronglyAlert('serious', 'congestion')).toBe(false);
+    expect(shouldStronglyAlert('need_to_know', 'congestion')).toBe(false);
+  });
+
+  test('is still true for a non-congestion category at a strong severity', () => {
+    expect(shouldStronglyAlert('serious', 'accident')).toBe(true);
+    expect(shouldStronglyAlert('need_to_know', 'closure')).toBe(true);
+  });
 });
 
 describe('crossTrackDistanceMeters / alongTrackDistanceMeters', () => {

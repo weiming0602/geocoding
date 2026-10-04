@@ -96,7 +96,7 @@ async function runPushCheckOnce(pool, deps = {}) {
         .map((signal) => ({ signal, matchedPoint: null, distanceAlongPathMeters: null }));
 
       const alerts = [...routeAlerts, ...aheadAlerts];
-      const strongAlerts = alerts.filter((alert) => shouldStronglyAlert(alert.signal.severity));
+      const strongAlerts = alerts.filter((alert) => shouldStronglyAlert(alert.signal.severity, alert.signal.hazardCategory));
 
       for (const alert of strongAlerts) {
         if (await hasAlreadySentPush(pool, position.account_id, alert.signal.id)) continue;

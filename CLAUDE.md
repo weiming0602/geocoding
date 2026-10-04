@@ -79,6 +79,14 @@ read-write).
   `package.json` have no equivalent real `npm test` (see above for
   `geocoding-server`'s actual test command; `ui/mobile` has no test files at
   all yet)
+- Shared code tests: `cd ui/shared && npm test` (vitest; `geo.test.ts`,
+  `roadAlertsMatching.test.ts`, `importAddresses.test.ts` as of this
+  writing) -- **easy to miss**: `ui/desktop`'s own `npm test` only scans
+  `ui/desktop/src/`, so a change to `ui/shared/roadAlertsMatching.ts` (or
+  any other shared file) needs this separate command run explicitly: it
+  is not covered by `ui/desktop`'s `npm test`, `ui/mobile` has no test
+  runner, and neither `cd ui/desktop && npm run build` nor
+  `geocoding-server`'s own test command touch it either.
 - Desktop app build: `cd ui/desktop && npm run build` (`tsc -b && vite build`)
 
 # Code style
