@@ -27,7 +27,8 @@ export default function ApiDocs() {
       <p>
         Every endpoint accepts <code>email</code> and <code>serviceKey</code> as plain fields in the
         JSON request body — not an <code>Authorization</code> header. Get a service key from{' '}
-        <a href="#/pricing">Pricing</a>; it's emailed to you right after purchase and never expires.
+        <a href="#/pricing">Pricing</a>; it's returned directly in the purchase response, and emailed
+        to you too when email delivery is configured server-side. It never expires.
       </p>
       <p>
         <code>/geocode</code> and <code>/reverse-geocode</code> work <strong>without</strong> an
@@ -108,7 +109,7 @@ export default function ApiDocs() {
       <pre style={pre}>
         <code>{`HTTP/1.1 429 Too Many Requests
 {
-  "error": "Rate limit exceeded: unauthenticated requests are limited to 10/minute. You're blocked from further anonymous requests for the rest of today -- sign up for a free account to get a service key for uninterrupted access."
+  "error": "Rate limit exceeded: unauthenticated requests are limited to 10/minute. You're blocked from further anonymous requests for the rest of today -- buy a plan (see the Pricing page) to get a service key for uninterrupted access."
 }`}</code>
       </pre>
       <p className="text-muted" style={{ fontSize: 13 }}>
