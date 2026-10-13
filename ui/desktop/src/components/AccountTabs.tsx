@@ -10,6 +10,7 @@ const TABS = [
   { to: '/plan-quota', label: 'Plan & quota', icon: 'planQuota' as const },
   { to: '/pricing', label: 'Pricing', icon: 'pricing' as const },
   { to: '/progress', label: 'Progress', icon: 'progress' as const },
+  { to: '/api-docs', label: 'API Docs', icon: 'help' as const },
   { to: '/help', label: 'Help', icon: 'help' as const },
 ];
 
