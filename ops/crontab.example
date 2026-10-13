@@ -13,6 +13,11 @@
 # argument to change the retention window.
 0 4 * * 0 cd /home/my_ai/projects/geocoding/geocoding-server && node scripts/cleanup-feedback.js 90 >> /home/my_ai/projects/geocoding/geocoding-server/feedback-cleanup.log 2>&1
 
+# Alternative to geocoding-geocode-rate-limits-cleanup.timer -- deletes
+# geocode_rate_limits rows (one per distinct IP per day) older than 90
+# days, weekly.
+0 4 * * 0 cd /home/my_ai/projects/geocoding/geocoding-server && node scripts/cleanup-geocode-rate-limits.js 90 >> /home/my_ai/projects/geocoding/geocoding-server/geocode-rate-limits-cleanup.log 2>&1
+
 # Alternative to geocoding-backup.timer -- pg_dumps both databases daily
 # at 2am (before the feedback cleanup and TIGER update run, so a backup
 # always reflects state from before either mutates anything that day).
