@@ -51,6 +51,10 @@ read-write).
 - Feedback cleanup (deletes comments older than N days, default 90):
   `cd geocoding-server && node scripts/cleanup-feedback.js [days]` -- see
   `ops/` for the systemd timer/service pair and a crontab alternative.
+- Geocode rate-limit cleanup (deletes `geocode_rate_limits` rows older
+  than N days, default 90): `cd geocoding-server && node
+  scripts/cleanup-geocode-rate-limits.js [days]` -- see `ops/` for the
+  systemd timer/service pair and a crontab alternative.
 - Road Alerts digest (emails each opted-in account the alerts they
   explicitly saved -- voice "save"/"keep"/"email" command -- since the
   last digest, then clears what was sent):
@@ -328,6 +332,18 @@ read-write).
   client-side check that email/serviceKey are non-empty either --
   submitting blank just lets the server's response (success or a clear
   error) decide.
+- `/geocode` and `/reverse-geocode` now accept optional `email`+
+  `serviceKey` (authenticated/quota-metered, same as the batch
+  endpoints) or no credentials at all (free, but rate-limited to 10
+  requests/minute per IP via a `geocode_rate_limits` table in
+  `geocoding_users`, escalating to a day-long block -- see
+  `geocoding-server/src/geocodeRateLimit.js`). The free path fails open
+  (logs and proceeds unmetered) if the rate-limit check itself errors,
+  rather than 500ing a page that never depended on `geocoding_users`
+  before this feature; the authenticated path still 500s on a DB error,
+  same as every other quota-metered endpoint. `app.set('trust proxy',
+  'loopback')` in `server.js` is required for this to key on the real
+  client IP behind nginx rather than the proxy's own loopback address.
 
 # Known gaps (don't assume these are done)
 - `ui/desktop` is deployed to DigitalOcean App Platform as a **Static
