@@ -7,6 +7,7 @@ const {
   sendFeedbackNotification,
   sendTransactionsDigestEmail,
   sendBatchRunNotification,
+  sendRateLimitBlockedNotification,
 } = require('../src/emailDelivery');
 
 // sendServiceKeyEmail only calls Resend's API when both env vars are
@@ -331,6 +332,42 @@ test(
         source: 'batch/email',
       });
 
+      assert.deepEqual(result, { delivered: false, stubbed: true });
+      assert.equal(fetchMock.mock.callCount(), 0);
+    } finally {
+      if (savedNotifyEmail !== undefined) process.env.TRANSACTIONS_NOTIFY_EMAIL = savedNotifyEmail;
+    }
+  })
+);
+
+test(
+  'sendRateLimitBlockedNotification sends to TRANSACTIONS_NOTIFY_EMAIL when configured',
+  withResendConfigured({ TRANSACTIONS_NOTIFY_EMAIL: 'owner@example.com' }, async (t) => {
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 200 }));
+
+    const result = await sendRateLimitBlockedNotification({ ipAddress: '203.0.113.5', totalCount: 11 });
+
+    assert.deepEqual(result, { delivered: true, stubbed: false });
+    assert.equal(fetchMock.mock.callCount(), 1);
+
+    const [, options] = fetchMock.mock.calls[0].arguments;
+    const body = JSON.parse(options.body);
+    assert.deepEqual(body.to, ['owner@example.com']);
+    assert.match(body.text, /203\.0\.113\.5/);
+    assert.match(body.text, /11/);
+    assert.match(body.subject, /203\.0\.113\.5/);
+  })
+);
+
+test(
+  'sendRateLimitBlockedNotification falls back to the stub when TRANSACTIONS_NOTIFY_EMAIL is missing',
+  withResendConfigured({}, async (t) => {
+    const savedNotifyEmail = process.env.TRANSACTIONS_NOTIFY_EMAIL;
+    delete process.env.TRANSACTIONS_NOTIFY_EMAIL;
+    const fetchMock = t.mock.method(globalThis, 'fetch', async () => new Response('{}', { status: 200 }));
+
+    try {
+      const result = await sendRateLimitBlockedNotification({ ipAddress: '203.0.113.5', totalCount: 11 });
       assert.deepEqual(result, { delivered: false, stubbed: true });
       assert.equal(fetchMock.mock.callCount(), 0);
     } finally {

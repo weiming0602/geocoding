@@ -284,6 +284,33 @@ async function sendBatchRunNotification({ email, addressCount, successCount, sou
   });
 }
 
+/**
+ * Notifies the owner (TRANSACTIONS_NOTIFY_EMAIL, same recipient as
+ * every other notification in this file) the moment an IP gets blocked by the
+ * unauthenticated /geocode or /reverse-geocode rate limiter (see
+ * geocodeRateLimit.js) -- fired exactly once per IP per day, right when
+ * blocked_at is first set, never again for that IP's later-rejected
+ * requests that same day. Best-effort, same stub-when-unconfigured
+ * convention as every other send here.
+ */
+async function sendRateLimitBlockedNotification({ ipAddress, totalCount }) {
+  const text =
+    `IP ${ipAddress} was blocked from unauthenticated /geocode and /reverse-geocode ` +
+    `requests for the rest of today, after ${totalCount.toLocaleString()} request${totalCount === 1 ? '' : 's'} ` +
+    `(limit: 10/minute, unauthenticated).\n`;
+
+  if (!isEmailConfigured() || !process.env.TRANSACTIONS_NOTIFY_EMAIL) {
+    console.log('[emailDelivery stub] would notify owner of a rate-limit block', { ipAddress, totalCount });
+    return { delivered: false, stubbed: true };
+  }
+
+  return sendPlainTextEmail({
+    to: process.env.TRANSACTIONS_NOTIFY_EMAIL,
+    subject: `Rate limit block: ${ipAddress}`,
+    text,
+  });
+}
+
 module.exports = {
   sendResultsEmail,
   sendServiceKeyEmail,
@@ -293,4 +320,5 @@ module.exports = {
   sendFeedbackNotification,
   sendTransactionsDigestEmail,
   sendBatchRunNotification,
+  sendRateLimitBlockedNotification,
 };
