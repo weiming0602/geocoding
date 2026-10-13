@@ -40,6 +40,27 @@ test('POST /geocode with no credentials returns 429 on the 11th request in under
     assert.match(body.error, /Rate limit exceeded/);
   }));
 
+test('POST /geocode with no credentials fails open (still succeeds) if the rate-limit check itself errors', () =>
+  withTestServer(async ({ port, usersDb }) => {
+    // Simulate geocoding_users being unavailable (e.g. a connection drop)
+    // for the single query checkRateLimit makes. The free path never
+    // depended on this database before this feature existed, so a
+    // non-RateLimitError here should be logged and swallowed, not turned
+    // into a 500 on the site's own free lookup page.
+    const originalQuery = usersDb.query.bind(usersDb);
+    usersDb.query = () => Promise.reject(new Error('simulated geocoding_users outage'));
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/geocode`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ address: FIXTURE_ADDRESS }),
+      });
+      assert.equal(response.status, 200);
+    } finally {
+      usersDb.query = originalQuery;
+    }
+  }));
+
 test('POST /geocode with valid credentials draws from quota and is never rate-limited', () =>
   withTestServer(async ({ port, usersDb }) => {
     const user = await upsertUser(usersDb, 'alice@example.com', 1000);

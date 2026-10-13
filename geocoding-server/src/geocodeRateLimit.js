@@ -38,7 +38,7 @@ const WINDOW_LIMIT = 10;
 async function checkRateLimit(pool, ipAddress) {
   const { rows } = await pool.query(
     `INSERT INTO geocode_rate_limits (ip_address, date, window_started_at, window_count, total_count)
-     VALUES ($1, CURRENT_DATE, now(), 1, 1)
+     VALUES ($1, (now() AT TIME ZONE 'UTC')::date, now(), 1, 1)
      ON CONFLICT (ip_address, date) DO UPDATE SET
        window_count = CASE
          WHEN geocode_rate_limits.window_started_at <= now() - interval '1 minute' THEN 1
@@ -57,27 +57,36 @@ async function checkRateLimit(pool, ipAddress) {
   const message =
     'Rate limit exceeded: unauthenticated requests are limited to 10/minute. ' +
     "You're blocked from further anonymous requests for the rest of today -- " +
-    'sign up for a free account to get a service key for uninterrupted access.';
+    'buy a plan (see the Pricing page) to get a service key for uninterrupted access.';
 
   if (row.blocked_at) {
     throw new RateLimitError(message);
   }
 
   if (row.window_count > WINDOW_LIMIT) {
-    await pool.query(`UPDATE geocode_rate_limits SET blocked_at = now() WHERE ip_address = $1 AND date = $2`, [
-      ipAddress,
-      row.date,
-    ]);
-    await sendRateLimitBlockedNotification({ ipAddress, totalCount: row.total_count });
+    // Recompute the UTC date directly in SQL rather than passing row.date
+    // (a JS Date) back -- no round-trip to desync, and conditional on
+    // blocked_at IS NULL so two concurrent requests racing past the
+    // window_count check above can't both "win" the block-and-notify
+    // below (only the one whose UPDATE actually changes a row notifies).
+    const { rowCount } = await pool.query(
+      `UPDATE geocode_rate_limits SET blocked_at = now()
+       WHERE ip_address = $1 AND date = (now() AT TIME ZONE 'UTC')::date AND blocked_at IS NULL`,
+      [ipAddress]
+    );
+    if (rowCount === 1) {
+      await sendRateLimitBlockedNotification({ ipAddress, totalCount: row.total_count });
+    }
     throw new RateLimitError(message);
   }
 }
 
 /** Same `>N days` pattern as feedback.js's deleteOldFeedback, dated off `date` (not created_at -- this table has no created_at column). */
 async function deleteOldRateLimits(pool, days) {
-  const { rowCount } = await pool.query('DELETE FROM geocode_rate_limits WHERE date < CURRENT_DATE - $1::integer', [
-    days,
-  ]);
+  const { rowCount } = await pool.query(
+    `DELETE FROM geocode_rate_limits WHERE date < (now() AT TIME ZONE 'UTC')::date - $1::integer`,
+    [days]
+  );
   return rowCount;
 }
 

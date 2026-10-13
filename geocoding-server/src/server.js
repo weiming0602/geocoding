@@ -197,11 +197,21 @@ app.post('/geocode', async (req, res) => {
   const serviceKey = req.body && req.body.serviceKey;
   const authenticated = typeof email === 'string' && email.trim().length > 0;
   try {
-    const usersDb = await usersDbPromise;
+    let usersDb;
     if (authenticated) {
+      usersDb = await usersDbPromise;
       await checkQuota(usersDb, email, serviceKey, 1);
     } else {
-      await checkRateLimit(usersDb, req.ip);
+      // This path never touched geocoding_users before this feature existed --
+      // an outage there shouldn't take down the site's own free lookup pages.
+      // Fail open on anything that isn't a deliberate RateLimitError.
+      try {
+        usersDb = await usersDbPromise;
+        await checkRateLimit(usersDb, req.ip);
+      } catch (err) {
+        if (err instanceof RateLimitError) throw err;
+        console.error('rate limit check failed, failing open for this request', err);
+      }
     }
 
     const result = await geocode(db, address, { offsetFeet: OFFSET_FEET });
@@ -607,11 +617,21 @@ app.post('/reverse-geocode', async (req, res) => {
   const serviceKey = req.body && req.body.serviceKey;
   const authenticated = typeof email === 'string' && email.trim().length > 0;
   try {
-    const usersDb = await usersDbPromise;
+    let usersDb;
     if (authenticated) {
+      usersDb = await usersDbPromise;
       await checkQuota(usersDb, email, serviceKey, 1);
     } else {
-      await checkRateLimit(usersDb, req.ip);
+      // This path never touched geocoding_users before this feature existed --
+      // an outage there shouldn't take down the site's own free lookup pages.
+      // Fail open on anything that isn't a deliberate RateLimitError.
+      try {
+        usersDb = await usersDbPromise;
+        await checkRateLimit(usersDb, req.ip);
+      } catch (err) {
+        if (err instanceof RateLimitError) throw err;
+        console.error('rate limit check failed, failing open for this request', err);
+      }
     }
 
     const result = await reverseGeocode(db, latitude, longitude);
