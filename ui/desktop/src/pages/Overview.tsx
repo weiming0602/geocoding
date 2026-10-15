@@ -160,7 +160,9 @@ export default function Overview() {
       <h2 style={{ marginBottom: 'var(--space-1)' }}>What would you like to do?</h2>
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         Everything below works without an account -- a plan is only needed for batch geocoding
-        past the free tier.
+        past the free tier. Single lookups without an account are limited to a modest rate to
+        keep things fair for everyone; see the <a href="#/api-docs">API docs</a> if you want to
+        call these endpoints directly from your own code.
       </p>
       <div
         style={{

@@ -1,6 +1,7 @@
 import { HashRouter as Router, Route, Routes } from 'react-router';
 
 import Layout from './components/Layout';
+import ApiDocs from './pages/ApiDocs';
 import Batch from './pages/Batch';
 import Checkout from './pages/Checkout';
 import FindPlaces from './pages/FindPlaces';
@@ -52,6 +53,7 @@ export default function App() {
               <Route path="/pricing" element={<Pricing />} />
               <Route path="/checkout" element={<Checkout />} />
               <Route path="/progress" element={<Progress />} />
+              <Route path="/api-docs" element={<ApiDocs />} />
               <Route path="/help" element={<Help />} />
               <Route path="/privacy" element={<PrivacyPolicy />} />
               <Route path="/terms" element={<TermsOfUse />} />

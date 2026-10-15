@@ -69,6 +69,7 @@ const {
   markTransactionsNotified,
 } = require('./transactions');
 const { checkQuota, useQuota } = require('./quota');
+const { ensureGeocodeRateLimitsTable, checkRateLimit } = require('./geocodeRateLimit');
 const {
   sendResultsEmail,
   sendServiceKeyEmail,
@@ -88,6 +89,7 @@ const {
   PaymentError,
   UnauthorizedError,
   UpstreamError,
+  RateLimitError,
 } = require('./errors');
 const { isPushConfigured, getVapidPublicKey } = require('./pushKeys');
 const { ensureRoadAlertsPushTables, saveSubscription, upsertLivePosition, deleteLivePosition, clearPushSentForAccount } = require('./roadAlertsPush');
@@ -161,10 +163,19 @@ const usersDbPromise = openUsersDb(USERS_DSN).then(async (pool) => {
   await ensureWeightedPointsTable(pool);
   await ensureTestRoadSignalsTable(pool);
   await ensureRoadAlertsPushTables(pool);
+  await ensureGeocodeRateLimitsTable(pool);
   return pool;
 });
 
 const app = express();
+// nginx (see ops/ and the deployed droplets' /etc/nginx/sites-enabled
+// configs) already sets X-Real-IP/X-Forwarded-For correctly and always
+// connects from the same box -- 'loopback' trusts exactly that one hop,
+// so req.ip resolves to the real client IP instead of nginx's own
+// address. Required for geocodeRateLimit.js's per-IP tracking to work
+// at all; without it, every caller behind the proxy would share one
+// bucket.
+app.set('trust proxy', 'loopback');
 app.use(cors());
 // Only when actually running as the server (not when test/helpers.js's
 // withTestServer requires this module) -- otherwise every test request
@@ -182,13 +193,40 @@ app.use(express.json({ limit: '200mb' }));
 
 app.post('/geocode', async (req, res) => {
   const address = req.body && req.body.address;
+  const email = req.body && req.body.email;
+  const serviceKey = req.body && req.body.serviceKey;
+  const authenticated = typeof email === 'string' && email.trim().length > 0;
   try {
+    let usersDb;
+    if (authenticated) {
+      usersDb = await usersDbPromise;
+      await checkQuota(usersDb, email, serviceKey, 1);
+    } else {
+      // This path never touched geocoding_users before this feature existed --
+      // an outage there shouldn't take down the site's own free lookup pages.
+      // Fail open on anything that isn't a deliberate RateLimitError.
+      try {
+        usersDb = await usersDbPromise;
+        await checkRateLimit(usersDb, req.ip);
+      } catch (err) {
+        if (err instanceof RateLimitError) throw err;
+        console.error('rate limit check failed, failing open for this request', err);
+      }
+    }
+
     const result = await geocode(db, address, { offsetFeet: OFFSET_FEET });
+
+    if (authenticated) {
+      await useQuota(usersDb, email, 1);
+    }
     res.json(result);
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
     if (err instanceof OutOfRangeError) return res.status(422).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    if (err instanceof QuotaExceededError) return res.status(429).json({ error: err.message });
+    if (err instanceof RateLimitError) return res.status(429).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: 'internal error' });
   }
@@ -575,12 +613,39 @@ app.get('/admin/transactions', async (req, res) => {
 
 app.post('/reverse-geocode', async (req, res) => {
   const { latitude, longitude } = req.body || {};
+  const email = req.body && req.body.email;
+  const serviceKey = req.body && req.body.serviceKey;
+  const authenticated = typeof email === 'string' && email.trim().length > 0;
   try {
+    let usersDb;
+    if (authenticated) {
+      usersDb = await usersDbPromise;
+      await checkQuota(usersDb, email, serviceKey, 1);
+    } else {
+      // This path never touched geocoding_users before this feature existed --
+      // an outage there shouldn't take down the site's own free lookup pages.
+      // Fail open on anything that isn't a deliberate RateLimitError.
+      try {
+        usersDb = await usersDbPromise;
+        await checkRateLimit(usersDb, req.ip);
+      } catch (err) {
+        if (err instanceof RateLimitError) throw err;
+        console.error('rate limit check failed, failing open for this request', err);
+      }
+    }
+
     const result = await reverseGeocode(db, latitude, longitude);
+
+    if (authenticated) {
+      await useQuota(usersDb, email, 1);
+    }
     res.json(result);
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    if (err instanceof QuotaExceededError) return res.status(429).json({ error: err.message });
+    if (err instanceof RateLimitError) return res.status(429).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: 'internal error' });
   }

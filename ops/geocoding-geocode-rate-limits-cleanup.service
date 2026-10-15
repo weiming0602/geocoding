@@ -1,0 +1,38 @@
+# systemd service for geocoding-server/scripts/cleanup-geocode-rate-limits.js
+# -- deletes geocode_rate_limits rows older than 90 days. Triggered by
+# geocoding-geocode-rate-limits-cleanup.timer, not meant to be started
+# directly (though `systemctl start` works fine for a manual test run).
+#
+# Install (on the Lightsail instance, adjust paths/DSN for that box):
+#   sudo cp ops/geocoding-geocode-rate-limits-cleanup.service ops/geocoding-geocode-rate-limits-cleanup.timer /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now geocoding-geocode-rate-limits-cleanup.timer
+#
+# Check status / logs:
+#   systemctl status geocoding-geocode-rate-limits-cleanup.timer
+#   journalctl -u geocoding-geocode-rate-limits-cleanup.service
+
+[Unit]
+Description=Delete geocode rate-limit rows older than 90 days
+
+[Service]
+Type=oneshot
+# Postgres peer authentication (see CLAUDE.md's "Environment / data
+# layout") matches the connecting OS user to the requested role -- the
+# DSN below requests role "my_ai", so this must run as that same OS
+# user, not root's default. Without this, every query fails with
+# "Peer authentication failed for user \"my_ai\"".
+User=my_ai
+Group=my_ai
+WorkingDirectory=/home/my_ai/geocoding/geocoding-server
+# USERS_DSN should point at the Lightsail Database's network endpoint in
+# production, not the local Unix socket used in dev -- see CLAUDE.md's
+# "Environment / data layout". The socket path's "/" must be doubled
+# (%%2F, not %2F): systemd treats a single "%" in Environment= as the
+# start of one of its own specifiers (e.g. %h for $HOME) and silently
+# drops the whole assignment if it can't resolve one -- "%2F" isn't a
+# real specifier, so the DSN never actually got set without this, and
+# the script silently fell back to its own hardcoded default instead.
+Environment=USERS_DSN=postgresql://my_ai@%%2Fvar%%2Frun%%2Fpostgresql/geocoding_users
+# Adjust this path to wherever `which node` resolves on the actual box.
+ExecStart=/usr/bin/node scripts/cleanup-geocode-rate-limits.js 90

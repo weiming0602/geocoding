@@ -10,6 +10,11 @@ class UnauthorizedError extends Error {}
 // HTTP 502, distinct from a plain 500 so it's clear from the outside
 // that retrying later is the right move.
 class UpstreamError extends Error {}
+// An unauthenticated caller has exceeded the per-IP rate limit on
+// /geocode or /reverse-geocode (see geocodeRateLimit.js). Maps to HTTP
+// 429, same status QuotaExceededError already uses for the analogous
+// authenticated-but-over-quota case.
+class RateLimitError extends Error {}
 
 module.exports = {
   ValidationError,
@@ -19,4 +24,5 @@ module.exports = {
   PaymentError,
   UnauthorizedError,
   UpstreamError,
+  RateLimitError,
 };

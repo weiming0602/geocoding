@@ -9,4 +9,9 @@ describe('App', () => {
     expect(screen.getByRole('link', { name: 'Geocode' })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: 'Real addresses, not just estimates' })).toBeInTheDocument();
   });
+
+  it('renders the API docs link in the footer, linking to /api-docs', () => {
+    render(<App />);
+    expect(screen.getByRole('link', { name: 'API Docs' })).toHaveAttribute('href', '#/api-docs');
+  });
 });

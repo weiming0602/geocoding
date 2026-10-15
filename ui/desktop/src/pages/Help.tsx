@@ -140,6 +140,13 @@ function GeocodingHelp() {
         each calendar month; an email-delivery request that would exceed the remaining quota is
         rejected up front, before any addresses are processed.
       </p>
+
+      <h2>Calling the API directly</h2>
+      <p>
+        Everything above is also available as a plain REST API — see <a href="#/api-docs">API Docs</a>{' '}
+        for all five endpoints, with real request/response examples. Single lookups work without an
+        account, up to a modest rate limit; batch jobs still need a service key from a paid plan.
+      </p>
     </>
   );
 }

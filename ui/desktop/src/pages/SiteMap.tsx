@@ -14,6 +14,7 @@ const ACCOUNT: SiteMapLink[] = [
   { to: '/plan-quota', label: 'Plan & quota', description: 'Check how much of your monthly Batch geocoding quota you have left.' },
   { to: '/pricing', label: 'Pricing', description: 'Buy additional monthly Batch geocoding quota.' },
   { to: '/progress', label: 'Progress', description: "A running record of what's shipped so far." },
+  { to: '/api-docs', label: 'API Docs', description: 'Call the geocoding endpoints directly from your own code.' },
   { to: '/help', label: 'Help', description: 'How Meridian actually works, plus a way to send us feedback.' },
 ];
 
