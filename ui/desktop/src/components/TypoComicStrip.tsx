@@ -46,8 +46,10 @@ export default function TypoComicStrip() {
         </text>
         <path d="M45 66 q6 3 12 0 q6 3 12 0 q6 3 12 0 q6 3 12 0 q6 3 12 0" fill="none" stroke="#c0392b" strokeWidth="2" />
 
-        {/* Dr. Meridian, small, tucked in the corner, pointing up at the sign */}
-        <g transform="translate(-2, 94) scale(0.42)">
+        {/* Dr. Meridian, small, tucked in the corner, whole body leaning
+            toward the sign (not just the arm reaching over) -- rotated
+            around his own feet so it reads as leaning in, not falling over */}
+        <g transform="translate(-2, 94) scale(0.42) rotate(16, 60, 150)">
           <DrMeridian pose="diagnosing" />
         </g>
       </Panel>
@@ -70,7 +72,7 @@ export default function TypoComicStrip() {
           strokeLinejoin="round"
         />
 
-        <g transform="translate(-2, 94) scale(0.42)">
+        <g transform="translate(-2, 94) scale(0.42) rotate(16, 60, 150)">
           <DrMeridian pose="pleased" />
         </g>
       </Panel>
