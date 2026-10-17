@@ -2,11 +2,12 @@ import type { ReactNode } from 'react';
 
 import DrMeridian from './DrMeridian';
 
-// A tiny two-panel comic strip starring Dr. Meridian -- the brand's own
-// globe mark given a body, white coat, and stethoscope, "diagnosing" a
-// misspelled street name and then confirming the real one. Bordered
-// square panels, like a real newspaper strip, rather than flat
-// stock-illustration people.
+// A tiny two-panel comic strip. The street name is the thing a visitor
+// should actually look at, so it's the large, centered element in each
+// panel; Dr. Meridian is a small supporting figure tucked in a corner,
+// pointing toward it -- not the focal point himself. (An earlier version
+// had him full-size and centered, which drew the eye to the mascot
+// instead of the content he's explaining -- fixed per review.)
 const INK = 'var(--color-accent-800, #5a3b0a)';
 const PANEL_BG = 'var(--color-surface)';
 const PANEL_BORDER = 'var(--color-accent-800, #5a3b0a)';
@@ -37,29 +38,41 @@ export default function TypoComicStrip() {
         margin: 'var(--space-4) 0',
       }}
     >
-      <Panel label='Dr. Meridian spots "Peqwket Trl"'>
-        <g transform="translate(5, 8)">
+      <Panel label='You typed "Peqwket Trl"'>
+        {/* the street name -- large, centered, the actual point of the panel */}
+        <rect x="18" y="24" width="134" height="60" rx="8" fill="#fff" stroke={INK} strokeWidth="2.4" />
+        <text x="85" y="58" textAnchor="middle" style={{ fontSize: 19, fontWeight: 700, fontFamily: 'var(--font-body)', fill: INK }}>
+          Peqwket Trl
+        </text>
+        <path d="M45 66 q6 3 12 0 q6 3 12 0 q6 3 12 0 q6 3 12 0 q6 3 12 0" fill="none" stroke="#c0392b" strokeWidth="2" />
+
+        {/* Dr. Meridian, small, tucked in the corner, pointing up at the sign */}
+        <g transform="translate(-2, 94) scale(0.42)">
           <DrMeridian pose="diagnosing" />
         </g>
-        {/* chart his pointing hand aims at, with the misspelling */}
-        <rect x="118" y="30" width="46" height="30" rx="4" fill="#fff" stroke={INK} strokeWidth="2" />
-        <text x="141" y="48" textAnchor="middle" style={{ fontSize: 10, fontFamily: 'var(--font-body)', fill: INK }}>
-          Peqwket
-        </text>
-        <path d="M124 52 q4 2.5 8 0 q4 2.5 8 0 q4 2.5 8 0" fill="none" stroke="#c0392b" strokeWidth="1.4" />
       </Panel>
 
       <span aria-hidden="true" style={{ fontSize: 28, color: 'var(--color-accent)', flexShrink: 0 }}>
         →
       </span>
 
-      <Panel label='Confirms "Pequawket Trl" ✓'>
-        <g transform="translate(5, 8)">
+      <Panel label='Found "Pequawket Trl" ✓'>
+        <rect x="18" y="24" width="134" height="60" rx="8" fill="#fff" stroke={INK} strokeWidth="2.4" />
+        <text x="85" y="58" textAnchor="middle" style={{ fontSize: 19, fontWeight: 700, fontFamily: 'var(--font-body)', fill: INK }}>
+          Pequawket Trl
+        </text>
+        <path
+          d="M68 66 l6 6 l12 -13"
+          fill="none"
+          stroke="var(--color-accent-2, #3a7d68)"
+          strokeWidth="3"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+
+        <g transform="translate(-2, 94) scale(0.42)">
           <DrMeridian pose="pleased" />
         </g>
-        {/* small checkmark badge, same spot the chart was */}
-        <circle cx="141" cy="45" r="16" fill="var(--color-accent-100)" stroke={INK} strokeWidth="2" />
-        <path d="M133 45 l5.5 5.5 l10 -11" fill="none" stroke={INK} strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" />
       </Panel>
     </div>
   );
