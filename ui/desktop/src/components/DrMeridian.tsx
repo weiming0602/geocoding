@@ -1,14 +1,11 @@
-// "Dr. Meridian" -- a cute, kindly old-doctor character, redesigned to
-// match a specific reference: full white/silver hair (not balding),
-// visible ears, thick arched eyebrows, round wire glasses, a defined
-// nose, a warm closed smile, a blue shirt + tie under the white coat,
-// and a distinctly-colored (teal) stethoscope -- a more finished,
-// lightly-colored illustration style than this component's first pass,
-// which was closer to a loose ink sketch. Wears the brand's own globe
-// mark as a small chest pin rather than as his face (an earlier version
-// used the globe geometry as the head itself; it read as a mask, not a
-// face). Chibi proportions (big head, short body) keep him readable
-// inside a small square panel.
+// "Dr. Meridian", drawn in side profile facing right (toward whatever
+// he's examining), not front-on -- a genuine profile silhouette (one
+// visible eye near the nose, nose bump on the leading edge, ear toward
+// the back, hair swept back), not a front-facing figure simply rotated.
+// Full white/silver hair, round wire glasses, a blue shirt + tie under
+// the white coat, a teal stethoscope, and the brand's own globe mark
+// worn as a small chest pin. Chibi proportions (big head, short body)
+// keep him readable at small size.
 const INK = '#2b2420';
 const COAT = '#fdfdfb';
 const HAIR = '#f1f0ee';
@@ -18,60 +15,63 @@ const SHIRT = '#4f8fc0';
 const TIE = '#2d5f8a';
 const STETHOSCOPE = '#3f9c93';
 
-function DoctorHead({ mood }: { mood: 'diagnosing' | 'pleased' }) {
+function ProfileHead({ mood }: { mood: 'diagnosing' | 'pleased' }) {
   return (
     <g>
-      {/* ears, behind the head outline */}
-      <circle cx="31" cy="46" r="6" fill={SKIN} stroke={INK} strokeWidth="2" />
-      <circle cx="89" cy="46" r="6" fill={SKIN} stroke={INK} strokeWidth="2" />
+      {/* ear, behind the face */}
+      <circle cx="46" cy="48" r="6" fill={SKIN} stroke={INK} strokeWidth="2" />
 
-      {/* head */}
-      <circle cx="60" cy="44" r="28" fill={SKIN} stroke={INK} strokeWidth="2.4" />
-
-      {/* full white/silver hair, swept up and back -- not balding */}
+      {/* head/face silhouette, facing right: rounded back of skull,
+          forehead sloping down to a nose bump on the leading edge, lips,
+          chin tucking back in toward the jaw and neck */}
       <path
-        d="M30 42 Q26 10 60 8 Q94 10 90 42 Q88 24 78 18 Q82 30 76 24 Q74 14 60 13 Q46 14 44 24 Q38 30 42 18 Q32 24 30 42 Z"
+        d="M30 44
+           C30 24 48 12 62 14
+           C76 16 82 28 80 38
+           C86 40 90 46 88 51
+           C86 55 80 54 77 51
+           C76 56 73 60 69 62
+           C71 66 69 70 65 71
+           C58 73 48 70 42 62
+           C34 58 30 52 30 44 Z"
+        fill={SKIN}
+        stroke={INK}
+        strokeWidth="2.4"
+        strokeLinejoin="round"
+      />
+
+      {/* hair, swept back over the top and down the back of the head */}
+      <path
+        d="M29 42
+           C26 20 44 6 62 8
+           C74 9 80 16 80 24
+           C72 16 56 14 46 20
+           C36 26 32 34 33 44
+           C33 48 31 46 29 42 Z"
         fill={HAIR}
         stroke={INK}
         strokeWidth="2"
         strokeLinejoin="round"
       />
-      <path d="M46 20 Q44 26 46 32" fill="none" stroke={HAIR_SHADE} strokeWidth="1.6" strokeLinecap="round" />
-      <path d="M74 20 Q76 26 74 32" fill="none" stroke={HAIR_SHADE} strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M40 20 Q36 26 38 32" fill="none" stroke={HAIR_SHADE} strokeWidth="1.4" strokeLinecap="round" />
 
-      {/* defined, rounded nose */}
-      <path d="M58 46 Q56 54 60 55 Q64 54 62 46" fill={SKIN} stroke={INK} strokeWidth="1.6" strokeLinecap="round" />
+      {/* eyebrow, raised and kind */}
+      <path d="M58 30 Q66 26 73 30" fill="none" stroke={INK} strokeWidth="2.4" strokeLinecap="round" />
 
-      {/* gentle, raised eyebrows -- set further above the eyes so they read as
-          kind/attentive rather than furrowed */}
-      <path d="M41 33 Q47 29 55 32" fill="none" stroke={INK} strokeWidth="2.4" strokeLinecap="round" />
-      <path d="M65 32 Q73 29 79 33" fill="none" stroke={INK} strokeWidth="2.4" strokeLinecap="round" />
-
-      {/* round wire glasses */}
-      <circle cx="49" cy="44" r="9" fill="rgba(255,255,255,0.35)" stroke={INK} strokeWidth="2" />
-      <circle cx="71" cy="44" r="9" fill="rgba(255,255,255,0.35)" stroke={INK} strokeWidth="2" />
-      <path d="M58 44 h4" stroke={INK} strokeWidth="2" />
-      <path d="M40 42 L32 40" stroke={INK} strokeWidth="1.8" strokeLinecap="round" />
-      <path d="M80 42 L88 40" stroke={INK} strokeWidth="1.8" strokeLinecap="round" />
-      {/* pupils with a small white catchlight -- a plain flat dot under thick
-          brows read as stern/angry; the highlight is what makes an eye look
-          kind rather than beady */}
-      <circle cx="49" cy="45" r="2.8" fill={INK} />
-      <circle cx="71" cy="45" r="2.8" fill={INK} />
-      <circle cx="50" cy="43.7" r="0.9" fill="#fff" />
-      <circle cx="72" cy="43.7" r="0.9" fill="#fff" />
+      {/* round glasses, side view -- one lens, temple arm back toward the ear */}
+      <circle cx="66" cy="38" r="8" fill="rgba(255,255,255,0.35)" stroke={INK} strokeWidth="2" />
+      <path d="M58 37 L47 40" stroke={INK} strokeWidth="1.8" strokeLinecap="round" />
+      <circle cx="67" cy="39" r="2.6" fill={INK} />
+      <circle cx="68" cy="37.7" r="0.9" fill="#fff" />
 
       {mood === 'diagnosing' ? (
-        // closed, gently curious mouth -- examining, not stern
-        <path d="M52 62 Q60 65 68 62" fill="none" stroke={INK} strokeWidth="2.2" strokeLinecap="round" />
+        // closed, focused mouth
+        <path d="M68 56 Q72 58 74 56" fill="none" stroke={INK} strokeWidth="2" strokeLinecap="round" />
       ) : (
         <>
-          {/* warm closed smile, with gentle smile-crease lines */}
-          <path d="M51 61 Q60 69 69 61" fill="none" stroke={INK} strokeWidth="2.2" strokeLinecap="round" />
-          <path d="M48 58 Q46 61 48 64" fill="none" stroke={INK} strokeWidth="1.2" strokeLinecap="round" opacity="0.5" />
-          <path d="M72 58 Q74 61 72 64" fill="none" stroke={INK} strokeWidth="1.2" strokeLinecap="round" opacity="0.5" />
-          <circle cx="38" cy="54" r="3.5" fill="var(--color-accent-300)" opacity="0.5" />
-          <circle cx="82" cy="54" r="3.5" fill="var(--color-accent-300)" opacity="0.5" />
+          {/* warm smile, profile curve */}
+          <path d="M67 55 Q73 61 77 55" fill="none" stroke={INK} strokeWidth="2" strokeLinecap="round" />
+          <circle cx="72" cy="48" r="3.2" fill="var(--color-accent-300)" opacity="0.5" />
         </>
       )}
     </g>
@@ -82,10 +82,10 @@ function DoctorHead({ mood }: { mood: 'diagnosing' | 'pleased' }) {
 function BrandPin() {
   return (
     <g>
-      <circle r="9" fill="#fff" stroke={INK} strokeWidth="1.6" />
-      <ellipse rx="3" ry="9" fill="none" stroke={INK} strokeWidth="1" />
-      <ellipse rx="6" ry="9" fill="none" stroke={INK} strokeWidth="1" />
-      <path d="M-9 0 h18" stroke={INK} strokeWidth="1" />
+      <circle r="8" fill="#fff" stroke={INK} strokeWidth="1.4" />
+      <ellipse rx="2.6" ry="8" fill="none" stroke={INK} strokeWidth="0.9" />
+      <ellipse rx="5.3" ry="8" fill="none" stroke={INK} strokeWidth="0.9" />
+      <path d="M-8 0 h16" stroke={INK} strokeWidth="0.9" />
     </g>
   );
 }
@@ -93,58 +93,50 @@ function BrandPin() {
 export default function DrMeridian({ pose }: { pose: 'diagnosing' | 'pleased' }) {
   return (
     <g>
-      {/* legs */}
-      <path d="M48 128 L45 148" stroke={INK} strokeWidth="7" strokeLinecap="round" />
-      <path d="M72 128 L75 148" stroke={INK} strokeWidth="7" strokeLinecap="round" />
+      {/* legs, side view -- near leg stepping forward (right), far leg trailing */}
+      <path d="M52 124 L46 148" stroke={INK} strokeWidth="7" strokeLinecap="round" />
+      <path d="M62 126 L70 148" stroke={INK} strokeWidth="7" strokeLinecap="round" />
       <ellipse cx="44" cy="151" rx="7" ry="4" fill={INK} />
-      <ellipse cx="76" cy="151" rx="7" ry="4" fill={INK} />
+      <ellipse cx="74" cy="151" rx="8" ry="4" fill={INK} />
 
-      {/* blue shirt + tie, peeking out above the coat's open collar */}
-      <path d="M50 70 L60 82 L70 70 L70 92 L50 92 Z" fill={SHIRT} stroke={INK} strokeWidth="1.6" strokeLinejoin="round" />
-      <path d="M56 76 L60 83 L64 76 L62 102 L58 102 Z" fill={TIE} stroke={INK} strokeWidth="1.4" strokeLinejoin="round" />
+      {/* shirt + tie, peeking out at the collar */}
+      <path d="M48 68 L62 78 L70 68 L68 90 L50 90 Z" fill={SHIRT} stroke={INK} strokeWidth="1.4" strokeLinejoin="round" />
+      <path d="M56 74 L62 79 L66 74 L63 98 L59 98 Z" fill={TIE} stroke={INK} strokeWidth="1.2" strokeLinejoin="round" />
 
-      {/* coat body, open over the shirt/tie */}
+      {/* coat body, side silhouette -- narrower than the front-facing version,
+          front edge (facing right) has the open lapel */}
       <path
-        d="M42 72 Q60 64 78 72 L82 130 Q60 138 38 130 Z"
+        d="M38 70 C50 62 66 62 76 70 L80 128 C64 136 44 136 34 128 Z"
         fill={COAT}
         stroke={INK}
         strokeWidth="2.4"
         strokeLinejoin="round"
       />
-      {/* open lapels */}
-      <path d="M50 73 L58 82 L48 96" fill="none" stroke={INK} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M70 73 L62 82 L72 96" fill="none" stroke={INK} strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-      {/* buttons */}
-      <circle cx="60" cy="112" r="2" fill={INK} />
-      <circle cx="60" cy="124" r="2" fill={INK} />
+      <path d="M50 71 L60 80 L52 94" fill="none" stroke={INK} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx="56" cy="108" r="1.8" fill={INK} />
+      <circle cx="56" cy="120" r="1.8" fill={INK} />
 
-      {/* stethoscope -- teal, collar loop down to a chest piece, left of center */}
-      <path d="M46 75 Q40 84 48 90 Q53 94 52 102" fill="none" stroke={STETHOSCOPE} strokeWidth="3" strokeLinecap="round" />
-      <path d="M70 75 Q76 84 68 90" fill="none" stroke={STETHOSCOPE} strokeWidth="3" strokeLinecap="round" />
-      <circle cx="52" cy="104" r="3.6" fill="#fff" stroke={STETHOSCOPE} strokeWidth="2.4" />
+      {/* stethoscope -- teal, collar loop down to a chest piece */}
+      <path d="M46 72 Q40 80 48 86 Q52 90 50 98" fill="none" stroke={STETHOSCOPE} strokeWidth="2.8" strokeLinecap="round" />
+      <circle cx="50" cy="100" r="3.2" fill="#fff" stroke={STETHOSCOPE} strokeWidth="2.2" />
 
-      {/* the brand mark, worn as a chest pin, right of center */}
-      <g transform="translate(72, 97) scale(0.7)">
+      {/* the brand mark, worn as a chest pin */}
+      <g transform="translate(66, 92) scale(0.65)">
         <BrandPin />
       </g>
 
       {pose === 'diagnosing' ? (
+        // near arm extended forward, pointing at whatever he's facing
         <>
-          {/* left arm relaxed at side */}
-          <path d="M42 78 Q34 95 38 112" fill="none" stroke={INK} strokeWidth="6" strokeLinecap="round" />
-          {/* right arm extended, pointing */}
-          <path d="M78 78 Q96 80 106 68" fill="none" stroke={INK} strokeWidth="6" strokeLinecap="round" />
-          <circle cx="108" cy="65" r="4" fill={INK} />
+          <path d="M72 76 Q92 78 104 64" fill="none" stroke={INK} strokeWidth="6" strokeLinecap="round" />
+          <circle cx="106" cy="61" r="4" fill={INK} />
         </>
       ) : (
-        <>
-          {/* both arms relaxed */}
-          <path d="M42 78 Q33 92 37 108" fill="none" stroke={INK} strokeWidth="6" strokeLinecap="round" />
-          <path d="M78 78 Q87 92 83 108" fill="none" stroke={INK} strokeWidth="6" strokeLinecap="round" />
-        </>
+        // near arm relaxed, down at his side
+        <path d="M70 76 Q78 92 72 108" fill="none" stroke={INK} strokeWidth="6" strokeLinecap="round" />
       )}
 
-      <DoctorHead mood={pose === 'diagnosing' ? 'diagnosing' : 'pleased'} />
+      <ProfileHead mood={pose === 'diagnosing' ? 'diagnosing' : 'pleased'} />
     </g>
   );
 }
