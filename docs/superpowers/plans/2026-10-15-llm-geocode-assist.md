@@ -1279,6 +1279,7 @@ const assert = require('node:assert/strict');
 const { attemptLlmAssist } = require('../src/llmAssist');
 const { makeDb, makeUsersDb } = require('./helpers');
 const { parseAddress } = require('../src/parseAddress');
+const { ensureLlmGeocodeAssistsTable } = require('../src/llmGeocodeAssists');
 
 function withFakeFetch(respond, fn) {
   return async () => {
@@ -1314,6 +1315,7 @@ test('attemptLlmAssist returns null without calling fetch when unconfigured', as
   };
   const db = await makeDb();
   const usersDb = await makeUsersDb();
+  await ensureLlmGeocodeAssistsTable(usersDb);
   try {
     const parsed = parseAddress('997 Peqwket Trl, 04091');
     const result = await attemptLlmAssist(db, { usersDb, email: 'demo@example.com' }, parsed, '997 Peqwket Trl, 04091', 20);
@@ -1333,6 +1335,7 @@ test('attemptLlmAssist returns null without calling fetch for an out-of-coverage
   };
   const db = await makeDb();
   const usersDb = await makeUsersDb();
+  await ensureLlmGeocodeAssistsTable(usersDb);
   try {
     await withApiKey(async () => {
       const parsed = parseAddress('123 Main St, Austin, TX 78701');
@@ -1353,6 +1356,7 @@ test('attemptLlmAssist returns null without calling fetch when there are no real
   };
   const db = await makeDb();
   const usersDb = await makeUsersDb();
+  await ensureLlmGeocodeAssistsTable(usersDb);
   try {
     await withApiKey(async () => {
       const parsed = parseAddress('42 Zzyzx Quantum Blvd, 04091');
@@ -1378,6 +1382,7 @@ test(
     withApiKey(async () => {
       const db = await makeDb();
       const usersDb = await makeUsersDb();
+      await ensureLlmGeocodeAssistsTable(usersDb);
       try {
         // "997 Peqwket Trl" (misspelled) should surface "Pequawket Trl" (id=12, zip 04091)
         // as the top candidate and re-geocode to its real coordinates.
@@ -1415,6 +1420,7 @@ test(
     withApiKey(async () => {
       const db = await makeDb();
       const usersDb = await makeUsersDb();
+      await ensureLlmGeocodeAssistsTable(usersDb);
       try {
         const parsed = parseAddress('997 Peqwket Trl, 04091');
         const result = await attemptLlmAssist(db, { usersDb, email: 'demo@example.com' }, parsed, '997 Peqwket Trl, 04091', 20);
@@ -1441,6 +1447,7 @@ test(
     withApiKey(async () => {
       const db = await makeDb();
       const usersDb = await makeUsersDb();
+      await ensureLlmGeocodeAssistsTable(usersDb);
       try {
         const parsed = parseAddress('997 Peqwket Trl, 04091');
         const result = await attemptLlmAssist(db, { usersDb, email: 'demo@example.com' }, parsed, '997 Peqwket Trl, 04091', 20);
@@ -1640,11 +1647,11 @@ git commit -m "Wire the LLM-assisted retry into geocode()'s failure path"
 ### Task 6: Server integration, end-to-end test, batch regression test
 
 **Files:**
-- Modify: `geocoding-server/src/server.js:217` (the `/geocode` handler's `geocode()` call)
+- Modify: `geocoding-server/src/server.js:72` (new require), `:166` (`usersDbPromise` chain), `:217` (the `/geocode` handler's `geocode()` call)
 - Test: `geocoding-server/test/geocodeLlmAssistEndpoint.test.js`
 
 **Interfaces:**
-- Consumes: `geocode()`'s new `llmAssist` option (Task 5).
+- Consumes: `geocode()`'s new `llmAssist` option (Task 5); `ensureLlmGeocodeAssistsTable` (Task 4).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1795,7 +1802,23 @@ test('Batch geocoding never triggers the LLM, even with a deliberately misspelle
 Run: `cd geocoding-server && node --test test/geocodeLlmAssistEndpoint.test.js`
 Expected: FAIL — `/geocode` doesn't pass `llmAssist` yet, so the first test gets a 404 instead of a 200 with `source: "llm_assisted"`.
 
-- [ ] **Step 3: Wire `llmAssist` into the `/geocode` handler**
+- [ ] **Step 3: Create the `llm_geocode_assists` table at server startup**
+
+Without this step, `logLlmGeocodeAssist`'s `INSERT` fails outright on a real database the first time an LLM-assisted attempt actually reaches it — `ensureLlmGeocodeAssistsTable` (Task 4) is never called anywhere else in the codebase, and this app's convention (see `ensureGeocodeRateLimitsTable`, `ensureFeedbackTable`, and every other `ensureXTable` call already in this chain) is that every table gets created idempotently at startup, not lazily on first write.
+
+Modify `geocoding-server/src/server.js`. First, add the require — find the existing `require('./geocodeRateLimit')` line (search `grep -n "require('./geocodeRateLimit')" src/server.js`; currently line 72) and add a new line immediately after it:
+
+```js
+const { ensureLlmGeocodeAssistsTable } = require('./llmGeocodeAssists');
+```
+
+Then, find the `usersDbPromise` startup chain (search `grep -n "await ensureGeocodeRateLimitsTable(pool);" src/server.js`; currently line 166, immediately before `return pool;`) and add a new line immediately after it:
+
+```js
+  await ensureLlmGeocodeAssistsTable(pool);
+```
+
+- [ ] **Step 4: Wire `llmAssist` into the `/geocode` handler**
 
 Modify `geocoding-server/src/server.js:217` — the `/geocode` handler's call to `geocode()` (currently `const result = await geocode(db, address, { offsetFeet: OFFSET_FEET });`, the only call site inside `app.post('/geocode', ...)` to change — re-confirm the exact line with `grep -n "const result = await geocode(db, address" src/server.js` first, since earlier tasks in this plan don't touch `server.js` but other work may have landed on this branch since this plan was written):
 
@@ -1808,17 +1831,17 @@ Modify `geocoding-server/src/server.js:217` — the `/geocode` handler's call to
 
 (`usersDb` and `email` are both already in scope at this point in the handler — `usersDb` is assigned a few lines above inside the `if (authenticated)` branch, `email` is the handler's own top-level `const`. No other change to this handler is needed; the existing `try`/`catch` error-mapping block already handles `NotFoundError` → 404 unchanged, since `attemptLlmAssist` returning `null` just lets the original `NotFoundError` propagate exactly as before.)
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [ ] **Step 5: Run the tests to verify they pass**
 
 Run: `cd geocoding-server && node --test test/geocodeLlmAssistEndpoint.test.js`
-Expected: PASS, all 4 tests.
+Expected: PASS, all 4 tests. (Step 3's table creation is what makes the first test's `SELECT * FROM llm_geocode_assists` query — reached via `withTestServer`, which starts a real `server.js` and so runs its full `usersDbPromise` startup chain — succeed instead of erroring with "relation does not exist".)
 
-- [ ] **Step 5: Run the full server test suite**
+- [ ] **Step 6: Run the full server test suite**
 
 Run: `cd geocoding-server && node --test`
 Expected: PASS — every existing test (including every other `/geocode`/batch caller elsewhere in the suite) still passes, with the new test files' tests also included in the total count.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 cd geocoding-server
