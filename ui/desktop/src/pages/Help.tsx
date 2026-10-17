@@ -103,6 +103,24 @@ function GeocodingHelp() {
         near the low end of the range.
       </p>
 
+      <h2>When a lookup doesn't match right away</h2>
+      <p>
+        A small mistake — a misspelled street, the wrong ZIP, the wrong town — doesn't have to end in
+        a dead end. If a lookup doesn't match anything on the first try (and you're signed in with an
+        account), Meridian uses AI to check its own real street data for what you probably meant, the
+        same way a human reading it over your shoulder might catch a typo.
+      </p>
+      <div className="plate" style={{ marginBottom: 'var(--space-4)', padding: 'var(--space-3)' }}>
+        <strong>You typed:</strong> 997 Peqwket Trl, 04091
+        <br />
+        <strong>Meridian found:</strong> 997 Pequawket Trl, 04091
+      </div>
+      <p className="text-muted" style={{ fontSize: 13 }}>
+        It only ever picks from streets that genuinely exist in Meridian's own data — never one it
+        made up — and results found this way are clearly marked, so you always know when it's a
+        direct match versus a corrected guess.
+      </p>
+
       <h2>Street aliases (a.k.a. names)</h2>
       <p>
         Many streets go by more than one name — a numbered route that's also known by a local name,

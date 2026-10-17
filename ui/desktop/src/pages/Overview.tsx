@@ -155,6 +155,14 @@ export default function Overview() {
             streets and addresses.
           </p>
         </div>
+        <div className="card">
+          <div className="card-kicker">Keeps trying</div>
+          <div className="card-title">A typo doesn't mean a dead end</div>
+          <p className="card-body">
+            A misspelled street, wrong ZIP, or wrong town doesn't just fail -- Meridian checks its
+            own real data for the closest match, and flags it clearly when it had to.
+          </p>
+        </div>
       </div>
 
       <h2 style={{ marginBottom: 'var(--space-1)' }}>What would you like to do?</h2>
