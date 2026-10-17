@@ -4,6 +4,7 @@ import AccountTabs from '../components/AccountTabs';
 import FeedbackForm from '../components/FeedbackForm';
 import PageHeader from '../components/PageHeader';
 import RoadAlertsDiagram from '../components/RoadAlertsDiagram';
+import TypoComicStrip from '../components/TypoComicStrip';
 
 type HelpTopic = 'geocoding' | 'roadAlerts';
 
@@ -104,28 +105,7 @@ function GeocodingHelp() {
       </p>
 
       <h2>A typo isn't a dead end</h2>
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 'var(--space-4)',
-          flexWrap: 'wrap',
-          margin: 'var(--space-4) 0',
-        }}
-      >
-        <div style={{ width: 220, textAlign: 'center' }}>
-          <img src="/illustrations/typo-searching.svg" alt="A person searching with a magnifying glass" style={{ width: '100%' }} />
-          <p style={{ margin: '4px 0 0', fontSize: 13, fontWeight: 600 }}>"997 Peqwket Trl"</p>
-        </div>
-        <span aria-hidden="true" style={{ fontSize: 28, color: 'var(--color-accent)' }}>
-          →
-        </span>
-        <div style={{ width: 220, textAlign: 'center' }}>
-          <img src="/illustrations/typo-found.svg" alt="A location pin confirmed on a map" style={{ width: '100%' }} />
-          <p style={{ margin: '4px 0 0', fontSize: 13, fontWeight: 600 }}>"997 Pequawket Trl" ✓</p>
-        </div>
-      </div>
+      <TypoComicStrip />
       <p className="text-muted" style={{ fontSize: 13, textAlign: 'center' }}>
         Only ever a real street already in Meridian's data — never one it made up.
       </p>
