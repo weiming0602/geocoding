@@ -42,9 +42,10 @@ function DoctorHead({ mood }: { mood: 'diagnosing' | 'pleased' }) {
       {/* defined, rounded nose */}
       <path d="M58 46 Q56 54 60 55 Q64 54 62 46" fill={SKIN} stroke={INK} strokeWidth="1.6" strokeLinecap="round" />
 
-      {/* thick, arched eyebrows */}
-      <path d="M41 36 Q47 31 55 35" fill="none" stroke={INK} strokeWidth="2.6" strokeLinecap="round" />
-      <path d="M65 35 Q73 31 79 36" fill="none" stroke={INK} strokeWidth="2.6" strokeLinecap="round" />
+      {/* gentle, raised eyebrows -- set further above the eyes so they read as
+          kind/attentive rather than furrowed */}
+      <path d="M41 33 Q47 29 55 32" fill="none" stroke={INK} strokeWidth="2.4" strokeLinecap="round" />
+      <path d="M65 32 Q73 29 79 33" fill="none" stroke={INK} strokeWidth="2.4" strokeLinecap="round" />
 
       {/* round wire glasses */}
       <circle cx="49" cy="44" r="9" fill="rgba(255,255,255,0.35)" stroke={INK} strokeWidth="2" />
@@ -52,12 +53,17 @@ function DoctorHead({ mood }: { mood: 'diagnosing' | 'pleased' }) {
       <path d="M58 44 h4" stroke={INK} strokeWidth="2" />
       <path d="M40 42 L32 40" stroke={INK} strokeWidth="1.8" strokeLinecap="round" />
       <path d="M80 42 L88 40" stroke={INK} strokeWidth="1.8" strokeLinecap="round" />
-      <circle cx="49" cy="45" r="2.6" fill={INK} />
-      <circle cx="71" cy="45" r="2.6" fill={INK} />
+      {/* pupils with a small white catchlight -- a plain flat dot under thick
+          brows read as stern/angry; the highlight is what makes an eye look
+          kind rather than beady */}
+      <circle cx="49" cy="45" r="2.8" fill={INK} />
+      <circle cx="71" cy="45" r="2.8" fill={INK} />
+      <circle cx="50" cy="43.7" r="0.9" fill="#fff" />
+      <circle cx="72" cy="43.7" r="0.9" fill="#fff" />
 
       {mood === 'diagnosing' ? (
-        // closed, focused mouth -- examining, not yet smiling
-        <path d="M52 63 Q60 60 68 63" fill="none" stroke={INK} strokeWidth="2.2" strokeLinecap="round" />
+        // closed, gently curious mouth -- examining, not stern
+        <path d="M52 62 Q60 65 68 62" fill="none" stroke={INK} strokeWidth="2.2" strokeLinecap="round" />
       ) : (
         <>
           {/* warm closed smile, with gentle smile-crease lines */}
