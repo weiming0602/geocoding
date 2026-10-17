@@ -103,22 +103,31 @@ function GeocodingHelp() {
         near the low end of the range.
       </p>
 
-      <h2>When a lookup doesn't match right away</h2>
-      <p>
-        A small mistake — a misspelled street, the wrong ZIP, the wrong town — doesn't have to end in
-        a dead end. If a lookup doesn't match anything on the first try (and you're signed in with an
-        account), Meridian uses AI to check its own real street data for what you probably meant, the
-        same way a human reading it over your shoulder might catch a typo.
-      </p>
-      <div className="plate" style={{ marginBottom: 'var(--space-4)', padding: 'var(--space-3)' }}>
-        <strong>You typed:</strong> 997 Peqwket Trl, 04091
-        <br />
-        <strong>Meridian found:</strong> 997 Pequawket Trl, 04091
+      <h2>A typo isn't a dead end</h2>
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 'var(--space-4)',
+          flexWrap: 'wrap',
+          margin: 'var(--space-4) 0',
+        }}
+      >
+        <div style={{ width: 220, textAlign: 'center' }}>
+          <img src="/illustrations/typo-searching.svg" alt="A person searching with a magnifying glass" style={{ width: '100%' }} />
+          <p style={{ margin: '4px 0 0', fontSize: 13, fontWeight: 600 }}>"997 Peqwket Trl"</p>
+        </div>
+        <span aria-hidden="true" style={{ fontSize: 28, color: 'var(--color-accent)' }}>
+          →
+        </span>
+        <div style={{ width: 220, textAlign: 'center' }}>
+          <img src="/illustrations/typo-found.svg" alt="A location pin confirmed on a map" style={{ width: '100%' }} />
+          <p style={{ margin: '4px 0 0', fontSize: 13, fontWeight: 600 }}>"997 Pequawket Trl" ✓</p>
+        </div>
       </div>
-      <p className="text-muted" style={{ fontSize: 13 }}>
-        It only ever picks from streets that genuinely exist in Meridian's own data — never one it
-        made up — and results found this way are clearly marked, so you always know when it's a
-        direct match versus a corrected guess.
+      <p className="text-muted" style={{ fontSize: 13, textAlign: 'center' }}>
+        Only ever a real street already in Meridian's data — never one it made up.
       </p>
 
       <h2>Street aliases (a.k.a. names)</h2>
