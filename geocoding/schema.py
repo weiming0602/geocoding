@@ -14,6 +14,9 @@ run once per database -- see the one-time setup in the migration docs).
 Routing (see routing_topology.py) additionally requires `pgrouting`
 (`sudo apt install postgresql-18-pgrouting`, then
 CREATE EXTENSION IF NOT EXISTS pgrouting; -- also a one-time, manual step).
+LLM-assisted geocoding's candidate-street lookup (see geocoding-server/src/
+geocodeMatching.js's candidateStreetNames) additionally requires `pg_trgm`
+(CREATE EXTENSION IF NOT EXISTS pg_trgm; -- same one-time, manual pattern).
 """
 
 CREATE_TABLE_SQL = """
@@ -184,6 +187,12 @@ CREATE INDEX IF NOT EXISTS idx_street_names_upper_fullname_zipr
 -- before street_names existed.
 CREATE INDEX IF NOT EXISTS idx_street_names_zipl_zipr ON street_names (zipl, zipr);
 CREATE INDEX IF NOT EXISTS idx_street_names_zipr_zipl ON street_names (zipr, zipl);
+-- Trigram index for LLM-assisted geocoding's candidate-street lookup
+-- (geocodeMatching.js's candidateStreetNames) -- without this, a
+-- similarity() query against fullname is a full table scan every time.
+-- Requires the pg_trgm extension (see this file's module docstring).
+CREATE INDEX IF NOT EXISTS idx_street_names_fullname_trgm
+    ON street_names USING GIN (fullname gin_trgm_ops);
 """
 
 # Prototype: real per-house locations (Maine E911 address points), keyed

@@ -50,7 +50,7 @@ function bboxOf(wkt) {
  * it, plus its DSN (for tests that need to point a freshly-required
  * src/server.js at it via env vars) and a drop() to tear it all down.
  */
-async function createTestDatabase({ postgis = true, pgrouting = false } = {}) {
+async function createTestDatabase({ postgis = true, pgrouting = false, trgm = true } = {}) {
   const name = `geocoding_test_${crypto.randomBytes(8).toString('hex')}`;
 
   const admin = new Pool({ connectionString: ADMIN_DSN });
@@ -64,6 +64,9 @@ async function createTestDatabase({ postgis = true, pgrouting = false } = {}) {
   }
   if (pgrouting) {
     await pool.query('CREATE EXTENSION IF NOT EXISTS pgrouting');
+  }
+  if (trgm) {
+    await pool.query('CREATE EXTENSION IF NOT EXISTS pg_trgm');
   }
 
   async function drop() {
