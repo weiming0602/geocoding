@@ -1,7 +1,113 @@
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router';
 
 import { PRICING_TIERS, formatUsd, perAddressRate } from '../../../shared/pricing';
 import { Icon, type IconName } from '../components/icons';
+
+// A small, rotating "what's new" spot -- one slide visible at a time,
+// auto-advancing, with dots to jump directly to one. Deliberately not a
+// pulled-in carousel library: this codebase keeps external dependencies
+// minimal, and a handful of slides doesn't need one. Add a slide here
+// whenever there's a new highlight-worthy thing to put in front of a
+// first-time visitor; oldest/least-relevant slide is the one to retire.
+type HighlightSlide = {
+  tag: string;
+  icon: IconName;
+  title: string;
+  body: string;
+  to: string;
+  cta: string;
+};
+
+const HIGHLIGHTS: HighlightSlide[] = [
+  {
+    tag: 'New',
+    icon: 'geocode',
+    title: "A typo doesn't mean a dead end",
+    body: "Misspelled a street, got the ZIP wrong, or typed the wrong town? Meridian now checks its own real street data for the closest match instead of just failing -- and tells you clearly when a result came from a corrected guess.",
+    to: '/help',
+    cta: 'See how it works',
+  },
+  {
+    tag: 'New',
+    icon: 'roadAlerts',
+    title: 'Road Alerts: live hazards, spoken as you drive',
+    body: "Real-time traffic hazards near you, sourced from New England 511 -- with alternate routes and one-tap Google Maps navigation. Free while it's in testing.",
+    to: '/road-alerts',
+    cta: 'Try Road Alerts',
+  },
+];
+
+const HIGHLIGHT_INTERVAL_MS = 7000;
+
+function HighlightBanner() {
+  const [index, setIndex] = useState(0);
+
+  useEffect(() => {
+    const id = setInterval(() => {
+      setIndex((i) => (i + 1) % HIGHLIGHTS.length);
+    }, HIGHLIGHT_INTERVAL_MS);
+    return () => clearInterval(id);
+  }, []);
+
+  const slide = HIGHLIGHTS[index];
+
+  return (
+    <div
+      className="card elev-sm"
+      style={{
+        background: 'var(--color-accent-100)',
+        border: '1px solid var(--color-accent-300)',
+        marginBottom: 'var(--space-8)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: 'var(--space-4)',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }}>
+        <span className="task-icon-tile" style={{ width: 48, height: 48, flexShrink: 0 }}>
+          <Icon name={slide.icon} size={26} />
+        </span>
+        <div>
+          <span className="tag tag-accent" style={{ marginBottom: 4 }}>
+            {slide.tag}
+          </span>
+          <h2 style={{ margin: '4px 0 4px' }}>{slide.title}</h2>
+          <p className="card-body" style={{ margin: 0 }}>
+            {slide.body}
+          </p>
+        </div>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {HIGHLIGHTS.map((h, i) => (
+            <button
+              key={h.title}
+              type="button"
+              aria-label={`Show highlight ${i + 1}: ${h.title}`}
+              aria-current={i === index}
+              onClick={() => setIndex(i)}
+              style={{
+                width: 8,
+                height: 8,
+                borderRadius: '50%',
+                border: 'none',
+                padding: 0,
+                cursor: 'pointer',
+                background: i === index ? 'var(--color-accent-600, #555)' : 'var(--color-accent-300)',
+              }}
+            />
+          ))}
+        </div>
+        <Link className="btn btn-primary" to={slide.to}>
+          {slide.cta}
+        </Link>
+      </div>
+    </div>
+  );
+}
 
 const TASKS: { title: string; body: string; to: string; cta: string; icon: IconName; primary?: boolean }[] = [
   {
@@ -90,38 +196,7 @@ export default function Overview() {
         </div>
       </div>
 
-      <div
-        className="card elev-sm"
-        style={{
-          background: 'var(--color-accent-100)',
-          border: '1px solid var(--color-accent-300)',
-          marginBottom: 'var(--space-8)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          flexWrap: 'wrap',
-          gap: 'var(--space-4)',
-        }}
-      >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-4)' }}>
-          <span className="task-icon-tile" style={{ width: 48, height: 48, flexShrink: 0 }}>
-            <Icon name="roadAlerts" size={26} />
-          </span>
-          <div>
-            <span className="tag tag-accent" style={{ marginBottom: 4 }}>
-              New
-            </span>
-            <h2 style={{ margin: '4px 0 4px' }}>Road Alerts: live hazards, spoken as you drive</h2>
-            <p className="card-body" style={{ margin: 0 }}>
-              Real-time traffic hazards near you, sourced from New England 511 -- with alternate
-              routes and one-tap Google Maps navigation. Free while it's in testing.
-            </p>
-          </div>
-        </div>
-        <Link className="btn btn-primary" to="/road-alerts" style={{ flexShrink: 0 }}>
-          Try Road Alerts
-        </Link>
-      </div>
+      <HighlightBanner />
 
       <div
         style={{
