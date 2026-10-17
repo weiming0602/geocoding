@@ -29,24 +29,39 @@ function buildPrompt(originalInput, candidates) {
   );
 }
 
-const PICK_CANDIDATE_TOOL = {
-  name: 'pick_candidate',
-  description: "Pick the lettered candidate that best matches the caller's intended address, or \"none\" if nothing fits.",
-  input_schema: {
-    type: 'object',
-    properties: {
-      pick: {
-        type: 'string',
-        description: 'The letter of the chosen candidate (e.g. "A"), or the literal string "none".',
+/**
+ * Builds the tool definition with an `enum` sized to the real candidate
+ * count (never more than MAX_CANDIDATES from geocodeMatching.js, so
+ * always a handful of letters), plus `strict: true` so the schema
+ * itself -- not just this module's own bounds-checking below -- rejects
+ * anything Claude might return outside this exact set. Defense in
+ * depth: the bounds check a few lines down already made this safe, this
+ * makes the guarantee hold at the API boundary too.
+ */
+function buildPickCandidateTool(candidateCount) {
+  const letters = Array.from({ length: candidateCount }, (_, i) => String.fromCharCode(65 + i));
+  return {
+    name: 'pick_candidate',
+    description: "Pick the lettered candidate that best matches the caller's intended address, or \"none\" if nothing fits.",
+    input_schema: {
+      type: 'object',
+      properties: {
+        pick: {
+          type: 'string',
+          enum: [...letters, 'none'],
+          description: 'The letter of the chosen candidate, or the literal string "none".',
+        },
+        reason: {
+          type: 'string',
+          description: 'One short sentence explaining the choice.',
+        },
       },
-      reason: {
-        type: 'string',
-        description: 'One short sentence explaining the choice.',
-      },
+      required: ['pick', 'reason'],
+      additionalProperties: false,
     },
-    required: ['pick', 'reason'],
-  },
-};
+    strict: true,
+  };
+}
 
 /**
  * Asks Claude Haiku 4.5 to pick which of `candidates` (real street_names
@@ -62,6 +77,12 @@ const PICK_CANDIDATE_TOOL = {
  * timeout, non-2xx response, malformed/missing tool_use block, an
  * out-of-range letter) folds into failureReason: 'llm_error', so a
  * caller's failure path always degrades gracefully.
+ *
+ * Uses the raw `fetch` global with no retry on a transient 429/5xx --
+ * deliberate, consistent with this codebase's HERE Traffic/Resend
+ * convention of no SDK dependency; a single transient failure here just
+ * means this one /geocode attempt doesn't get LLM-assisted (degrades to
+ * the normal 404 via llmAssist.js's own outer catch), not a crash.
  */
 async function pickCandidateWithLlm(originalInput, candidates) {
   if (!isLlmAssistConfigured()) return { picked: null, failureReason: 'llm_error' };
@@ -70,7 +91,7 @@ async function pickCandidateWithLlm(originalInput, candidates) {
   const body = {
     model: MODEL,
     max_tokens: 300,
-    tools: [PICK_CANDIDATE_TOOL],
+    tools: [buildPickCandidateTool(candidates.length)],
     tool_choice: { type: 'tool', name: 'pick_candidate' },
     messages: [{ role: 'user', content: buildPrompt(originalInput, candidates) }],
   };
@@ -106,13 +127,13 @@ async function pickCandidateWithLlm(originalInput, candidates) {
   }
 
   const toolUse = (data.content || []).find((block) => block.type === 'tool_use' && block.name === 'pick_candidate');
-  if (!toolUse || !toolUse.input || !toolUse.input.pick) {
+  if (!toolUse || !toolUse.input || typeof toolUse.input.pick !== 'string') {
     console.error('[anthropicClient] Anthropic API response had no usable pick_candidate tool_use block');
     return { picked: null, failureReason: 'llm_error' };
   }
 
   const { pick } = toolUse.input;
-  if (pick === 'none') return { picked: null, failureReason: 'none_fit' };
+  if (pick.trim().toLowerCase() === 'none') return { picked: null, failureReason: 'none_fit' };
 
   const index = pick.toUpperCase().charCodeAt(0) - 65;
   if (index < 0 || index >= candidates.length) {

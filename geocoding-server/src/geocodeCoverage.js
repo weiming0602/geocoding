@@ -34,25 +34,22 @@ function classifyCoverage({ zip, state }) {
 }
 
 /**
- * Full coverage check, including the DB-backed town fallback for the
- * 'inconclusive' case (no state, no zip, or an unparseable zip) -- checks
- * the given town against address_points.town. address_points is Maine E911
- * data only (NH has zero address-point coverage, confirmed in CLAUDE.md's
- * Known Gaps), so an inconclusive NH town -- or any town we simply don't
- * recognize -- falls through to the same "allow" default as a town with
- * no match at all: false negatives here (skipping a legitimately fixable
- * ME/NH address) cost more than the rare false positive of one wasted LLM
- * call on an address that turns out to be elsewhere.
+ * Full coverage check for the 'inconclusive' case (no state, no zip, or
+ * an unparseable zip) -- always allows. A town given here can't be
+ * decisively checked either way: a match against address_points (Maine
+ * E911 data only) would confirm "in range," but a non-match proves
+ * nothing, since address_points has no NH coverage at all (CLAUDE.md's
+ * Known Gaps) -- a real New Hampshire town would "fail" this lookup too.
+ * With no way to safely reject on a non-match, there was never a
+ * decisive answer to compute here: false negatives (skipping a
+ * legitimately fixable ME/NH address) cost more than the rare false
+ * positive of one wasted LLM call on an address that turns out to be
+ * elsewhere.
  */
 async function isPlausiblyInCoverageArea(db, { zip, state, town }) {
   const classified = classifyCoverage({ zip, state });
   if (classified === 'in') return true;
   if (classified === 'out') return false;
-
-  if (town) {
-    const { rows } = await db.query('SELECT 1 FROM address_points WHERE UPPER(town) = UPPER($1) LIMIT 1', [town]);
-    if (rows.length > 0) return true;
-  }
 
   return true;
 }

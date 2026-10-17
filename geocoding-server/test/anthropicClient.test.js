@@ -171,6 +171,57 @@ test(
   )
 );
 
+test(
+  'pickCandidateWithLlm: a response whose json() throws resolves to failureReason llm_error, not a thrown error',
+  withFakeFetch(
+    async () => ({
+      ok: true,
+      json: async () => {
+        throw new SyntaxError('bad json');
+      },
+    }),
+    withApiKey(async () => {
+      const { picked, failureReason } = await pickCandidateWithLlm('997 Peqwket Trl, 04091', CANDIDATES);
+      assert.equal(picked, null);
+      assert.equal(failureReason, 'llm_error');
+    })
+  )
+);
+
+test(
+  'pickCandidateWithLlm: a non-string pick (e.g. a number) resolves to failureReason llm_error, not a crash',
+  withFakeFetch(
+    async () => ({
+      ok: true,
+      json: async () => ({
+        content: [{ type: 'tool_use', name: 'pick_candidate', input: { pick: 1, reason: 'oops' } }],
+      }),
+    }),
+    withApiKey(async () => {
+      const { picked, failureReason } = await pickCandidateWithLlm('997 Peqwket Trl, 04091', CANDIDATES);
+      assert.equal(picked, null);
+      assert.equal(failureReason, 'llm_error');
+    })
+  )
+);
+
+test(
+  'pickCandidateWithLlm: "NONE" (different case, with whitespace) still resolves to picked null, failureReason none_fit',
+  withFakeFetch(
+    async () => ({
+      ok: true,
+      json: async () => ({
+        content: [{ type: 'tool_use', name: 'pick_candidate', input: { pick: '  NoNe  ', reason: 'nothing plausibly matches' } }],
+      }),
+    }),
+    withApiKey(async () => {
+      const { picked, failureReason } = await pickCandidateWithLlm('123 Totally Different St, 04091', CANDIDATES);
+      assert.equal(picked, null);
+      assert.equal(failureReason, 'none_fit');
+    })
+  )
+);
+
 test('pickCandidateWithLlm: never calls fetch when ANTHROPIC_API_KEY is unset', async () => {
   const saved = process.env.ANTHROPIC_API_KEY;
   delete process.env.ANTHROPIC_API_KEY;

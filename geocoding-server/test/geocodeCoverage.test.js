@@ -61,10 +61,13 @@ test('isPlausiblyInCoverageArea: returns false immediately for an explicit out-o
   assert.equal(result, false);
 });
 
-test('isPlausiblyInCoverageArea: inconclusive + town matches a real Maine town in address_points -> true', async () => {
+test('isPlausiblyInCoverageArea: inconclusive + a real Maine town still falls through to true (no DB-backed town check anymore -- see geocodeCoverage.js)', async () => {
   const db = await makeDb();
   try {
-    // "Standish" is seeded by seedFixtureStreets() via the test-uid-2 address_points row.
+    // "Standish" is seeded by seedFixtureStreets() via the test-uid-2 address_points row,
+    // but isPlausiblyInCoverageArea no longer queries address_points at all -- a non-match
+    // there could never safely mean "out" (NH has zero address_points coverage), so the
+    // town-matching query was dead weight and was removed.
     const result = await isPlausiblyInCoverageArea(db, { zip: null, state: null, town: 'Standish' });
     assert.equal(result, true);
   } finally {
