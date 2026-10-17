@@ -4,6 +4,7 @@ import AccountTabs from '../components/AccountTabs';
 import FeedbackForm from '../components/FeedbackForm';
 import PageHeader from '../components/PageHeader';
 import RoadAlertsDiagram from '../components/RoadAlertsDiagram';
+import TypoComicStrip from '../components/TypoComicStrip';
 
 type HelpTopic = 'geocoding' | 'roadAlerts';
 
@@ -101,6 +102,12 @@ function GeocodingHelp() {
         Sawyer Brook Rd runs from house number 2 to 98. <strong>26 is even</strong>, so it's placed on
         the <strong>right</strong> side of the street, close to the "start num: 2" end — since 26 is
         near the low end of the range.
+      </p>
+
+      <h2>A typo isn't a dead end</h2>
+      <TypoComicStrip />
+      <p className="text-muted" style={{ fontSize: 13, textAlign: 'center' }}>
+        Only ever a real street already in Meridian's data — never one it made up.
       </p>
 
       <h2>Street aliases (a.k.a. names)</h2>

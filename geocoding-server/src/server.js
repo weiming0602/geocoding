@@ -70,6 +70,7 @@ const {
 } = require('./transactions');
 const { checkQuota, useQuota } = require('./quota');
 const { ensureGeocodeRateLimitsTable, checkRateLimit } = require('./geocodeRateLimit');
+const { ensureLlmGeocodeAssistsTable } = require('./llmGeocodeAssists');
 const {
   sendResultsEmail,
   sendServiceKeyEmail,
@@ -164,6 +165,7 @@ const usersDbPromise = openUsersDb(USERS_DSN).then(async (pool) => {
   await ensureTestRoadSignalsTable(pool);
   await ensureRoadAlertsPushTables(pool);
   await ensureGeocodeRateLimitsTable(pool);
+  await ensureLlmGeocodeAssistsTable(pool);
   return pool;
 });
 
@@ -214,7 +216,10 @@ app.post('/geocode', async (req, res) => {
       }
     }
 
-    const result = await geocode(db, address, { offsetFeet: OFFSET_FEET });
+    const result = await geocode(db, address, {
+      offsetFeet: OFFSET_FEET,
+      llmAssist: authenticated ? { usersDb, email } : null,
+    });
 
     if (authenticated) {
       await useQuota(usersDb, email, 1);

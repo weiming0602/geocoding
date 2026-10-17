@@ -96,9 +96,16 @@ function readAddressContent(content) {
  */
 async function geocodeAddressList(db, addresses, options = {}) {
   const results = [];
+  // Batch geocoding must never trigger the LLM-assisted retry (cost-
+  // scaling risk across a file of thousands of addresses -- see
+  // llmAssist.js's own doc comment). No caller currently passes
+  // `llmAssist` in `options`, but stripping it here makes that a
+  // structural guarantee rather than one resting on every future caller
+  // remembering not to.
+  const { llmAssist: _ignoredLlmAssist, ...safeOptions } = options;
   for (const address of addresses) {
     try {
-      const result = await geocode(db, address, options);
+      const result = await geocode(db, address, safeOptions);
       results.push({ address, success: true, ...result });
     } catch (err) {
       results.push({ address, success: false, error: err.message });
