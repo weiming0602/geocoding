@@ -160,7 +160,10 @@ read-write).
   404s and `scripts/road-alerts-push-worker.js` runs but never sends
   anything; generate the key pair once via `npx web-push
   generate-vapid-keys`, `VAPID_SUBJECT` is a `mailto:` contact address the
-  push spec requires).
+  push spec requires), `ANTHROPIC_API_KEY` (unset = LLM-assisted
+  geocoding is silently disabled -- an authenticated `/geocode` request
+  that fails to match just gets today's plain 404, same convention as
+  `HERE_API_KEY`; see `geocoding-server/src/llmAssist.js`).
 - Frontend PayPal env vars, both optional and both default to sandbox:
   `VITE_PAYPAL_CLIENT_ID` (`ui/desktop`, e.g. via a gitignored
   `ui/desktop/.env.local`) / `EXPO_PUBLIC_PAYPAL_CLIENT_ID` (`ui/mobile`)
@@ -273,6 +276,24 @@ read-write).
   or a hazard with no route around it at all, throws `NotFoundError`
   (404); a hazard beyond `MAX_HAZARD_DISTANCE_METERS` throws
   `OutOfRangeError` (422), same convention as `/road-signals/cross-street`.
+- **LLM-assisted geocoding** (`geocoding-server/src/llmAssist.js`, wired
+  into `POST /geocode` when the request is authenticated) retries a
+  failed geocode by asking Claude Haiku 4.5 to pick the real street
+  Meridian's own data already has that the caller most likely meant
+  (never free-text generation -- forced tool-use constrains it to
+  selecting from real `street_names` candidates or saying "none fit").
+  Requires `ANTHROPIC_API_KEY` (see above) and the `pg_trgm` Postgres
+  extension on the `geocoding` database (`CREATE EXTENSION IF NOT
+  EXISTS pg_trgm;` -- a one-time manual step, same as PostGIS/pgRouting
+  above; **if this is missing, every authenticated `/geocode` request
+  that would otherwise 404 degrades gracefully back to that same 404**,
+  not an error, per `llmAssist.js`'s own outer error handling). Every
+  attempt that reaches the LLM step is logged to a new
+  `llm_geocode_assists` table in `geocoding_users` (reviewed manually
+  via `psql`, same convention as `feedback`'s table) and capped at 50
+  attempts/account/day, independent of the account's normal quota
+  (quota is only ever charged on a successful geocode, but this feature
+  exists exclusively on the failure path).
 - `FEEDBACK_NOTIFY_EMAIL` (optional -- unset = stub) is where `POST
   /feedback` emails you when a comment/question comes in; uses the same
   SES credentials above. The comment is saved in `geocoding_users`'
