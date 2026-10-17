@@ -219,6 +219,18 @@ const MAX_CANDIDATES = 10;
  * CANDIDATE_SIMILARITY_THRESHOLD (0.3) is a starting value, not
  * empirically tuned yet -- adjust once real misspelled-address examples
  * are available in production.
+ *
+ * No index accelerates this query -- a GIN trigram index only serves
+ * the `%` similarity operator (or LIKE/ILIKE), not a bare
+ * `similarity(...) > threshold` comparison like this one, and would
+ * need to be built on UPPER(fullname) to match this query's casing
+ * either way. A ZIP- or state-scoped call (the common case) still hits
+ * the existing zipl/zipr or state indexes first and only computes
+ * similarity() over that narrowed set; only the no-ZIP/no-state path
+ * (geocode.js's own "no ZIP, no address-point match" branch) does a
+ * full sequential scan of street_names (~475K rows, well under a
+ * second) -- acceptable since that path is rare and already gated
+ * behind isPlausiblyInCoverageArea and an authenticated-only check.
  */
 async function candidateStreetNames(db, streetName, { zip, state } = {}) {
   const params = [streetName, CANDIDATE_SIMILARITY_THRESHOLD];
