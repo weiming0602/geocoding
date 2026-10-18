@@ -93,11 +93,14 @@ function BrandPin() {
 export default function DrMeridian({ pose }: { pose: 'diagnosing' | 'pleased' }) {
   return (
     <g>
-      {/* legs, side view -- near leg stepping forward (right), far leg trailing */}
-      <path d="M52 124 L46 148" stroke={INK} strokeWidth="7" strokeLinecap="round" />
-      <path d="M62 126 L70 148" stroke={INK} strokeWidth="7" strokeLinecap="round" />
-      <ellipse cx="44" cy="151" rx="7" ry="4" fill={INK} />
-      <ellipse cx="74" cy="151" rx="8" ry="4" fill={INK} />
+      {/* legs, side view -- near leg stepping forward (right), far leg
+          trailing. Drawn as filled trouser shapes (not bare strokes) that
+          start well above the coat's hem, so the coat visually covers the
+          join and nothing floats disconnected underneath it. */}
+      <path d="M48 112 L43 148 L52 148 L55 114 Z" fill={INK} stroke={INK} strokeWidth="1" strokeLinejoin="round" />
+      <path d="M58 114 L64 148 L73 148 L66 112 Z" fill={INK} stroke={INK} strokeWidth="1" strokeLinejoin="round" />
+      <ellipse cx="45" cy="150" rx="8" ry="4.5" fill={INK} />
+      <ellipse cx="72" cy="150" rx="9" ry="4.5" fill={INK} />
 
       {/* shirt + tie, peeking out at the collar */}
       <path d="M48 68 L62 78 L70 68 L68 90 L50 90 Z" fill={SHIRT} stroke={INK} strokeWidth="1.4" strokeLinejoin="round" />
@@ -106,7 +109,7 @@ export default function DrMeridian({ pose }: { pose: 'diagnosing' | 'pleased' })
       {/* coat body, side silhouette -- narrower than the front-facing version,
           front edge (facing right) has the open lapel */}
       <path
-        d="M38 70 C50 62 66 62 76 70 L80 128 C64 136 44 136 34 128 Z"
+        d="M38 70 C50 62 66 62 76 70 L82 122 C68 134 44 134 32 122 Z"
         fill={COAT}
         stroke={INK}
         strokeWidth="2.4"
@@ -126,14 +129,24 @@ export default function DrMeridian({ pose }: { pose: 'diagnosing' | 'pleased' })
       </g>
 
       {pose === 'diagnosing' ? (
-        // near arm extended forward, pointing at whatever he's facing
+        // near arm extended forward, pointing at whatever he's facing --
+        // a white coat sleeve (dark outline underneath, coat-colored fill
+        // on top), ending in an actual skin-toned hand with a pointing
+        // finger, not a bare black line with a dot for a hand
         <>
-          <path d="M72 76 Q92 78 104 64" fill="none" stroke={INK} strokeWidth="6" strokeLinecap="round" />
-          <circle cx="106" cy="61" r="4" fill={INK} />
+          <path d="M72 76 Q92 78 100 66" fill="none" stroke={INK} strokeWidth="9" strokeLinecap="round" />
+          <path d="M72 76 Q92 78 100 66" fill="none" stroke={COAT} strokeWidth="6.5" strokeLinecap="round" />
+          <ellipse cx="102" cy="64" rx="4.6" ry="3.8" fill={SKIN} stroke={INK} strokeWidth="1.6" />
+          <path d="M105 63 L112 58" stroke={INK} strokeWidth="3.2" strokeLinecap="round" />
+          <path d="M105 63 L112 58" stroke={SKIN} strokeWidth="2" strokeLinecap="round" />
         </>
       ) : (
-        // near arm relaxed, down at his side
-        <path d="M70 76 Q78 92 72 108" fill="none" stroke={INK} strokeWidth="6" strokeLinecap="round" />
+        // near arm relaxed, down at his side -- same sleeve treatment
+        <>
+          <path d="M70 76 Q78 92 72 106" fill="none" stroke={INK} strokeWidth="9" strokeLinecap="round" />
+          <path d="M70 76 Q78 92 72 106" fill="none" stroke={COAT} strokeWidth="6.5" strokeLinecap="round" />
+          <ellipse cx="71" cy="108" rx="4.4" ry="3.8" fill={SKIN} stroke={INK} strokeWidth="1.6" />
+        </>
       )}
 
       <ProfileHead mood={pose === 'diagnosing' ? 'diagnosing' : 'pleased'} />
