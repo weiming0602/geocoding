@@ -1,17 +1,19 @@
-# Fires geocoding-weighted-points-cleanup.service weekly -- cheap to run
+# Fires geocoding-weighted-points-cleanup.service daily -- cheap to run
 # even though the underlying routine-driving data changes slowly (unlike
-# feedback comments), since it's a single indexed DELETE. Adjust
-# OnCalendar/the retention window (the "180" argument in the .service
-# file) to taste.
+# feedback comments), since it's a single indexed DELETE. Runs daily
+# rather than weekly so a stale point's worst-case lifetime stays close
+# to the retention window (the "21" argument in the .service file)
+# rather than the window plus up to another week on top. Adjust
+# OnCalendar/the retention window to taste.
 #
 # Persistent=true means a run missed while the box was off gets caught
 # up at next boot instead of silently skipped.
 
 [Unit]
-Description=Run geocoding-weighted-points-cleanup.service weekly
+Description=Run geocoding-weighted-points-cleanup.service daily
 
 [Timer]
-OnCalendar=weekly
+OnCalendar=daily
 Persistent=true
 
 [Install]
