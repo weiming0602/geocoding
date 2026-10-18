@@ -29,10 +29,11 @@
 0 7 * * * cd /home/my_ai/projects/geocoding/geocoding-server && node scripts/road-alerts-digest.js >> /home/my_ai/projects/geocoding/geocoding-server/road-alerts-digest.log 2>&1
 
 # Alternative to geocoding-weighted-points-cleanup.timer -- deletes Road
-# Alerts weighted points not pinged in 180 days (a route someone stopped
-# driving). Runs weekly (Sunday 5am); adjust the "180" argument to
-# change the retention window.
-0 5 * * 0 cd /home/my_ai/projects/geocoding/geocoding-server && node scripts/cleanup-weighted-points.js 180 >> /home/my_ai/projects/geocoding/geocoding-server/weighted-points-cleanup.log 2>&1
+# Alerts weighted points not pinged in 21 days (a route someone stopped
+# driving). Runs daily at 5am, not just weekly, so a stale point's
+# worst-case lifetime stays close to the retention window itself; adjust
+# the "21" argument to change the retention window.
+0 5 * * * cd /home/my_ai/projects/geocoding/geocoding-server && node scripts/cleanup-weighted-points.js 21 >> /home/my_ai/projects/geocoding/geocoding-server/weighted-points-cleanup.log 2>&1
 
 # Alternative to geocoding-transactions-digest.timer -- emails the owner
 # (TRANSACTIONS_NOTIFY_EMAIL) every purchase completed since the last
