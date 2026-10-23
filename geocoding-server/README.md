@@ -34,8 +34,12 @@ set of ZIPs is treated as a mismatch (not silently accepted), falling
 through to the range-interpolation path instead, which does check ZIP
 directly. State is checked directly against the point's own
 `state_abbr`. Each response reports which path was used
-(`"source": "address_point"` vs `"interpolation"`), so callers can tell
-a real point from an estimate.
+(`"source": "address_point"` vs `"interpolation"` vs, for an
+authenticated request only, `"llm_assisted"` when the address was
+corrected via an LLM-assisted retry -- see `src/llmAssist.js` --
+alongside `originalInput`/`correctedAddress` fields in that case), so
+callers can tell a real point, a direct range match, and an
+LLM-corrected guess apart.
 
 ## Worked examples
 

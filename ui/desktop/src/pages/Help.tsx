@@ -103,6 +103,39 @@ function GeocodingHelp() {
         near the low end of the range.
       </p>
 
+      <h2>A typo isn't a dead end</h2>
+      <p>
+        A real-world address rarely arrives perfectly formed, so Meridian handles a few kinds of
+        mistakes differently depending on how much they actually confuse a search:
+      </p>
+      <p>
+        <strong>Misspelled street names</strong> are the case Meridian can genuinely fix. When an
+        address fails to match anything on the first try, an authenticated request falls back to a
+        second pass: Meridian looks up real street names near the address's ZIP code (or town, if
+        no ZIP was given), hands a short list of those real candidates to an AI model, and asks it
+        to pick whichever one the misspelled input was most likely trying to say — "Pequawket
+        Trl" for a query that came in as "Peqwket Trl," for example. The model is only ever allowed
+        to choose from streets that already exist in Meridian's data or say none of them fit — it's
+        never allowed to invent a street that isn't really there. If it picks one, Meridian re-runs
+        the normal geocoding match against that real street and returns a genuine result, clearly
+        marked as AI-assisted so it's never confused with an exact match.
+      </p>
+      <p>
+        <strong>Wrong ZIP codes</strong> are a harder case, and honestly not well-handled yet: that
+        same fallback search is scoped to the ZIP code the request gave, on the assumption that the
+        ZIP is reliable even when the street name isn't. If the ZIP itself is wrong, the candidate
+        list comes from the wrong neighborhood entirely, so the AI model has nothing correct to pick
+        from. A wrong ZIP is the one mistake here most likely to still end in a failed match.
+      </p>
+      <p>
+        <strong>Wrong town names</strong> matter much less than you'd expect, because Meridian's
+        primary matching path doesn't actually key off the town at all — it matches by ZIP code and
+        street name, so a correct ZIP paired with the wrong town name on the same line still
+        geocodes normally. Town only comes into play as a fallback scope for the AI-assisted search
+        above when no ZIP is given at all, so an incorrect town mainly matters for addresses missing
+        a ZIP in the first place.
+      </p>
+
       <h2>Street aliases (a.k.a. names)</h2>
       <p>
         Many streets go by more than one name — a numbered route that's also known by a local name,

@@ -14,6 +14,9 @@ run once per database -- see the one-time setup in the migration docs).
 Routing (see routing_topology.py) additionally requires `pgrouting`
 (`sudo apt install postgresql-18-pgrouting`, then
 CREATE EXTENSION IF NOT EXISTS pgrouting; -- also a one-time, manual step).
+LLM-assisted geocoding's candidate-street lookup (see geocoding-server/src/
+geocodeMatching.js's candidateStreetNames) additionally requires `pg_trgm`
+(CREATE EXTENSION IF NOT EXISTS pg_trgm; -- same one-time, manual pattern).
 """
 
 CREATE_TABLE_SQL = """
