@@ -1,4 +1,4 @@
-import { Map as MapLibreMap, LngLatBounds, Marker, NavigationControl } from 'maplibre-gl';
+import { type GeoJSONSource, Map as MapLibreMap, LngLatBounds, Marker, NavigationControl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { useEffect, useRef, useState } from 'react';
 
@@ -45,7 +45,12 @@ type Props = {
   // notifies the caller (by that point's `id`) instead of the caller
   // driving the map. A marker with no `id` is not clickable this way.
   onPointClick?: (id: string) => void;
+  // A simulated drive's route (GeoJSON [lon, lat] pairs), drawn as a line
+  // and fit into view whenever it changes -- see RoadAlertsSandbox.tsx.
+  routeLine?: [number, number][] | null;
 };
+
+const ROUTE_SOURCE_ID = 'sandbox-route';
 
 // Plain DOM Markers (one per point), not BatchMapView's WebGL circle
 // layer -- a sandbox never has more than a handful of points at once
@@ -59,6 +64,7 @@ export default function RoadAlertsSandboxMap({
   onMapClick,
   focusPoint,
   onPointClick,
+  routeLine,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -85,7 +91,20 @@ export default function RoadAlertsSandboxMap({
     map.on('click', (e) => {
       onMapClickRef.current?.({ latitude: e.lngLat.lat, longitude: e.lngLat.lng });
     });
-    map.on('load', () => setReady(true));
+    map.on('load', () => {
+      map.addSource(ROUTE_SOURCE_ID, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+      map.addLayer({
+        id: ROUTE_SOURCE_ID,
+        type: 'line',
+        source: ROUTE_SOURCE_ID,
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': '#1b6fd6', 'line-width': 4, 'line-opacity': 0.75 },
+      });
+      setReady(true);
+    });
     mapRef.current = map;
 
     return () => {
@@ -171,6 +190,26 @@ export default function RoadAlertsSandboxMap({
       driverMarkerRef.current.setLngLat([driverPosition.longitude, driverPosition.latitude]);
     }
   }, [driverPosition, ready]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const source = map.getSource(ROUTE_SOURCE_ID) as GeoJSONSource | undefined;
+    source?.setData({
+      type: 'FeatureCollection',
+      features:
+        routeLine && routeLine.length > 1
+          ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: routeLine } }]
+          : [],
+    });
+    if (routeLine && routeLine.length > 1) {
+      const bounds = routeLine.reduce(
+        (acc, coord) => acc.extend(coord),
+        new LngLatBounds(routeLine[0], routeLine[0])
+      );
+      map.fitBounds(bounds, { padding: 60, maxZoom: 15 });
+    }
+  }, [routeLine, ready]);
 
   useEffect(() => {
     const map = mapRef.current;
