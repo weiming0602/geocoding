@@ -62,6 +62,7 @@ const {
   clearTestRoadSignals,
   deleteTestRoadSignal,
 } = require('./testRoadSignals');
+const { getDriveRoute } = require('./testDriveRoute');
 const { openUsersDb, getUser, ensureCurrentPeriod, addToTier } = require('./users');
 const { ensureFeedbackTable, submitFeedback } = require('./feedback');
 const {
@@ -1709,6 +1710,45 @@ app.delete('/road-alerts/test/weighted-points/:id', async (req, res) => {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
     if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Street-following path for a simulated drive (see testDriveRoute.js) --
+// the sandbox geocodes the start/target addresses itself (plain
+// /geocode), then asks for the route between the two points here.
+// Gated by the same flag as the fake hazards it exists to drive past.
+// Read-only against `geocoding`, same as /road-signals/reroute.
+app.get('/road-alerts/test/drive-route', async (req, res) => {
+  if (!allowsTestRoadSignals()) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  const { startLatitude, startLongitude, endLatitude, endLongitude, email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const result = await getDriveRoute(db, {
+      startLatitude: startLatitude !== undefined ? Number(startLatitude) : undefined,
+      startLongitude: startLongitude !== undefined ? Number(startLongitude) : undefined,
+      endLatitude: endLatitude !== undefined ? Number(endLatitude) : undefined,
+      endLongitude: endLongitude !== undefined ? Number(endLongitude) : undefined,
+    });
+
+    res.json(result);
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    if (err instanceof OutOfRangeError) return res.status(422).json({ error: err.message });
     console.error(err);
     res.status(500).json({ error: 'internal error' });
   }
