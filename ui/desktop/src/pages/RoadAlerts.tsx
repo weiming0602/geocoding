@@ -12,6 +12,7 @@ import {
   getRoadAlertsUsername,
   getRoadReroute,
   getRoadSignals,
+  getTestWeightedPoints,
   getWeightedPoints,
   markRoadAlertsNotificationsViewed,
   postRoadAlertsLivePosition,
@@ -345,8 +346,17 @@ export default function RoadAlerts() {
     const current = accountRef.current;
     if (!current) return;
     try {
-      const response = await getWeightedPoints({ email: current.email, serviceKey: current.serviceKey });
-      weightedPointsRef.current = response.weightedPoints.map((p) => ({
+      // Plus any developer-seeded test points (see
+      // geocoding-server/src/testWeightedPoints.js), same as ui/mobile's
+      // RoadAlertsForm.tsx merges in -- that endpoint 404s unless
+      // ALLOW_TEST_WEIGHTED_POINTS is set, which just leaves it empty.
+      const [response, testResponse] = await Promise.all([
+        getWeightedPoints({ email: current.email, serviceKey: current.serviceKey }),
+        getTestWeightedPoints({ email: current.email, serviceKey: current.serviceKey }).catch(() => ({
+          weightedPoints: [],
+        })),
+      ]);
+      weightedPointsRef.current = [...response.weightedPoints, ...testResponse.weightedPoints].map((p) => ({
         latitude: p.latitude,
         longitude: p.longitude,
         weight: p.weight,
