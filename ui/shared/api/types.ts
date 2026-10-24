@@ -211,6 +211,15 @@ export type TestRoadSignalsResponse = {
   signals: RoadSignal[];
 };
 
+// GET /road-alerts/test/drive-route -- the street path a simulated drive
+// replays (see ui/shared/driveSimulation.ts). Coordinates are GeoJSON
+// [lon, lat]. Same TIGER caveats as RoadRerouteResponse: every street
+// treated as two-way, no duration.
+export type TestDriveRouteResponse = {
+  geometry: { type: 'LineString'; coordinates: [number, number][] };
+  distanceMeters: number;
+};
+
 // POST /road-alerts/register -- idempotent: an already-registered email
 // gets its existing service key back unchanged (alreadyRegistered: true),
 // never a new key. Free for every registered account right now, no trial
