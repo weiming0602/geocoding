@@ -45,6 +45,7 @@ const {
   addTestWeightedPoint,
   getTestWeightedPoints,
   clearTestWeightedPoints,
+  deleteTestWeightedPoint,
 } = require('./testWeightedPoints');
 const {
   ensureWeightedPointsTable,
@@ -59,6 +60,7 @@ const {
   addTestRoadSignal,
   getTestRoadSignals,
   clearTestRoadSignals,
+  deleteTestRoadSignal,
 } = require('./testRoadSignals');
 const { openUsersDb, getUser, ensureCurrentPeriod, addToTier } = require('./users');
 const { ensureFeedbackTable, submitFeedback } = require('./feedback');
@@ -1642,6 +1644,67 @@ app.delete('/road-alerts/test/signals', async (req, res) => {
 
     const deleted = await clearTestRoadSignals(usersDb, email);
     res.json({ deleted });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+// Single-item deletes for the sandbox's per-row "Delete" buttons --
+// clear-all (the two DELETEs above) is still there for a fresh start.
+// Scoped to the authenticated account inside deleteTestRoadSignal/
+// deleteTestWeightedPoint, so a 404 here means "not yours or not there",
+// never a leak of whether another account's row exists.
+app.delete('/road-alerts/test/signals/:id', async (req, res) => {
+  if (!allowsTestRoadSignals()) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  const { email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const deleted = await deleteTestRoadSignal(usersDb, email, req.params.id);
+    if (!deleted) throw new NotFoundError('test hazard not found');
+    res.json({ deleted: 1 });
+  } catch (err) {
+    if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+    if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
+    if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+    console.error(err);
+    res.status(500).json({ error: 'internal error' });
+  }
+});
+
+app.delete('/road-alerts/test/weighted-points/:id', async (req, res) => {
+  if (!allowsTestWeightedPoints()) {
+    return res.status(404).json({ error: 'not found' });
+  }
+  const { email, serviceKey } = req.query;
+  try {
+    if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+      throw new ValidationError('email must be a valid email address');
+    }
+    if (typeof serviceKey !== 'string' || !serviceKey.trim()) {
+      throw new ValidationError('serviceKey must be a non-empty string');
+    }
+
+    const usersDb = await usersDbPromise;
+    await checkRoadAlertsAccess(usersDb, email, serviceKey);
+
+    const deleted = await deleteTestWeightedPoint(usersDb, email, req.params.id);
+    if (!deleted) throw new NotFoundError('test weighted point not found');
+    res.json({ deleted: 1 });
   } catch (err) {
     if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
     if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });

@@ -243,3 +243,61 @@ test(
     )
   )
 );
+
+function testSignalUrl(port, id, { email = TEST_EMAIL, serviceKey } = {}) {
+  const params = new URLSearchParams({ email });
+  if (serviceKey !== undefined) params.set('serviceKey', serviceKey);
+  return `http://127.0.0.1:${port}/road-alerts/test/signals/${encodeURIComponent(id)}?${params.toString()}`;
+}
+
+test('DELETE /road-alerts/test/signals/:id removes only that signal, by its test- prefixed id', () =>
+  withTestServer(
+    withFlagEnabled(async ({ port, usersDb }) => {
+      const serviceKey = await registerTestAccount(usersDb);
+      const { addTestRoadSignal } = require('../src/testRoadSignals');
+      const first = await addTestRoadSignal(usersDb, TEST_EMAIL, { latitude: 43.9, longitude: -69.8 });
+      await addTestRoadSignal(usersDb, TEST_EMAIL, { latitude: 44.0, longitude: -69.7 });
+
+      const deleteResponse = await fetch(testSignalUrl(port, `test-${first.id}`, { serviceKey }), { method: 'DELETE' });
+      assert.equal(deleteResponse.status, 200);
+
+      const body = await (await fetch(testSignalsUrl(port, { serviceKey }))).json();
+      assert.equal(body.signals.length, 1);
+      assert.notEqual(body.signals[0].id, `test-${first.id}`);
+
+      const again = await fetch(testSignalUrl(port, `test-${first.id}`, { serviceKey }), { method: 'DELETE' });
+      assert.equal(again.status, 404);
+    }),
+    { seedStreets: false }
+  ));
+
+test("DELETE /road-alerts/test/signals/:id can't delete another account's signal", () =>
+  withTestServer(
+    withFlagEnabled(async ({ port, usersDb }) => {
+      const serviceKey = await registerTestAccount(usersDb);
+      await registerTestAccount(usersDb, 'bob@example.com');
+      const { addTestRoadSignal } = require('../src/testRoadSignals');
+      const bobs = await addTestRoadSignal(usersDb, 'bob@example.com', { latitude: 43.9, longitude: -69.8 });
+
+      const response = await fetch(testSignalUrl(port, `test-${bobs.id}`, { serviceKey }), { method: 'DELETE' });
+      assert.equal(response.status, 404);
+      const { rows } = await usersDb.query('SELECT count(*)::int AS n FROM road_alerts_test_signals');
+      assert.equal(rows[0].n, 1);
+    }),
+    { seedStreets: false }
+  ));
+
+test('DELETE /road-alerts/test/signals/:id rejects a malformed id, and 404s when the flag is off', () =>
+  withTestServer(
+    async ({ port, usersDb }) => {
+      const serviceKey = await registerTestAccount(usersDb);
+      const off = await fetch(testSignalUrl(port, 'test-1', { serviceKey }), { method: 'DELETE' });
+      assert.equal(off.status, 404);
+
+      await withFlagEnabled(async () => {
+        const bad = await fetch(testSignalUrl(port, 'not-a-number', { serviceKey }), { method: 'DELETE' });
+        assert.equal(bad.status, 400);
+      })();
+    },
+    { seedStreets: false }
+  ));

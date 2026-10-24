@@ -68,6 +68,24 @@ async function clearTestRoadSignals(pool, email) {
 }
 
 /**
+ * Deletes one fake hazard, scoped to the owning account so one account
+ * can never delete another's. Accepts either the raw row id or the
+ * `test-`-prefixed id toRoadSignal hands back to clients (what the
+ * sandbox actually has in hand). Returns true if a row was removed.
+ */
+async function deleteTestRoadSignal(pool, email, id) {
+  const rawId = typeof id === 'string' ? id.replace(/^test-/, '') : String(id);
+  if (!/^\d+$/.test(rawId)) {
+    throw new ValidationError('id must be a test hazard id, e.g. test-12');
+  }
+  const { rowCount } = await pool.query('DELETE FROM road_alerts_test_signals WHERE email = $1 AND id = $2', [
+    email,
+    rawId,
+  ]);
+  return rowCount > 0;
+}
+
+/**
  * Shapes a stored row into the same RoadSignal object normalizeIncident
  * (roadSignals.js) produces for a real incident, so every downstream
  * consumer -- filterByBbox, sortByFreshness, findAlertsForWeightedPoints,
@@ -124,6 +142,7 @@ module.exports = {
   addTestRoadSignal,
   getTestRoadSignals,
   clearTestRoadSignals,
+  deleteTestRoadSignal,
   toRoadSignal,
   VALID_SEVERITIES,
 };

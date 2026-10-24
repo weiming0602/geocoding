@@ -74,9 +74,26 @@ async function clearTestWeightedPoints(pool, email) {
   return rowCount;
 }
 
+/**
+ * Deletes one fake weighted point, scoped to the owning account so one
+ * account can never delete another's. Returns true if a row was removed.
+ */
+async function deleteTestWeightedPoint(pool, email, id) {
+  const rawId = String(id);
+  if (!/^\d+$/.test(rawId)) {
+    throw new ValidationError('id must be a test weighted point id');
+  }
+  const { rowCount } = await pool.query('DELETE FROM road_alerts_test_weighted_points WHERE email = $1 AND id = $2', [
+    email,
+    rawId,
+  ]);
+  return rowCount > 0;
+}
+
 module.exports = {
   ensureTestWeightedPointsTable,
   addTestWeightedPoint,
   getTestWeightedPoints,
   clearTestWeightedPoints,
+  deleteTestWeightedPoint,
 };
