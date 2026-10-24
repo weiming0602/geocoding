@@ -36,6 +36,19 @@ read-write).
   captures stdout (morgan's per-request log lines, plus every existing
   `console.log`/`console.error`) durably via journald instead of an
   ephemeral terminal or `/tmp` file.
+- Server entry points: `src/server.js` serves **every** route (local dev,
+  the test suite, and any box not yet split). Production can instead run
+  two processes on the same droplet -- `src/geocodingServer.js` (`PORT`,
+  default 3001) and `src/roadAlertsServer.js` (`ROAD_ALERTS_PORT`, default
+  3002), via `ops/geocoding-server.service` + `ops/road-alerts-server.service`
+  -- with nginx sending `/road-alerts/*` and `/road-signals*` to the
+  latter (`ops/nginx-api.conf.example`; rollout steps are in the
+  road-alerts unit's header). Routes live in `src/geocodingRoutes.js` /
+  `src/roadAlertsRoutes.js`, shared setup (pools, base app, test-flag
+  gates) in `src/serverSetup.js` -- add a new route to whichever group
+  it belongs to, never to an entry point; a Road Alerts route must stay
+  under `/road-alerts` or `/road-signals` or nginx will send it to the
+  wrong process (`test/serverSplit.test.js` enforces this).
 - Server tests: `cd geocoding-server && node --test` — **not** `npm test`,
   that script is a placeholder stub. 292 tests, same throwaway-database-
   per-test pattern (see `test/helpers.js`); 1 pre-existing skip on
