@@ -21,6 +21,10 @@ export type SandboxPoint = {
   // highlighting/scrolling to the matching list card via onPointClick
   // below). A caller with no such list (RoadAlertsTest.tsx) can omit it.
   id?: string;
+  // Excluded from the one-time fit-to-points below -- for a transient
+  // marker (e.g. the sandbox's not-yet-saved hazard click) that shouldn't
+  // move the camera away from where the user just clicked.
+  skipFit?: boolean;
 };
 
 type Props = {
@@ -149,15 +153,16 @@ export default function RoadAlertsSandboxMap({
     // Fit to all points once, the first time any exist -- afterward the
     // user's own pan/zoom is left alone rather than re-fit on every
     // single point added, which would be disorienting mid-session.
-    if (!hasFitOnceRef.current && points.length > 0) {
+    const fitPoints = points.filter((point) => !point.skipFit);
+    if (!hasFitOnceRef.current && fitPoints.length > 0) {
       hasFitOnceRef.current = true;
-      if (points.length === 1) {
-        map.setCenter([points[0].longitude, points[0].latitude]);
+      if (fitPoints.length === 1) {
+        map.setCenter([fitPoints[0].longitude, fitPoints[0].latitude]);
         map.setZoom(12);
       } else {
-        const bounds = points.reduce(
+        const bounds = fitPoints.reduce(
           (acc, p) => acc.extend([p.longitude, p.latitude]),
-          new LngLatBounds([points[0].longitude, points[0].latitude], [points[0].longitude, points[0].latitude])
+          new LngLatBounds([fitPoints[0].longitude, fitPoints[0].latitude], [fitPoints[0].longitude, fitPoints[0].latitude])
         );
         map.fitBounds(bounds, { padding: 60, maxZoom: 14 });
       }

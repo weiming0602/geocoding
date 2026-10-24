@@ -247,8 +247,14 @@ export default function RoadAlertsSandbox() {
           { ...driveRoute.end, color: '#222222', label: 'Simulated drive target' },
         ]
       : [];
-    return [...real, ...test, ...signals, ...endpoints];
-  }, [realPoints, testPoints, testSignals, driveRoute]);
+    // Shown the moment the map is clicked in hazard mode -- the hazard
+    // itself isn't saved until "Create hazard" (it needs a severity), and
+    // without this a click left no visible trace at all.
+    const pending = pendingHazardClick
+      ? [{ ...pendingHazardClick, color: '#f4a29a', label: 'New test hazard (not saved yet)', skipFit: true }]
+      : [];
+    return [...real, ...test, ...signals, ...endpoints, ...pending];
+  }, [realPoints, testPoints, testSignals, driveRoute, pendingHazardClick]);
 
   if (!account) {
     return (
@@ -312,23 +318,23 @@ export default function RoadAlertsSandbox() {
         </p>
       )}
 
-      <RoadAlertsSandboxMap
-        points={mapPoints}
-        driverPosition={driverPosition}
-        onMapClick={handleMapClick}
-        focusPoint={focusPoint}
-        routeLine={driveRoute?.coordinates ?? null}
-      />
+      {mode === 'hazard' && !pendingHazardClick && (
+        <p className="text-muted" style={{ margin: '0 0 var(--space-3)', fontSize: 13 }}>
+          Click the map where the hazard is -- a form for its severity and description opens here.
+        </p>
+      )}
 
       {pendingHazardClick && (
-        <div className="card elev-sm" style={{ marginTop: 'var(--space-3)', padding: 'var(--space-3)' }}>
+        <div className="card elev-sm" style={{ marginBottom: 'var(--space-3)', padding: 'var(--space-3)' }}>
           <p style={{ margin: '0 0 var(--space-2)', fontSize: 13 }}>
-            New test hazard at {formatCoordinates(pendingHazardClick)}
+            New test hazard at {formatCoordinates(pendingHazardClick)} (light red dot) -- add details, then Create
+            hazard. Click the map again to move it.
           </p>
           <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap', marginBottom: 'var(--space-2)' }}>
             <input
               className="input"
               placeholder="Roadway (optional)"
+              autoFocus
               value={hazardRoadway}
               onChange={(e) => setHazardRoadway(e.target.value)}
               style={{ maxWidth: 200 }}
@@ -363,6 +369,14 @@ export default function RoadAlertsSandbox() {
           </div>
         </div>
       )}
+
+      <RoadAlertsSandboxMap
+        points={mapPoints}
+        driverPosition={driverPosition}
+        onMapClick={handleMapClick}
+        focusPoint={focusPoint}
+        routeLine={driveRoute?.coordinates ?? null}
+      />
 
       <div className="card elev-sm" style={{ marginTop: 'var(--space-3)', padding: 'var(--space-3)' }}>
         <div className="card-title" style={{ marginBottom: 'var(--space-2)' }}>
