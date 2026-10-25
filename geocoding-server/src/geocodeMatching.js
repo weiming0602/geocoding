@@ -6,9 +6,11 @@ const { NotFoundError, OutOfRangeError } = require('./errors');
  * Finds every streets row known by `streetName` — checking not just its
  * primary fullname but every alternate name TIGER records for that TLID
  * in street_names (e.g. "Pequawket Trl" and "State Rte 113" can be the
- * same physical segment) — matching the given side's ZIP (zipl for odd
- * house numbers, zipr for even — TIGER edges can have a different ZIP on
- * each side of the same segment), and (if provided) state. A 2-letter
+ * same physical segment) — with `zip` on EITHER side (zipl or zipr --
+ * TIGER edges can have a different ZIP on each side of the same
+ * segment, and which side holds a given house number isn't known until
+ * matchByStreetAndZip checks each side's range), and (if provided)
+ * state. A 2-letter
  * state is matched against state_abbr; anything else against the full
  * state name. A single named street is typically split into many `edges`
  * segments, each covering a different address sub-range, so callers must
@@ -23,10 +25,7 @@ const { NotFoundError, OutOfRangeError } = require('./errors');
  * when the input isn't a recognized full suffix name (including when
  * it's already abbreviated), so trying both is always safe.
  */
-async function candidateStreets(db, streetName, zip, zipColumn, state) {
-  if (zipColumn !== 'zipl' && zipColumn !== 'zipr') {
-    throw new Error(`zipColumn must be 'zipl' or 'zipr', got ${zipColumn}`);
-  }
+async function candidateStreets(db, streetName, zip, state) {
   const stateColumn = state && state.length === 2 ? 'state_abbr' : 'state';
   const stateClause = state ? `AND UPPER(street_names.${stateColumn}) = UPPER($4)` : '';
   const stateParam = state ? [state] : [];
@@ -41,23 +40,38 @@ async function candidateStreets(db, streetName, zip, zipColumn, state) {
   // scale. Filtering street_names first hits its composite index directly
   // and only touches streets (via its unique tlid index) for the few rows
   // that actually match.
-  const buildQuery = (nameClause) => `
+  //
+  // One query per ZIP column (each hits its own composite index) rather
+  // than a single `zipl = $3 OR zipr = $3`, merged by id. Exact names are
+  // tried on BOTH sides before the LIKE fallback runs on either, so an
+  // exact "Grove St" on one side can't be outvoted by a LIKE match like
+  // "Grove St Exd" on the other.
+  const buildQuery = (nameClause, zipColumn) => `
     SELECT DISTINCT streets.* FROM street_names
     JOIN streets ON streets.tlid = street_names.tlid
     WHERE ${nameClause} AND street_names.${zipColumn} = $3 ${stateClause}
   `;
+  const bothSides = async (nameClause, params) => {
+    const byId = new Map();
+    for (const zipColumn of ['zipl', 'zipr']) {
+      const { rows } = await db.query(buildQuery(nameClause, zipColumn), params);
+      for (const row of rows) byId.set(String(row.id), row);
+    }
+    return [...byId.values()];
+  };
 
-  const exact = await db.query(
-    buildQuery('UPPER(street_names.fullname) IN (UPPER($1), UPPER($2))'),
-    [streetName, abbreviated, zip, ...stateParam]
-  );
-  if (exact.rows.length > 0) return exact.rows;
+  const exact = await bothSides('UPPER(street_names.fullname) IN (UPPER($1), UPPER($2))', [
+    streetName,
+    abbreviated,
+    zip,
+    ...stateParam,
+  ]);
+  if (exact.length > 0) return exact;
 
-  const fallback = await db.query(
-    buildQuery('(UPPER(street_names.fullname) LIKE UPPER($1) OR UPPER(street_names.fullname) LIKE UPPER($2))'),
+  return bothSides(
+    '(UPPER(street_names.fullname) LIKE UPPER($1) OR UPPER(street_names.fullname) LIKE UPPER($2))',
     [`%${streetName}%`, `%${abbreviated}%`, zip, ...stateParam]
   );
-  return fallback.rows;
 }
 
 /**
@@ -128,6 +142,34 @@ async function matchAddressPoint(db, number, streetName, town, zip, state) {
   return point;
 }
 
+const SIDES = {
+  left: { fromCol: 'lfromadd', toCol: 'ltoadd', zipCol: 'zipl' },
+  right: { fromCol: 'rfromadd', toCol: 'rtoadd', zipCol: 'zipr' },
+};
+
+/**
+ * If `row`'s `side` can hold house `number` in ZIP `zip`, returns the
+ * interpolation fraction along that side's range; otherwise null. A side
+ * qualifies when its own ZIP is `zip`, its range contains `number`, and
+ * the range holds numbers of the same parity -- which side carries odd
+ * vs. even numbers is NOT fixed in TIGER (left/right just follow the
+ * direction each line happens to be digitized in; about 57% of Maine/NH
+ * segments carry odd numbers on the right). A side whose own from/to
+ * parities differ (~0.015% of real sides) is accepted on range alone,
+ * since it makes no parity claim to check against.
+ */
+function sideFraction(row, side, number, zip) {
+  const { fromCol, toCol, zipCol } = SIDES[side];
+  if (row[zipCol] !== zip) return null;
+  const fromNum = parseInt(row[fromCol], 10);
+  const toNum = parseInt(row[toCol], 10);
+  if (Number.isNaN(fromNum) || Number.isNaN(toNum)) return null;
+  if (number < Math.min(fromNum, toNum) || number > Math.max(fromNum, toNum)) return null;
+  const sideIsMixedParity = fromNum % 2 !== toNum % 2;
+  if (!sideIsMixedParity && fromNum % 2 !== number % 2) return null;
+  return fromNum === toNum ? 0 : (number - fromNum) / (toNum - fromNum);
+}
+
 /**
  * Finishes a geocode once a street name + ZIP are known to be correct —
  * either the caller's own parsed input (geocode.js's normal path), or an
@@ -137,40 +179,42 @@ async function matchAddressPoint(db, number, streetName, town, zip, state) {
  * own body — behavior is unchanged from before this extraction.
  */
 async function matchByStreetAndZip(db, number, streetName, zip, state, offsetFeet) {
-  const rangeSide = number % 2 === 1 ? 'left' : 'right';
-  const offsetSide = rangeSide;
-  const [fromCol, toCol] = rangeSide === 'left' ? ['lfromadd', 'ltoadd'] : ['rfromadd', 'rtoadd'];
-  const zipColumn = rangeSide === 'left' ? 'zipl' : 'zipr';
-
-  const candidates = await candidateStreets(db, streetName, zip, zipColumn, state);
+  const candidates = await candidateStreets(db, streetName, zip, state);
   if (candidates.length === 0) {
     const stateSuffix = state ? ` (state ${state})` : '';
     throw new NotFoundError(`no street found matching "${streetName}" in ZIP ${zip}${stateSuffix}`);
   }
 
+  // The side a number's parity "usually" lands on is only a tie-breaker,
+  // for the rare segment (~315 in Maine/NH) whose two sides carry the
+  // same parity -- see sideFraction for why it can't be the rule itself.
+  const sideOrder = number % 2 === 1 ? ['left', 'right'] : ['right', 'left'];
   let matchedRow = null;
   let fraction = null;
+  let rangeSide = null;
   for (const row of candidates) {
-    const fromRaw = row[fromCol];
-    const toRaw = row[toCol];
-    if (!fromRaw || !toRaw) continue;
-    const fromNum = parseInt(fromRaw, 10);
-    const toNum = parseInt(toRaw, 10);
-    const lo = Math.min(fromNum, toNum);
-    const hi = Math.max(fromNum, toNum);
-    if (number >= lo && number <= hi) {
-      matchedRow = row;
-      fraction = (number - fromNum) / (toNum - fromNum);
-      break;
+    for (const side of sideOrder) {
+      const sideMatch = sideFraction(row, side, number, zip);
+      if (sideMatch !== null) {
+        matchedRow = row;
+        fraction = sideMatch;
+        rangeSide = side;
+        break;
+      }
     }
+    if (matchedRow) break;
   }
 
   if (!matchedRow) {
+    const parity = number % 2 === 1 ? 'odd' : 'even';
     throw new OutOfRangeError(
-      `no "${streetName}" segment in ZIP ${zip} has a ${rangeSide} range containing ${number} ` +
+      `no "${streetName}" segment in ZIP ${zip} has a range of ${parity} numbers containing ${number} ` +
         `(${candidates.length} segment(s) found for this street/ZIP, none cover that number)`
     );
   }
+  // The point goes on the same side of the centerline as the range that
+  // actually holds this number.
+  const offsetSide = rangeSide;
 
   const points = parseLinestring(matchedRow.geometry);
   const [longitude, latitude] = interpolateAlongLine(points, fraction, offsetFeet, offsetSide);

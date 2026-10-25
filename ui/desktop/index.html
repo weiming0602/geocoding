@@ -55,6 +55,10 @@
   </head>
   <body>
     <div id="root"></div>
+    <!-- Shared with the service worker (public/sw.js): draws the hazard
+         sketch on Road Alerts cards and notifications. Plain script, so it
+         must load before the app module that uses window.RoadAlertSketch. -->
+    <script src="/alert-sketch.js"></script>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

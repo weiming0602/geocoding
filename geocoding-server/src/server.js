@@ -1566,6 +1566,15 @@ app.get('/road-alerts/weighted-points/candidates', async (req, res) => {
 // the map/comments/reroute UI against a stable hazard for as long as
 // they want, across as many days as they want, without depending on a
 // real hazard staying live (or staying in range) that whole time.
+// Which developer test tools this server has switched on -- lets the
+// frontend show its Road Alerts sandbox tab only where the sandbox can
+// actually work (never on production, where both are off). Public and
+// unauthenticated on purpose: it only reveals two booleans, and the
+// sandbox tab needs to know before anyone has signed in.
+app.get('/road-alerts/test/enabled', (req, res) => {
+  res.json({ testRoadSignals: allowsTestRoadSignals(), testWeightedPoints: allowsTestWeightedPoints() });
+});
+
 app.post('/road-alerts/test/signals', async (req, res) => {
   if (!allowsTestRoadSignals()) {
     return res.status(404).json({ error: 'not found' });
