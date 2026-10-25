@@ -1743,6 +1743,11 @@ export default function RoadAlerts() {
                                       {option.durationSeconds !== null
                                         ? `, ~${Math.round(option.durationSeconds / 60)} min`
                                         : ''}
+                                      {option.usesWeightedPoints && (
+                                        <span className="tag tag-accent" style={{ marginLeft: 6 }}>
+                                          ★ uses your usual roads
+                                        </span>
+                                      )}
                                     </p>
                                     {position && (
                                       <a

@@ -42,6 +42,7 @@ const DEFAULT_TEST_POINT_WEIGHT = '5';
 const FAST_FORWARD_OPTIONS = [1, 2, 5, 10];
 
 type DriveRoute = {
+  usesWeightedPoints: boolean;
   coordinates: [number, number][];
   distanceMeters: number;
   start: Coordinates;
@@ -187,7 +188,13 @@ export default function RoadAlertsSandbox() {
       const start = await resolvePlace(driveStart, 'start');
       const end = await resolvePlace(driveTarget, 'target');
       const route = await getTestDriveRoute({ email: account.email, serviceKey: account.serviceKey, start, end });
-      setDriveRoute({ coordinates: route.geometry.coordinates, distanceMeters: route.distanceMeters, start, end });
+      setDriveRoute({
+        coordinates: route.geometry.coordinates,
+        distanceMeters: route.distanceMeters,
+        usesWeightedPoints: route.usesWeightedPoints === true,
+        start,
+        end,
+      });
     } catch (err) {
       setDriveRoute(null);
       setError(err instanceof Error ? err.message : 'Could not build a route.');
@@ -437,12 +444,14 @@ export default function RoadAlertsSandbox() {
             <span className="text-muted" style={{ fontSize: 13 }}>
               {(driveRoute.distanceMeters / 1000).toFixed(1)} km
               {estimatedMinutes !== null && ` -- about ${Math.max(1, Math.round(estimatedMinutes))} min at this speed`}
+              {driveRoute.usesWeightedPoints && ' -- ★ via your weighted points (usual roads)'}
             </span>
           )}
         </div>
         <p className="text-muted" style={{ margin: 'var(--space-2) 0 0', fontSize: 12 }}>
-          Shortest path over our TIGER streets (every street treated as two-way, no speed data) -- a test route,
-          not navigation. Road Alerts checks for hazards about every 15 real seconds, so at high fast-forward it
+          Shortest path over our TIGER streets (every street treated as two-way, no speed data), except that a route
+          through your weighted points -- your usual roads, real or test (purple dots) -- is preferred unless it's
+          about 3x longer. A test route, not navigation. Road Alerts checks for hazards about every 15 real seconds, so at high fast-forward it
           covers more road between checks.
         </p>
       </div>
