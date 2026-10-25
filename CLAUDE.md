@@ -365,6 +365,25 @@ read-write).
   same as every other quota-metered endpoint. `app.set('trust proxy',
   'loopback')` in `server.js` is required for this to key on the real
   client IP behind nginx rather than the proxy's own loopback address.
+- **Road Alerts test tooling** (local/dev only -- never set these where
+  real drivers are): `ALLOW_TEST_ROAD_SIGNALS=true` enables fake hazards
+  (`testRoadSignals.js`, merged into `GET /road-signals` for the owning
+  account) plus `GET /road-alerts/test/drive-route` (`testDriveRoute.js`,
+  pgRouting `pgr_dijkstra` over a bbox around start/end);
+  `ALLOW_TEST_WEIGHTED_POINTS=true` enables fake weighted points
+  (`testWeightedPoints.js`). Both are read at request time and 404 when
+  unset. `ui/desktop`'s hidden `/#/road-alerts-sandbox` page adds/
+  deletes both (map click or per-row Delete) and has a "Simulate a
+  drive" panel: start + target (address or `lat, lng`), speed, fast-
+  forward -> navigates to `/road-alerts` with the route in router state,
+  where `RoadAlerts.tsx` replays it as fake GPS fixes through the real
+  `onPosition` path (`ui/shared/driveSimulation.ts`) instead of
+  `navigator.geolocation`. Simulated fixes never ping the real
+  `/road-alerts/weighted-points` store (`simulatingRef`). Not covered:
+  `ui/mobile`, and the background push worker (it only sees real 511
+  hazards/real weighted points, so test hazards never trigger a push).
+  Run locally with `ALLOW_TEST_ROAD_SIGNALS=true
+  ALLOW_TEST_WEIGHTED_POINTS=true node src/server.js`.
 
 # Known gaps (don't assume these are done)
 - `ui/desktop` is deployed to DigitalOcean App Platform as a **Static

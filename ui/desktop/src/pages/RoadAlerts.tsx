@@ -12,6 +12,7 @@ import {
   getRoadAlertsUsername,
   getRoadReroute,
   getRoadSignals,
+  getTestWeightedPoints,
   getWeightedPoints,
   markRoadAlertsNotificationsViewed,
   postRoadAlertsLivePosition,
@@ -37,6 +38,7 @@ import {
   shouldStronglyAlert,
   type WeightedPoint,
 } from '../../../shared/roadAlertsMatching';
+import { buildDrivePlan, positionAlongRoute, type DrivePlan } from '../../../shared/driveSimulation';
 import { buildGoogleMapsDirectionsUrl } from '../../../shared/googleMapsDirections';
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
 import PageHeader from '../components/PageHeader';
@@ -164,6 +166,20 @@ function shouldAutoSpeak(severity: RoadSignalSeverity): boolean {
 
 type AlarmTestCoords = { latitude: number; longitude: number; heading: number | null };
 
+// Router state RoadAlertsSandbox.tsx's "Simulate a drive" panel sends --
+// a street route (GeoJSON [lon, lat] pairs) to replay as fake GPS fixes
+// in place of navigator.geolocation, at speedMps of route distance per
+// real second (already multiplied by any fast-forward factor).
+export type SimulatedDriveState = {
+  coordinates: [number, number][];
+  speedMps: number;
+  label: string;
+};
+
+// How often a simulated drive emits a fake fix -- about what a real
+// phone's watchPosition delivers while driving.
+const SIMULATED_FIX_INTERVAL_MS = 1000;
+
 export default function RoadAlerts() {
   const location = useLocation();
   const [account, setAccount] = useState<StoredRoadAlertsAccount | null>(() => getStoredAccount());
@@ -176,7 +192,37 @@ export default function RoadAlerts() {
     () => (location.state as { alarmTestCoords?: AlarmTestCoords } | null)?.alarmTestCoords ?? null
   );
   const alarmTestRanRef = useRef(false);
+  // Same capture-once-on-mount trick as pendingAlarmTest. Non-null for as
+  // long as a simulated drive is still to be (or being) driven; cleared
+  // once it finishes or is stopped, so a later Start uses real GPS again.
+  const [simulatedDriveInit] = useState<{ plan: DrivePlan; speedMps: number; label: string } | null>(() => {
+    const state = (location.state as { simulatedDrive?: SimulatedDriveState } | null)?.simulatedDrive;
+    if (!state) return null;
+    try {
+      return { plan: buildDrivePlan(state.coordinates), speedMps: state.speedMps, label: state.label };
+    } catch {
+      return null;
+    }
+  });
+  const simulatedDriveRef = useRef(simulatedDriveInit);
+  const simulationTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // True only while fixes are coming from a simulated drive rather than
+  // real GPS -- read by onPosition so a fake fix is never reported as a
+  // real weighted-point ping (that would pollute the account's real
+  // routine-route model with a drive that never happened).
+  const simulatingRef = useRef(false);
+  const [simulationProgress, setSimulationProgress] = useState<{
+    label: string;
+    distanceMeters: number;
+    totalMeters: number;
+    done: boolean;
+  } | null>(null);
 
+  // The simulated drive's route as GeoJSON [lon, lat] pairs, drawn on the
+  // map for as long as the progress banner shows (cleared only when the
+  // page unmounts), plus whether the map keeps the car centred.
+  const [simulatedRoute, setSimulatedRoute] = useState<[number, number][] | null>(null);
+  const [followCar, setFollowCar] = useState(true);
   const [watching, setWatching] = useState(false);
   const [position, setPosition] = useState<{ latitude: number; longitude: number; heading: number | null } | null>(
     null
@@ -345,8 +391,17 @@ export default function RoadAlerts() {
     const current = accountRef.current;
     if (!current) return;
     try {
-      const response = await getWeightedPoints({ email: current.email, serviceKey: current.serviceKey });
-      weightedPointsRef.current = response.weightedPoints.map((p) => ({
+      // Plus any developer-seeded test points (see
+      // geocoding-server/src/testWeightedPoints.js), same as ui/mobile's
+      // RoadAlertsForm.tsx merges in -- that endpoint 404s unless
+      // ALLOW_TEST_WEIGHTED_POINTS is set, which just leaves it empty.
+      const [response, testResponse] = await Promise.all([
+        getWeightedPoints({ email: current.email, serviceKey: current.serviceKey }),
+        getTestWeightedPoints({ email: current.email, serviceKey: current.serviceKey }).catch(() => ({
+          weightedPoints: [],
+        })),
+      ]);
+      weightedPointsRef.current = [...response.weightedPoints, ...testResponse.weightedPoints].map((p) => ({
         latitude: p.latitude,
         longitude: p.longitude,
         weight: p.weight,
@@ -458,6 +513,15 @@ export default function RoadAlerts() {
       navigator.geolocation.clearWatch(watchIdRef.current);
       watchIdRef.current = null;
     }
+    // A stopped simulated drive is finished for good -- the next Start
+    // uses real GPS (go back to the sandbox to drive it again).
+    const wasSimulating = simulatingRef.current;
+    if (simulationTimerRef.current !== null) {
+      clearInterval(simulationTimerRef.current);
+      simulationTimerRef.current = null;
+    }
+    simulatingRef.current = false;
+    simulatedDriveRef.current = null;
     window.speechSynthesis?.cancel();
     setWatching(false);
 
@@ -483,7 +547,7 @@ export default function RoadAlerts() {
     // isEndpoint so it's never recorded as a weighted point, same
     // reasoning as the origin ping in onPosition below.
     const lastPosition = positionRef.current;
-    if (lastPosition) {
+    if (lastPosition && !wasSimulating) {
       pingWeightedPoint(lastPosition.latitude, lastPosition.longitude, true);
     }
   }, [pingWeightedPoint]);
@@ -637,6 +701,10 @@ export default function RoadAlerts() {
         }
       }
 
+      // A simulated drive never feeds the real routine-route model -- see
+      // simulatingRef's own comment.
+      if (simulatingRef.current) return;
+
       // The first fix after Start is this trip's origin -- reported with
       // isEndpoint so it's never recorded as a weighted point (see
       // pingWeightedPoint), and doesn't count against the throttle below
@@ -698,6 +766,44 @@ export default function RoadAlerts() {
     trailRef.current = [];
     setOnRouteIds(new Set());
     setAlertedSignalId(null);
+
+    // Simulated drive (from the sandbox): feed onPosition fake fixes along
+    // the route instead of real GPS -- everything downstream (movement
+    // detection, polling, matching, chime, speech) is the real code path,
+    // unchanged. Fixes carry their own heading/speed, the same way a
+    // phone that reports GeolocationCoordinates.heading/speed does.
+    const simulatedDrive = simulatedDriveRef.current;
+    if (simulatedDrive) {
+      const { plan, speedMps, label } = simulatedDrive;
+      const startedAtMs = Date.now();
+      if (simulationTimerRef.current !== null) clearInterval(simulationTimerRef.current);
+      simulatingRef.current = true;
+      setSimulationProgress({ label, distanceMeters: 0, totalMeters: plan.totalMeters, done: false });
+      setSimulatedRoute(plan.points.map((point) => [point.longitude, point.latitude]));
+      const emitFix = () => {
+        const nowMs = Date.now();
+        const fix = positionAlongRoute(plan, ((nowMs - startedAtMs) / 1000) * speedMps);
+        onPosition({
+          coords: {
+            latitude: fix.latitude,
+            longitude: fix.longitude,
+            heading: fix.headingDeg,
+            speed: fix.done ? 0 : speedMps,
+            accuracy: 5,
+            altitude: null,
+            altitudeAccuracy: null,
+          },
+          timestamp: nowMs,
+        } as unknown as GeolocationPosition);
+        setSimulationProgress({ label, distanceMeters: fix.distanceMeters, totalMeters: plan.totalMeters, done: fix.done });
+        if (fix.done) handleStop();
+      };
+      simulationTimerRef.current = setInterval(emitFix, SIMULATED_FIX_INTERVAL_MS);
+      emitFix();
+      setWatching(true);
+      return;
+    }
+
     const id = navigator.geolocation.watchPosition(
       onPosition,
       (err) => setError(err.message || 'Could not start watching your location.'),
@@ -705,7 +811,7 @@ export default function RoadAlerts() {
     );
     watchIdRef.current = id;
     setWatching(true);
-  }, [onPosition]);
+  }, [onPosition, handleStop]);
 
   // Starts watching as soon as an account is ready, rather than waiting on
   // a press -- opening this page should surface alerts on its own. Depends
@@ -1128,6 +1234,7 @@ export default function RoadAlerts() {
   useEffect(() => {
     return () => {
       if (watchIdRef.current !== null) navigator.geolocation.clearWatch(watchIdRef.current);
+      if (simulationTimerRef.current !== null) clearInterval(simulationTimerRef.current);
       window.speechSynthesis?.cancel();
     };
   }, []);
@@ -1187,6 +1294,33 @@ export default function RoadAlerts() {
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         Live traffic hazards near you, spoken aloud as you approach them.
       </p>
+
+      {simulationProgress && (
+        <div className="card elev-sm" style={{ marginBottom: 'var(--space-3)', padding: 'var(--space-3)' }}>
+          <div className="card-title" style={{ fontSize: 15, marginBottom: 'var(--space-1)' }}>
+            {simulationProgress.done
+              ? `Simulated drive finished: ${simulationProgress.label}`
+              : `Simulated drive: ${simulationProgress.label}`}
+          </div>
+          <p className="card-body" style={{ margin: 0 }}>
+            {(simulationProgress.distanceMeters / 1000).toFixed(2)} of {(simulationProgress.totalMeters / 1000).toFixed(2)}{' '}
+            km ({Math.round((simulationProgress.distanceMeters / simulationProgress.totalMeters) * 100)}%). Fake GPS
+            fixes from the Road Alerts sandbox -- never recorded as real weighted points.
+            {!watching && ' Start watching (in Settings) to switch back to real GPS.'}
+          </p>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginTop: 'var(--space-2)', flexWrap: 'wrap' }}>
+            {watching && (
+              <button className="btn btn-secondary" onClick={handleStop}>
+                Stop simulated drive
+              </button>
+            )}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+              <input type="checkbox" checked={followCar} onChange={(e) => setFollowCar(e.target.checked)} />
+              Follow car on the map
+            </label>
+          </div>
+        </div>
+      )}
 
       <button
         className="btn btn-ghost"
@@ -1403,14 +1537,18 @@ export default function RoadAlerts() {
             {signals.length} alert{signals.length === 1 ? '' : 's'} within {metersLabel(RADIUS_METERS)}
           </h5>
 
-          {mapPoints.length > 0 && (
+          {/* Always shown during a simulated drive, hazards nearby or not --
+              watching the car move along its route is the point of it. */}
+          {(mapPoints.length > 0 || simulatedRoute) && (
             <div ref={mapContainerRef} style={{ marginBottom: 'var(--space-4)' }}>
               <RoadAlertsSandboxMap
                 points={mapPoints}
                 driverPosition={position}
-                driverLabel="Your current position"
+                driverLabel={simulatedRoute ? 'Simulated car' : 'Your current position'}
                 focusPoint={focusPoint}
                 onPointClick={handleMarkerClick}
+                routeLine={simulatedRoute}
+                followDriver={simulatedRoute !== null && followCar}
               />
             </div>
           )}

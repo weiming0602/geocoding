@@ -200,6 +200,7 @@ async function getRoadReroute(db, { driverLatitude, driverLongitude, driverHeadi
 
 module.exports = {
   getRoadReroute,
+  nearestTopologyNodeId,
   bearingDegreesFlat,
   destinationPointFlat,
   buildPathGeometry,

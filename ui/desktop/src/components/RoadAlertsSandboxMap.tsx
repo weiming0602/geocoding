@@ -1,4 +1,4 @@
-import { Map as MapLibreMap, LngLatBounds, Marker, NavigationControl } from 'maplibre-gl';
+import { type GeoJSONSource, Map as MapLibreMap, LngLatBounds, Marker, NavigationControl } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { useEffect, useRef, useState } from 'react';
 
@@ -21,6 +21,10 @@ export type SandboxPoint = {
   // highlighting/scrolling to the matching list card via onPointClick
   // below). A caller with no such list (RoadAlertsTest.tsx) can omit it.
   id?: string;
+  // Excluded from the one-time fit-to-points below -- for a transient
+  // marker (e.g. the sandbox's not-yet-saved hazard click) that shouldn't
+  // move the camera away from where the user just clicked.
+  skipFit?: boolean;
 };
 
 type Props = {
@@ -45,7 +49,17 @@ type Props = {
   // notifies the caller (by that point's `id`) instead of the caller
   // driving the map. A marker with no `id` is not clickable this way.
   onPointClick?: (id: string) => void;
+  // A simulated drive's route (GeoJSON [lon, lat] pairs), drawn as a line
+  // and fit into view whenever it changes -- see RoadAlertsSandbox.tsx.
+  routeLine?: [number, number][] | null;
+  // Keeps the camera centred on driverPosition as it moves -- e.g. a
+  // simulated drive on RoadAlerts.tsx, where the car would otherwise
+  // drive off the edge of the map. Only the centre moves, never the
+  // zoom, so whatever zoom the user picks (or the route fit gave) stays.
+  followDriver?: boolean;
 };
+
+const ROUTE_SOURCE_ID = 'sandbox-route';
 
 // Plain DOM Markers (one per point), not BatchMapView's WebGL circle
 // layer -- a sandbox never has more than a handful of points at once
@@ -59,6 +73,8 @@ export default function RoadAlertsSandboxMap({
   onMapClick,
   focusPoint,
   onPointClick,
+  routeLine,
+  followDriver = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -85,7 +101,20 @@ export default function RoadAlertsSandboxMap({
     map.on('click', (e) => {
       onMapClickRef.current?.({ latitude: e.lngLat.lat, longitude: e.lngLat.lng });
     });
-    map.on('load', () => setReady(true));
+    map.on('load', () => {
+      map.addSource(ROUTE_SOURCE_ID, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+      map.addLayer({
+        id: ROUTE_SOURCE_ID,
+        type: 'line',
+        source: ROUTE_SOURCE_ID,
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': '#1b6fd6', 'line-width': 4, 'line-opacity': 0.75 },
+      });
+      setReady(true);
+    });
     mapRef.current = map;
 
     return () => {
@@ -130,15 +159,16 @@ export default function RoadAlertsSandboxMap({
     // Fit to all points once, the first time any exist -- afterward the
     // user's own pan/zoom is left alone rather than re-fit on every
     // single point added, which would be disorienting mid-session.
-    if (!hasFitOnceRef.current && points.length > 0) {
+    const fitPoints = points.filter((point) => !point.skipFit);
+    if (!hasFitOnceRef.current && fitPoints.length > 0) {
       hasFitOnceRef.current = true;
-      if (points.length === 1) {
-        map.setCenter([points[0].longitude, points[0].latitude]);
+      if (fitPoints.length === 1) {
+        map.setCenter([fitPoints[0].longitude, fitPoints[0].latitude]);
         map.setZoom(12);
       } else {
-        const bounds = points.reduce(
+        const bounds = fitPoints.reduce(
           (acc, p) => acc.extend([p.longitude, p.latitude]),
-          new LngLatBounds([points[0].longitude, points[0].latitude], [points[0].longitude, points[0].latitude])
+          new LngLatBounds([fitPoints[0].longitude, fitPoints[0].latitude], [fitPoints[0].longitude, fitPoints[0].latitude])
         );
         map.fitBounds(bounds, { padding: 60, maxZoom: 14 });
       }
@@ -170,7 +200,36 @@ export default function RoadAlertsSandboxMap({
     } else {
       driverMarkerRef.current.setLngLat([driverPosition.longitude, driverPosition.latitude]);
     }
-  }, [driverPosition, ready]);
+
+    if (followDriver) {
+      // Shorter than the ~1s between simulated fixes, so each pan finishes
+      // before the next one starts instead of stacking up.
+      map.easeTo({ center: [driverPosition.longitude, driverPosition.latitude], duration: 800 });
+    }
+  }, [driverPosition, ready, followDriver]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const source = map.getSource(ROUTE_SOURCE_ID) as GeoJSONSource | undefined;
+    source?.setData({
+      type: 'FeatureCollection',
+      features:
+        routeLine && routeLine.length > 1
+          ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: routeLine } }]
+          : [],
+    });
+    if (routeLine && routeLine.length > 1) {
+      const bounds = routeLine.reduce(
+        (acc, coord) => acc.extend(coord),
+        new LngLatBounds(routeLine[0], routeLine[0])
+      );
+      // Instant, not animated: followDriver's once-a-second easeTo would
+      // otherwise interrupt the zoom animation partway through, leaving
+      // the map stuck zoomed far out.
+      map.fitBounds(bounds, { padding: 60, maxZoom: 15, animate: false });
+    }
+  }, [routeLine, ready]);
 
   useEffect(() => {
     const map = mapRef.current;
