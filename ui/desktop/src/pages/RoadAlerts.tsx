@@ -543,10 +543,17 @@ export default function RoadAlerts() {
               // looking at this tab -- otherwise the fresh list entry and
               // the speech about to play are already enough.
               if (document.hidden) {
-                showAlertNotification(
-                  `${SEVERITY_LABELS[signal.severity]} road alert`,
-                  signal.speech.brief
-                );
+                // The notification picture: last ~minute of trail, where the
+                // driver is and which way they're heading, and the hazard
+                // (see public/alert-sketch.js). The trail stays in this
+                // browser -- it's passed to this device's own service
+                // worker, never sent to the server.
+                showAlertNotification(`${SEVERITY_LABELS[signal.severity]} road alert`, signal.speech.brief, {
+                  trail: trailRef.current.map(({ latitude: lat, longitude: lon }) => ({ latitude: lat, longitude: lon })),
+                  position: { latitude, longitude },
+                  headingDeg: heading,
+                  hazard: { latitude: signal.latitude, longitude: signal.longitude },
+                });
               }
             }
             speakSignal(signal);

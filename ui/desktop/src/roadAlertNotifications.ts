@@ -124,13 +124,18 @@ export function requestNotificationPermission(): void {
 }
 
 /**
- * Shows a real OS-level notification if permission has already been
- * granted -- a no-op otherwise (including "default"/not-yet-asked; this
- * never itself prompts, see requestNotificationPermission). Clicking it
- * brings this tab back into focus and dismisses the notification.
+ * What the notification picture shows (see public/alert-sketch.js): the
+ * driver's recent trail (oldest first), current position and heading
+ * (degrees clockwise from north, or null if unknown), and the hazard.
  */
-export function showAlertNotification(title: string, body: string): void {
-  if (!isNotificationAvailable() || Notification.permission !== 'granted') return;
+export type AlertSketchInput = {
+  trail: { latitude: number; longitude: number }[];
+  position: { latitude: number; longitude: number };
+  headingDeg: number | null;
+  hazard: { latitude: number; longitude: number };
+};
+
+function showPageNotification(title: string, body: string): void {
   try {
     const notification = new Notification(title, { body });
     notification.onclick = () => {
@@ -140,4 +145,34 @@ export function showAlertNotification(title: string, body: string): void {
   } catch {
     // Best-effort -- see the module comment above.
   }
+}
+
+/**
+ * Shows a real OS-level notification if permission has already been
+ * granted -- a no-op otherwise (including "default"/not-yet-asked; this
+ * never itself prompts, see requestNotificationPermission).
+ *
+ * Goes through the service worker when one is registered (public/sw.js's
+ * 'road-alert-notification' message), so the notification gets the same
+ * route-sketch picture as a background push and the same click handling
+ * (focus this tab, open Road Alerts). Without a service worker it falls
+ * back to a plain text Notification from the page itself.
+ */
+export function showAlertNotification(title: string, body: string, sketch?: AlertSketchInput): void {
+  if (!isNotificationAvailable() || Notification.permission !== 'granted') return;
+  if (!('serviceWorker' in navigator)) {
+    showPageNotification(title, body);
+    return;
+  }
+  navigator.serviceWorker
+    .getRegistration()
+    .then((registration) => {
+      const worker = registration?.active;
+      if (worker) {
+        worker.postMessage({ type: 'road-alert-notification', title, body, sketch });
+      } else {
+        showPageNotification(title, body);
+      }
+    })
+    .catch(() => showPageNotification(title, body));
 }
