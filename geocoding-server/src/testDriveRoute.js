@@ -6,8 +6,9 @@ const { nearestTopologyNodeId, buildPathGeometry } = require('./roadReroute');
 // GPS fixes (see ui/shared/driveSimulation.ts and the Road Alerts sandbox),
 // so Road Alerts can be exercised from a desk -- same reasoning as
 // testRoadSignals.js's fake hazards. Gated behind ALLOW_TEST_ROAD_SIGNALS
-// in server.js. Never offered as real navigation: same TIGER caveats as
-// roadReroute.js (no one-way data, no speeds -- every street is two-way).
+// in server.js. Never offered as real navigation: same caveats as
+// roadReroute.js -- directed by OSM one-way data where matched (else
+// two-way), and no speed data.
 
 // Straight-line cap on a simulated trip -- comfortably covers any drive
 // worth sitting through at a desk, and keeps the bounding box below small.
@@ -31,7 +32,7 @@ function buildBoundedEdgesSql(start, end) {
   const maxLon = Math.max(start.longitude, end.longitude);
   const maxLat = Math.max(start.latitude, end.latitude);
   return (
-    'SELECT id, source, target, cost FROM streets_routing_edges ' +
+    'SELECT id, source, target, cost, reverse_cost FROM streets_routing_edges ' +
     `WHERE geom && ST_Expand(ST_MakeEnvelope(${minLon}, ${minLat}, ${maxLon}, ${maxLat}, 4326), ${BBOX_MARGIN_DEGREES})`
   );
 }
@@ -69,7 +70,7 @@ async function getDriveRoute(db, { startLatitude, startLongitude, endLatitude, e
   // Same explicit ::bigint casts as roadReroute.js's pgr_ksp call --
   // pgr_dijkstra is overloaded the same way.
   const { rows: pathRows } = await db.query(
-    `SELECT seq, node, edge, agg_cost FROM pgr_dijkstra($1, $2::bigint, $3::bigint, false) ORDER BY seq`,
+    `SELECT seq, node, edge, agg_cost FROM pgr_dijkstra($1, $2::bigint, $3::bigint, true) ORDER BY seq`,
     [buildBoundedEdgesSql(start, end), startNode, endNode]
   );
   if (pathRows.length === 0) {

@@ -79,7 +79,7 @@ async function nearestTopologyNodeId(db, latitude, longitude) {
  */
 function buildAvoidHazardEdgesSql(hazardLatitude, hazardLongitude) {
   return (
-    'SELECT id, source, target, cost FROM streets_routing_edges ' +
+    'SELECT id, source, target, cost, reverse_cost FROM streets_routing_edges ' +
     'WHERE NOT ST_DWithin(geom::geography, ' +
     `ST_SetSRID(ST_MakePoint(${hazardLongitude}, ${hazardLatitude}), 4326)::geography, ${AVOID_RADIUS_METERS})`
   );
@@ -122,11 +122,13 @@ function buildPathGeometry(pathRows, edgesById) {
  * yet, or if no route around the hazard exists at all (a dead end/
  * disconnected area).
  *
- * TIGER carries no one-way/direction data at all (confirmed against
- * Census's own field documentation, not an ingest gap) and no speed
- * data -- every edge is treated as two-way (pgr_ksp's `directed: false`)
- * and durationSeconds is always null rather than a fabricated estimate.
- * Both limitations are surfaced to the driver in the UI, not hidden here.
+ * Directed: one-way streets are only traveled their legal way.
+ * TIGER itself has no one-way data, so direction comes from
+ * OpenStreetMap via streets_routing_edges' cost/reverse_cost (see
+ * geocoding/osm_oneway.py); a street OSM couldn't be matched to stays
+ * two-way. TIGER has no speed data either, so durationSeconds is always
+ * null rather than a fabricated estimate. Both limitations are surfaced
+ * to the driver in the UI, not hidden here.
  */
 async function getRoadReroute(db, { driverLatitude, driverLongitude, driverHeading, hazardLatitude, hazardLongitude }) {
   validateCoordinate(driverLatitude, driverLongitude, 'driver');
@@ -164,7 +166,7 @@ async function getRoadReroute(db, { driverLatitude, driverLongitude, driverHeadi
   // throws "function pgr_ksp(...) is not unique").
   const { rows: pathRows } = await db.query(
     `SELECT path_id, path_seq, node, edge, agg_cost
-     FROM pgr_ksp($1, $2::bigint, $3::bigint, ${ROUTE_OPTION_COUNT}, false)
+     FROM pgr_ksp($1, $2::bigint, $3::bigint, ${ROUTE_OPTION_COUNT}, true)
      ORDER BY path_id, path_seq`,
     [edgesSql, startNode, endNode]
   );

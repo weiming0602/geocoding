@@ -4,7 +4,7 @@ const assert = require('node:assert/strict');
 const { OutOfRangeError, NotFoundError } = require('../src/errors');
 const { getRoadReroute, buildPathGeometry, MAX_HAZARD_DISTANCE_METERS } = require('../src/roadReroute');
 const { createTestDatabase } = require('./helpers');
-const { seedRoadRerouteFixture, DRIVER, HAZARD, REJOIN } = require('./roadRerouteFixture');
+const { seedRoadRerouteFixture, setOneway, DRIVER, HAZARD, REJOIN } = require('./roadRerouteFixture');
 
 // buildPathGeometry is pure/synchronous -- no database needed to exercise
 // its forward/backward-edge and shared-endpoint-dedup logic directly.
@@ -112,6 +112,43 @@ test('getRoadReroute throws NotFoundError when the driver is not near any routab
       getRoadReroute(db, {
         driverLatitude: HAZARD.latitude - 4000 / 111320,
         driverLongitude: HAZARD.longitude,
+        hazardLatitude: HAZARD.latitude,
+        hazardLongitude: HAZARD.longitude,
+      }),
+    NotFoundError
+  );
+  await db.close();
+});
+
+// One-way streets (geocoding/osm_oneway.py's street_oneway): E4 is the
+// top detour's long crossing, drawn N4 -> N5 (west -> east, the way the
+// driver needs to go). Marked one-way against that (east -> west only),
+// the top detour is illegal and must never be offered -- only the bottom
+// one is left.
+test('getRoadReroute never offers a detour that travels a one-way street the wrong way', async () => {
+  const db = await makeFixtureDb();
+  await setOneway(db, { E4: -1 });
+  const result = await getRoadReroute(db, {
+    driverLatitude: DRIVER.latitude,
+    driverLongitude: DRIVER.longitude,
+    hazardLatitude: HAZARD.latitude,
+    hazardLongitude: HAZARD.longitude,
+  });
+
+  assert.equal(result.options.length, 1);
+  // The bottom detour runs ~200m south of the direct row; the top one north.
+  assert.ok(result.options[0].geometry.coordinates.every(([, lat]) => lat <= 1e-9), 'expected only the bottom (southern) detour');
+  await db.close();
+});
+
+test('getRoadReroute throws NotFoundError when every way around is one-way against the driver', async () => {
+  const db = await makeFixtureDb();
+  await setOneway(db, { E4: -1, E7: -1 });
+  await assert.rejects(
+    () =>
+      getRoadReroute(db, {
+        driverLatitude: DRIVER.latitude,
+        driverLongitude: DRIVER.longitude,
         hazardLatitude: HAZARD.latitude,
         hazardLongitude: HAZARD.longitude,
       }),
