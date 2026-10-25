@@ -25,9 +25,13 @@ const MAX_FACTOR = 0.7;
 // most this many times the direct distance -- roughly "on the way",
 // matching the 1 / MIN_FACTOR break-even above.
 const MAX_VIA_DETOUR_RATIO = 3;
-// Ignore a weighted point this close to the start or end -- it's where the
-// route begins/ends anyway, not a preference about the path between.
-const MIN_ENDPOINT_DISTANCE_METERS = 100;
+// Ignore a weighted point this close to the start or end -- for routing
+// through AND for scoring. Nearly every route passes a point right by the
+// destination (a driver's home street, say), so it says nothing about
+// which way they came; counting it let a heavy point ~300 m from the
+// target outrank an interstate the driver actually uses. Measured from
+// the trip's own start/end points.
+const MIN_ENDPOINT_DISTANCE_METERS = 500;
 // How many weighted points (heaviest first) to try routing through.
 const MAX_VIA_CANDIDATES = 3;
 
@@ -65,6 +69,17 @@ function weightFactor(weight, maxWeight) {
   return MIN_FACTOR + (MAX_FACTOR - MIN_FACTOR) * (1 - share);
 }
 
+/** `points` minus those within MIN_ENDPOINT_DISTANCE_METERS of `start` or `end`. */
+function pointsAwayFromEnds(points, start, end) {
+  return points.filter(
+    (p) =>
+      typeof p.latitude === 'number' &&
+      typeof p.longitude === 'number' &&
+      flatDistanceMeters(start, p) >= MIN_ENDPOINT_DISTANCE_METERS &&
+      flatDistanceMeters(p, end) >= MIN_ENDPOINT_DISTANCE_METERS
+  );
+}
+
 /**
  * Weighted points worth routing through between `start` and `end`:
  * roughly on the way (MAX_VIA_DETOUR_RATIO), not at either end, heaviest
@@ -72,24 +87,23 @@ function weightFactor(weight, maxWeight) {
  */
 function relevantWeightedPoints(points, start, end) {
   const direct = flatDistanceMeters(start, end);
-  return points
-    .filter((p) => typeof p.latitude === 'number' && typeof p.longitude === 'number')
-    .filter((p) => flatDistanceMeters(start, p) >= MIN_ENDPOINT_DISTANCE_METERS)
-    .filter((p) => flatDistanceMeters(p, end) >= MIN_ENDPOINT_DISTANCE_METERS)
+  return pointsAwayFromEnds(points, start, end)
     .filter((p) => flatDistanceMeters(start, p) + flatDistanceMeters(p, end) <= MAX_VIA_DETOUR_RATIO * direct)
     .sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0))
     .slice(0, MAX_VIA_CANDIDATES);
 }
 
 /**
- * Orders candidate routes ({ geometry, distanceMeters, ... }) by
- * preference and returns the best `limit`, each with
- * `usesWeightedPoints` (passes at least one of `points`) and
- * `weightedPointsPassed` (how many). Score = distance x the best discount
- * among the points passed (1 if none); ties go to the shorter route.
+ * Orders candidate routes ({ geometry, distanceMeters, ... }) from
+ * `start` to `end` by preference and returns the best `limit`, each with
+ * `usesWeightedPoints` (passes at least one of `points` along the way)
+ * and `weightedPointsPassed` (how many). Score = distance x the best
+ * discount among the points passed (1 if none); ties go to the shorter
+ * route. Points near either end don't count (MIN_ENDPOINT_DISTANCE_METERS).
  * Routes with identical geometry are kept once.
  */
-function rankRoutes(routes, points, limit) {
+function rankRoutes(routes, allPoints, limit, start, end) {
+  const points = pointsAwayFromEnds(allPoints, start, end);
   const maxWeight = Math.max(0, ...points.map((p) => p.weight ?? 0));
   const seen = new Set();
   const scored = [];
@@ -169,4 +183,5 @@ module.exports = {
   MIN_FACTOR,
   MAX_FACTOR,
   MAX_VIA_DETOUR_RATIO,
+  MIN_ENDPOINT_DISTANCE_METERS,
 };

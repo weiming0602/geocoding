@@ -109,7 +109,9 @@ async function getDriveRoute(db, { startLatitude, startLongitude, endLatitude, e
       distanceMeters,
     })),
     weightedPoints,
-    1
+    1,
+    start,
+    end
   );
   return best;
 }

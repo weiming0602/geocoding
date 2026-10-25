@@ -13,6 +13,8 @@ const DIRECT = route(2000, [[0, 0], [2000 * M, 0]]);
 // A detour 200 m north: ~2400 m long.
 const NORTH = route(2400, [[0, 0], [0, 200 * M], [2000 * M, 200 * M], [2000 * M, 0]]);
 const POINT_ON_NORTH = { latitude: 200 * M, longitude: 1000 * M, weight: 5 };
+const START = { latitude: 0, longitude: 0 };
+const END = { latitude: 0, longitude: 2000 * M };
 
 test('weightFactor: heaviest point gets the biggest discount, a weightless one the smallest', () => {
   assert.equal(weightFactor(10, 10), 0.3);
@@ -26,7 +28,7 @@ test('distanceToPolylineMeters measures to the nearest segment, not just vertice
 });
 
 test('rankRoutes prefers a somewhat longer route that passes a weighted point, and flags it', () => {
-  const [first, second] = rankRoutes([DIRECT, NORTH], [POINT_ON_NORTH], 3);
+  const [first, second] = rankRoutes([DIRECT, NORTH], [POINT_ON_NORTH], 3, START, END);
   assert.equal(first.distanceMeters, 2400);
   assert.equal(first.usesWeightedPoints, true);
   assert.equal(first.weightedPointsPassed, 1);
@@ -36,20 +38,20 @@ test('rankRoutes prefers a somewhat longer route that passes a weighted point, a
 
 test('rankRoutes still picks the shorter route when the weighted one is more than ~3x longer', () => {
   const huge = route(7000, NORTH.geometry.coordinates);
-  const [first] = rankRoutes([DIRECT, huge], [POINT_ON_NORTH], 3);
+  const [first] = rankRoutes([DIRECT, huge], [POINT_ON_NORTH], 3, START, END);
   assert.equal(first.distanceMeters, 2000);
 });
 
 test('rankRoutes with no weighted points orders by distance and flags nothing', () => {
-  const ranked = rankRoutes([NORTH, DIRECT], [], 3);
+  const ranked = rankRoutes([NORTH, DIRECT], [], 3, START, END);
   assert.deepEqual(ranked.map((r) => r.distanceMeters), [2000, 2400]);
   assert.ok(ranked.every((r) => r.usesWeightedPoints === false));
 });
 
 test('rankRoutes drops duplicate geometry and honors the limit', () => {
-  const ranked = rankRoutes([DIRECT, { ...DIRECT }, NORTH], [], 1);
+  const ranked = rankRoutes([DIRECT, { ...DIRECT }, NORTH], [], 1, START, END);
   assert.equal(ranked.length, 1);
-  assert.equal(rankRoutes([DIRECT, { ...DIRECT }, NORTH], [], 5).length, 2);
+  assert.equal(rankRoutes([DIRECT, { ...DIRECT }, NORTH], [], 5, START, END).length, 2);
 });
 
 test('relevantWeightedPoints keeps points roughly on the way, heaviest first, not at the ends', () => {
@@ -58,6 +60,18 @@ test('relevantWeightedPoints keeps points roughly on the way, heaviest first, no
   const onTheWay = { latitude: 200 * M, longitude: 1000 * M, weight: 2 };
   const heavier = { latitude: -300 * M, longitude: 900 * M, weight: 9 };
   const farOff = { latitude: 5000 * M, longitude: 1000 * M, weight: 50 }; // via it is ~5x the direct distance
-  const atStart = { latitude: 20 * M, longitude: 0, weight: 99 };
+  const atStart = { latitude: 300 * M, longitude: 0, weight: 99 }; // inside the 500 m end zone
   assert.deepEqual(relevantWeightedPoints([onTheWay, farOff, atStart, heavier], start, end), [heavier, onTheWay]);
+});
+
+// The reported case: a heavy weighted point ~335 m from the destination
+// (on the driver's own home street) is passed by nearly every route, so it
+// must not outrank a lighter point the route actually goes out of its way
+// along -- there, an interstate the driver uses.
+test('rankRoutes ignores weighted points right by the start or destination', () => {
+  const nearDestination = { latitude: 250 * M, longitude: 1800 * M, weight: 11 }; // ~320 m from END
+  const viaDirect = route(2000, [[0, 0], [1800 * M, 0], [1800 * M, 250 * M], [1800 * M, 0], [2000 * M, 0]]);
+  const [first] = rankRoutes([viaDirect, NORTH], [nearDestination, POINT_ON_NORTH], 3, START, END);
+  assert.equal(first.distanceMeters, 2400);
+  assert.equal(first.weightedPointsPassed, 1);
 });

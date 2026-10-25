@@ -298,7 +298,9 @@ async function getRoadReroute(
       durationSeconds: null,
     })),
     weightedPoints,
-    ROUTE_OPTION_COUNT
+    ROUTE_OPTION_COUNT,
+    driver,
+    rejoinPoint
   );
 
   return { options, rejoinPoint };
