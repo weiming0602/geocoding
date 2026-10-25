@@ -218,6 +218,11 @@ export default function RoadAlerts() {
     done: boolean;
   } | null>(null);
 
+  // The simulated drive's route as GeoJSON [lon, lat] pairs, drawn on the
+  // map for as long as the progress banner shows (cleared only when the
+  // page unmounts), plus whether the map keeps the car centred.
+  const [simulatedRoute, setSimulatedRoute] = useState<[number, number][] | null>(null);
+  const [followCar, setFollowCar] = useState(true);
   const [watching, setWatching] = useState(false);
   const [position, setPosition] = useState<{ latitude: number; longitude: number; heading: number | null } | null>(
     null
@@ -774,6 +779,7 @@ export default function RoadAlerts() {
       if (simulationTimerRef.current !== null) clearInterval(simulationTimerRef.current);
       simulatingRef.current = true;
       setSimulationProgress({ label, distanceMeters: 0, totalMeters: plan.totalMeters, done: false });
+      setSimulatedRoute(plan.points.map((point) => [point.longitude, point.latitude]));
       const emitFix = () => {
         const nowMs = Date.now();
         const fix = positionAlongRoute(plan, ((nowMs - startedAtMs) / 1000) * speedMps);
@@ -1302,11 +1308,17 @@ export default function RoadAlerts() {
             fixes from the Road Alerts sandbox -- never recorded as real weighted points.
             {!watching && ' Start watching (in Settings) to switch back to real GPS.'}
           </p>
-          {watching && (
-            <button className="btn btn-secondary" style={{ marginTop: 'var(--space-2)' }} onClick={handleStop}>
-              Stop simulated drive
-            </button>
-          )}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-3)', marginTop: 'var(--space-2)', flexWrap: 'wrap' }}>
+            {watching && (
+              <button className="btn btn-secondary" onClick={handleStop}>
+                Stop simulated drive
+              </button>
+            )}
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+              <input type="checkbox" checked={followCar} onChange={(e) => setFollowCar(e.target.checked)} />
+              Follow car on the map
+            </label>
+          </div>
         </div>
       )}
 
@@ -1525,14 +1537,18 @@ export default function RoadAlerts() {
             {signals.length} alert{signals.length === 1 ? '' : 's'} within {metersLabel(RADIUS_METERS)}
           </h5>
 
-          {mapPoints.length > 0 && (
+          {/* Always shown during a simulated drive, hazards nearby or not --
+              watching the car move along its route is the point of it. */}
+          {(mapPoints.length > 0 || simulatedRoute) && (
             <div ref={mapContainerRef} style={{ marginBottom: 'var(--space-4)' }}>
               <RoadAlertsSandboxMap
                 points={mapPoints}
                 driverPosition={position}
-                driverLabel="Your current position"
+                driverLabel={simulatedRoute ? 'Simulated car' : 'Your current position'}
                 focusPoint={focusPoint}
                 onPointClick={handleMarkerClick}
+                routeLine={simulatedRoute}
+                followDriver={simulatedRoute !== null && followCar}
               />
             </div>
           )}

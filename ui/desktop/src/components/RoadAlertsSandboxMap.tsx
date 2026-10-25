@@ -52,6 +52,11 @@ type Props = {
   // A simulated drive's route (GeoJSON [lon, lat] pairs), drawn as a line
   // and fit into view whenever it changes -- see RoadAlertsSandbox.tsx.
   routeLine?: [number, number][] | null;
+  // Keeps the camera centred on driverPosition as it moves -- e.g. a
+  // simulated drive on RoadAlerts.tsx, where the car would otherwise
+  // drive off the edge of the map. Only the centre moves, never the
+  // zoom, so whatever zoom the user picks (or the route fit gave) stays.
+  followDriver?: boolean;
 };
 
 const ROUTE_SOURCE_ID = 'sandbox-route';
@@ -69,6 +74,7 @@ export default function RoadAlertsSandboxMap({
   focusPoint,
   onPointClick,
   routeLine,
+  followDriver = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
@@ -194,7 +200,13 @@ export default function RoadAlertsSandboxMap({
     } else {
       driverMarkerRef.current.setLngLat([driverPosition.longitude, driverPosition.latitude]);
     }
-  }, [driverPosition, ready]);
+
+    if (followDriver) {
+      // Shorter than the ~1s between simulated fixes, so each pan finishes
+      // before the next one starts instead of stacking up.
+      map.easeTo({ center: [driverPosition.longitude, driverPosition.latitude], duration: 800 });
+    }
+  }, [driverPosition, ready, followDriver]);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -212,7 +224,10 @@ export default function RoadAlertsSandboxMap({
         (acc, coord) => acc.extend(coord),
         new LngLatBounds(routeLine[0], routeLine[0])
       );
-      map.fitBounds(bounds, { padding: 60, maxZoom: 15 });
+      // Instant, not animated: followDriver's once-a-second easeTo would
+      // otherwise interrupt the zoom animation partway through, leaving
+      // the map stuck zoomed far out.
+      map.fitBounds(bounds, { padding: 60, maxZoom: 15, animate: false });
     }
   }, [routeLine, ready]);
 
