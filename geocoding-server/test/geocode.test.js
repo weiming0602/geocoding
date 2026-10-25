@@ -119,11 +119,14 @@ test('odd house number matches on zipl, not zipr', async () => {
   await db.close();
 });
 
+// OutOfRangeError, not NotFoundError: Greely Rd IS in 04097 -- on its
+// even side -- so the street matched and only the number has no range
+// there (sideFraction rejects the even-only right side for an odd number).
 test('odd house number with the right-side ZIP does not match', async () => {
   const db = await makeDb();
   await assert.rejects(
     () => geocode(db, '251 Greely Rd, Anywhere, ME 04097'),
-    NotFoundError
+    OutOfRangeError
   );
   await db.close();
 });
@@ -140,7 +143,7 @@ test('even house number with the left-side ZIP does not match', async () => {
   const db = await makeDb();
   await assert.rejects(
     () => geocode(db, '250 Greely Rd, Anywhere, ME 04021'),
-    NotFoundError
+    OutOfRangeError
   );
   await db.close();
 });
@@ -296,5 +299,49 @@ test('a no-ZIP address with no address point falls through to interpolation and 
       return true;
     }
   );
+  await db.close();
+});
+
+// Which side carries odd numbers is a property of each TIGER segment
+// (it follows the direction the line was digitized in), not a fixed
+// rule -- about 57% of Maine/NH segments carry odd numbers on the right.
+// Grove St (id=60) mirrors the real Freeport segment that exposed this:
+// nothing at all on the left, odd 99 -> 1 on the right in ZIP 04032.
+test('an odd number on a segment whose odd range is on the right is found there', async () => {
+  const db = await makeDb();
+  const result = await geocode(db, '11 Grove St, Freeport, ME 04032', { offsetFeet: 20 });
+  assert.equal(result.match.id, 60);
+  assert.equal(result.rangeSide, 'right');
+  assert.equal(result.offsetSide, 'right');
+  // The line runs due north, so its right-hand side is east (greater longitude).
+  assert.ok(result.coordinates.longitude > -70.1, `expected east of the line, got ${result.coordinates.longitude}`);
+  await db.close();
+});
+
+test('the interpolation fraction follows a range that runs high-to-low', async () => {
+  const db = await makeDb();
+  // Grove St's right range runs 99 (start) -> 1 (end), so 99 sits at the
+  // southern start of the line and 1 at the northern end.
+  const high = await geocode(db, '99 Grove St, Freeport, ME 04032', { offsetFeet: 0 });
+  const low = await geocode(db, '1 Grove St, Freeport, ME 04032', { offsetFeet: 0 });
+  assert.ok(Math.abs(high.coordinates.latitude - 43.86) < 1e-6);
+  assert.ok(Math.abs(low.coordinates.latitude - 43.861) < 1e-6);
+  await db.close();
+});
+
+test('an even number on a segment with no even range at all is out of range, not misplaced', async () => {
+  const db = await makeDb();
+  await assert.rejects(() => geocode(db, '12 Grove St, Freeport, ME 04032'), OutOfRangeError);
+  await db.close();
+});
+
+test('a segment with both sides swapped puts odd numbers right and even numbers left', async () => {
+  const db = await makeDb();
+  const odd = await geocode(db, '11 Swapped Ave, Freeport, ME 04032');
+  assert.equal(odd.match.id, 61);
+  assert.equal(odd.rangeSide, 'right');
+  const even = await geocode(db, '12 Swapped Ave, Freeport, ME 04032');
+  assert.equal(even.match.id, 61);
+  assert.equal(even.rangeSide, 'left');
   await db.close();
 });
