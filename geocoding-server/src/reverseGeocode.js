@@ -79,11 +79,20 @@ function closestPointOnLine(points, queryLon, queryLat) {
   return { distance: best.distance, fraction, matchedLon, matchedLat, side };
 }
 
-/** Rounds `raw` to the nearest integer whose parity matches `side` (left=odd, right=even). */
-function roundToSideParity(raw, side) {
-  const wantOdd = side === 'left';
+/**
+ * Rounds `raw` to the nearest integer with the same parity as the side's
+ * own range (fromNum..toNum) -- which side holds odd vs. even numbers
+ * isn't fixed in TIGER (see geocodeMatching.js's sideFraction), so it's
+ * read from the data rather than assumed. A range whose endpoints differ
+ * in parity (rare) makes no parity claim, so `raw` is just rounded.
+ */
+function roundToRangeParity(raw, fromNum, toNum) {
   const rounded = Math.round(raw);
-  if (rounded % 2 === (wantOdd ? 1 : 0)) {
+  if (fromNum % 2 !== toNum % 2) {
+    return rounded;
+  }
+  const wantOdd = Math.abs(fromNum % 2) === 1;
+  if (Math.abs(rounded % 2) === (wantOdd ? 1 : 0)) {
     return rounded;
   }
   const up = rounded + 1;
@@ -173,7 +182,7 @@ async function reverseGeocode(db, latitude, longitude) {
     const toNum = parseInt(toRaw, 10);
     if (!Number.isNaN(fromNum) && !Number.isNaN(toNum)) {
       const raw = fromNum + best.fraction * (toNum - fromNum);
-      number = roundToSideParity(raw, best.side);
+      number = roundToRangeParity(raw, fromNum, toNum);
     }
   }
 
@@ -196,4 +205,4 @@ async function reverseGeocode(db, latitude, longitude) {
   };
 }
 
-module.exports = { reverseGeocode, closestPointOnLine, closestPointOnSegment, roundToSideParity, findCandidates };
+module.exports = { reverseGeocode, closestPointOnLine, closestPointOnSegment, roundToRangeParity, findCandidates };

@@ -495,6 +495,15 @@ export function addTestRoadSignal(
   return postJson<RoadSignal>(baseUrl, '/road-alerts/test/signals', params);
 }
 
+// Which developer test tools the server has switched on (see
+// geocoding-server's GET /road-alerts/test/enabled) -- both false on
+// production.
+export function getRoadAlertsTestTools(
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<{ testRoadSignals: boolean; testWeightedPoints: boolean }> {
+  return getJson<{ testRoadSignals: boolean; testWeightedPoints: boolean }>(baseUrl, '/road-alerts/test/enabled');
+}
+
 export function getTestRoadSignals(
   params: { email: string; serviceKey: string },
   baseUrl = DEFAULT_API_BASE_URL

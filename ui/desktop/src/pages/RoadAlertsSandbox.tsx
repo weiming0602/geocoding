@@ -21,6 +21,7 @@ import { findAlertsForWeightedPoints, type WeightedPoint } from '../../../shared
 import RoadAlertsSandboxMap, { type SandboxPoint } from '../components/RoadAlertsSandboxMap';
 import RoadAlertsRegistration from '../components/RoadAlertsRegistration';
 import PageHeader from '../components/PageHeader';
+import RoadAlertsTabs from '../components/RoadAlertsTabs';
 import { getStoredAccount, type StoredRoadAlertsAccount } from '../roadAlertsStorage';
 import type { SimulatedDriveState } from './RoadAlerts';
 
@@ -267,6 +268,7 @@ export default function RoadAlertsSandbox() {
     return (
       <div style={{ maxWidth: 520, margin: '0 auto' }}>
         <PageHeader icon="roadAlerts">Road Alerts sandbox</PageHeader>
+        <RoadAlertsTabs />
         <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
           Sign in with a Road Alerts account to use the sandbox.
         </p>
@@ -281,6 +283,7 @@ export default function RoadAlertsSandbox() {
   return (
     <div>
       <PageHeader icon="roadAlerts">Road Alerts sandbox</PageHeader>
+      <RoadAlertsTabs />
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
         Not a real driving feature -- a hidden test console for hand-placing fake weighted points/hazards and
         simulating a drive past them, to check whether alerting actually works. The test actions below only do

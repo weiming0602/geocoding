@@ -75,7 +75,14 @@ read-write).
   `ops/` for the systemd service. Unlike every other script above, this
   is a **long-running process** (`Type=simple`, restarts on crash/exit),
   not a periodic one-shot triggered by a timer/cron -- it runs its own
-  internal 60-second loop for as long as it's up.
+  internal 60-second loop for as long as it's up. Road Alerts
+  notifications (this background push, and in-tab ones the page routes
+  through the service worker) carry a small sketch image -- recent trail
+  (in-tab only; the trail is never sent to the server), position/heading
+  arrow, hazard dot, distance -- drawn by `ui/desktop/public/alert-sketch.js`
+  (plain JS so `public/sw.js` can `importScripts` it). Only Chrome/Edge on
+  Windows/Android/ChromeOS display notification images; macOS, iOS and
+  Firefox show text only.
 - Mobile app: `cd ui/mobile && npm start`
 - Desktop app: `cd ui/desktop && npm run dev`
 - Desktop app tests: `cd ui/desktop && npm test` (vitest; `App.test.tsx` and
@@ -94,10 +101,19 @@ read-write).
 - Desktop app build: `cd ui/desktop && npm run build` (`tsc -b && vite build`)
 
 # Code style
-- Odd/even house-number convention (odd → left range/offset left, even →
-  right range/offset right) is implemented independently in both
-  `geocoding/interpolate.py` and `geocoding-server/src/geocode.js`. If you
-  change the rule, change it in both places.
+- **There is no fixed odd/even side.** TIGER's left/right follow the
+  direction each segment happens to be digitized in, so which side holds
+  odd numbers varies per segment (~57% of Maine/NH segments carry odd
+  numbers on the *right*; ~23% have one parity on only one side, e.g.
+  Freeport's Grove St: nothing left, odd 99->1 right). Forward geocoding
+  (`geocodeMatching.js`'s `sideFraction`) picks the side whose own ZIP
+  matches and whose range contains the number with the same parity, then
+  offsets to that side; "odd -> left" survives only as the tie-breaker for
+  the ~315 segments with the same parity on both sides. Reverse geocoding
+  (`reverseGeocode.js`'s `roundToRangeParity`) rounds to the matched
+  side's own range parity. `geocoding/interpolate.py` takes the side as an
+  explicit argument and has no rule of its own. Never reintroduce a
+  parity -> side mapping.
 - `geocode.js` queries `UPPER(fullname)`; there's a matching expression
   index in `schema.py`. Don't drop or rename either without checking the
   other — without the index, batch geocoding is ~10x slower.
