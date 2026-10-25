@@ -110,6 +110,16 @@ async function runPushCheckOnce(pool, deps = {}) {
         const payload = JSON.stringify({
           title: `${alert.signal.severity === 'serious' ? 'Serious' : 'Need to know'} road alert${roadwaySuffix}`,
           body: alert.signal.speech.average,
+          // Coordinates for the notification picture public/sw.js draws
+          // (see ui/desktop/public/alert-sketch.js). No trail: only the
+          // latest live position is ever stored server-side, by design
+          // (see docs/ROAD_ALERTS_DESIGN.md's privacy model) -- so a
+          // background alert's picture shows position, heading and hazard.
+          sketch: {
+            position: user,
+            headingDeg: typeof position.heading === 'number' ? position.heading : null,
+            hazard: { latitude: alert.signal.latitude, longitude: alert.signal.longitude },
+          },
         });
 
         let anySucceeded = false;

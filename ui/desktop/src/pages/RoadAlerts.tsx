@@ -41,6 +41,7 @@ import {
 import { buildDrivePlan, positionAlongRoute, type DrivePlan } from '../../../shared/driveSimulation';
 import { buildGoogleMapsDirectionsUrl } from '../../../shared/googleMapsDirections';
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
+import AlertSketch from '../components/AlertSketch';
 import PageHeader from '../components/PageHeader';
 import { rerouteErrorMessage } from '../rerouteErrorMessage';
 import RoadAlertsRegistration from '../components/RoadAlertsRegistration';
@@ -365,6 +366,9 @@ export default function RoadAlerts() {
   // TRAIL_MAX_SAMPLES, oldest dropped first. Never persisted. Reset in
   // handleStart, same as lastFixRef.
   const trailRef = useRef<TimedCoordinates[]>([]);
+  // A rendering copy of trailRef for the hazard cards' sketches (see
+  // AlertSketch) -- the ref stays the source of truth for matching.
+  const [trail, setTrail] = useState<TimedCoordinates[]>([]);
   // This account's real, already-qualified weighted points -- populated
   // by refreshRealWeightedPoints below. A ref, not state: nothing here
   // renders directly from it, it's only read inside the long-lived
@@ -529,6 +533,7 @@ export default function RoadAlerts() {
     // Discard the trail and any in-progress route match the moment
     // driving stops -- see docs/ROAD_ALERTS_DESIGN.md's privacy model.
     trailRef.current = [];
+    setTrail([]);
     setOnRouteIds(new Set());
 
     // A Stop-then-Start cycle should re-subscribe cleanly rather than
@@ -608,10 +613,17 @@ export default function RoadAlerts() {
               // looking at this tab -- otherwise the fresh list entry and
               // the speech about to play are already enough.
               if (document.hidden) {
-                showAlertNotification(
-                  `${SEVERITY_LABELS[signal.severity]} road alert`,
-                  signal.speech.brief
-                );
+                // The notification picture: last ~minute of trail, where the
+                // driver is and which way they're heading, and the hazard
+                // (see public/alert-sketch.js). The trail stays in this
+                // browser -- it's passed to this device's own service
+                // worker, never sent to the server.
+                showAlertNotification(`${SEVERITY_LABELS[signal.severity]} road alert`, signal.speech.brief, {
+                  trail: trailRef.current.map(({ latitude: lat, longitude: lon }) => ({ latitude: lat, longitude: lon })),
+                  position: { latitude, longitude },
+                  headingDeg: heading,
+                  hazard: { latitude: signal.latitude, longitude: signal.longitude },
+                });
               }
             }
             speakSignal(signal);
@@ -681,6 +693,7 @@ export default function RoadAlerts() {
       if (hasDetectedMovementRef.current && now - lastFetchAtRef.current >= POLL_MIN_INTERVAL_MS) {
         lastFetchAtRef.current = now;
         trailRef.current = [...trailRef.current, current].slice(-TRAIL_MAX_SAMPLES);
+        setTrail(trailRef.current);
         fetchSignals(latitude, longitude, estimatedHeadingDeg);
 
         // Only from real GPS-driven polling (never handleManualCheck's direct
@@ -765,6 +778,7 @@ export default function RoadAlerts() {
     setHasDetectedMovement(false);
     lastFixRef.current = null;
     trailRef.current = [];
+    setTrail([]);
     setOnRouteIds(new Set());
     setAlertedSignalId(null);
 
@@ -1635,6 +1649,16 @@ export default function RoadAlerts() {
                 {signal.direction ? ` (${signal.direction})` : ''}
               </div>
               <p className="card-body">{signal.speech[detailLevel]}</p>
+              {position && typeof signal.latitude === 'number' && typeof signal.longitude === 'number' && (
+                <AlertSketch
+                  input={{
+                    trail,
+                    position: { latitude: position.latitude, longitude: position.longitude },
+                    headingDeg: position.heading,
+                    hazard: { latitude: signal.latitude, longitude: signal.longitude },
+                  }}
+                />
+              )}
               {(() => {
                 const crossStreet = crossStreetBySignalId[signal.id];
                 if (!crossStreet || crossStreet === 'loading' || crossStreet === 'none') return null;

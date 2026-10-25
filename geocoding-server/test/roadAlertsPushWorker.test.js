@@ -78,6 +78,13 @@ test('runPushCheckOnce sends a push for a serious hazard matched to an active dr
   const payload = JSON.parse(sent[0].payload);
   assert.equal(payload.title, 'Serious road alert on I-295');
   assert.equal(payload.body, 'Serious hazard ahead, right lane closed');
+  // Coordinates for the notification picture sw.js draws -- the driver's
+  // live position/heading and the hazard, never a trail (none is stored).
+  assert.deepEqual(payload.sketch, {
+    position: { latitude: 43.6591, longitude: -70.2568 },
+    headingDeg: null,
+    hazard: { latitude: 43.668, longitude: -70.2568 },
+  });
   assert.equal(await hasAlreadySentPush(pool, account.id, 'signal-1'), true);
   await pool.close();
 });
