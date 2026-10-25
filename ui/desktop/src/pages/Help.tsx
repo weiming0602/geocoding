@@ -242,8 +242,9 @@ function RoadAlertsHelp() {
         <strong>"Navigate with Google Maps"</strong> to hand it off for real turn-by-turn directions.
       </p>
       <p className="text-muted" style={{ fontSize: 13 }}>
-        These routes are an estimate: they're based on street connectivity only (no live traffic,
-        and no one-way street data exists for this region yet), and the point where a route
+        These routes are an estimate: they follow one-way streets using OpenStreetMap data
+        (© OpenStreetMap contributors) and avoid any highway or ramp whose direction isn't known,
+        but there's no live traffic, and the point where a route
         rejoins your original road past the hazard is approximate, not exact.
       </p>
 

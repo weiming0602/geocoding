@@ -6,6 +6,8 @@ requires-python = ">=3.10"
 dependencies = [
     "pyshp>=2.3",
     "psycopg[binary]>=3.1",
+    # Reads OpenStreetMap .osm.pbf extracts for osm_oneway.py.
+    "osmium>=4.0",
 ]
 
 [project.optional-dependencies]

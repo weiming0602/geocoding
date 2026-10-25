@@ -213,11 +213,14 @@ export type TestRoadSignalsResponse = {
 
 // GET /road-alerts/test/drive-route -- the street path a simulated drive
 // replays (see ui/shared/driveSimulation.ts). Coordinates are GeoJSON
-// [lon, lat]. Same TIGER caveats as RoadRerouteResponse: every street
-// treated as two-way, no duration.
+// [lon, lat]. Same caveats as RoadRerouteResponse: one-way streets from
+// OpenStreetMap where matched (see geocoding/osm_oneway.py), no duration.
 export type TestDriveRouteResponse = {
   geometry: { type: 'LineString'; coordinates: [number, number][] };
   distanceMeters: number;
+  // Same weighted-point preference as RerouteOption.
+  usesWeightedPoints?: boolean;
+  weightedPointsPassed?: number;
 };
 
 // POST /road-alerts/register -- idempotent: an already-registered email
@@ -422,12 +425,18 @@ export type CrossStreetResponse = {
 // point, never a real start/end span) -- a fixed distance further along
 // the road past the hazard, not the hazard's actual cleared extent.
 // `durationSeconds` is always null -- TIGER carries no speed/road-class
-// data to estimate travel time from.
+// data to estimate travel time from. Routes obey one-way streets (from
+// OpenStreetMap, matched onto TIGER -- see geocoding/osm_oneway.py).
 export type RerouteOption = {
   // A GeoJSON LineString's `coordinates` field: [[lon, lat], ...].
   geometry: { type: 'LineString'; coordinates: [number, number][] };
   distanceMeters: number;
   durationSeconds: number | null;
+  // Whether this route passes the driver's weighted points (routine
+  // streets) -- such routes are ranked first unless ~3x longer (see
+  // geocoding-server/src/routePreference.js).
+  usesWeightedPoints?: boolean;
+  weightedPointsPassed?: number;
 };
 
 export type RoadRerouteResponse = {

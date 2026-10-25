@@ -5,9 +5,10 @@ const {
   reverseGeocode,
   closestPointOnLine,
   closestPointOnSegment,
-  roundToSideParity,
+  roundToRangeParity,
 } = require('../src/reverseGeocode');
 const { ValidationError, NotFoundError } = require('../src/errors');
+const { geocode } = require('../src/geocode');
 const { makeDb } = require('./helpers');
 
 test('closestPointOnSegment finds the perpendicular foot when it falls within the segment', () => {
@@ -34,16 +35,19 @@ test('closestPointOnLine identifies left vs right side correctly', () => {
   assert.equal(east.side, 'right');
 });
 
-test('roundToSideParity picks the nearest integer of the required parity', () => {
-  assert.equal(roundToSideParity(10.4, 'left'), 11); // nearest odd
-  assert.equal(roundToSideParity(10.4, 'right'), 10); // nearest even
-  assert.equal(roundToSideParity(10.9, 'right'), 10); // rounds to 11 (odd); 10 is the nearer even
+test('roundToRangeParity picks the nearest integer with the parity of the side\'s own range', () => {
+  assert.equal(roundToRangeParity(10.4, 1, 99), 11); // odd range -> nearest odd
+  assert.equal(roundToRangeParity(10.4, 2, 98), 10); // even range -> nearest even
+  assert.equal(roundToRangeParity(10.9, 98, 2), 10); // rounds to 11 (odd); 10 is the nearer even
+  assert.equal(roundToRangeParity(10.6, 1, 98), 11); // mixed-parity range makes no claim -> plain rounding
 });
 
-test('reverseGeocode round-trips a known forward-geocoded point (odd/left)', async () => {
+// Round trips through forward geocoding rather than hard-coded
+// coordinates, so these exercise the same side choice both directions.
+test('reverseGeocode round-trips a forward-geocoded point (odd range on the left)', async () => {
   const db = await makeDb();
-  // From the interpolate.js session: 997 Pequawket Trl -> (43.834390719401604, -70.77854947339969)
-  const result = await reverseGeocode(db, 43.834390719401604, -70.77854947339969);
+  const forward = await geocode(db, '997 Pequawket Trl, Standish, ME 04091');
+  const result = await reverseGeocode(db, forward.coordinates.latitude, forward.coordinates.longitude);
   assert.equal(result.match.id, 12);
   assert.equal(result.side, 'left');
   assert.equal(result.number, 997);
@@ -51,13 +55,23 @@ test('reverseGeocode round-trips a known forward-geocoded point (odd/left)', asy
   await db.close();
 });
 
-test('reverseGeocode round-trips a known forward-geocoded point (even/right)', async () => {
+test('reverseGeocode round-trips a forward-geocoded point (even range on the right)', async () => {
   const db = await makeDb();
-  // 984 Pequawket Trl -> (43.83413979730152, -70.77834399095207)
-  const result = await reverseGeocode(db, 43.83413979730152, -70.77834399095207);
+  const forward = await geocode(db, '984 Pequawket Trl, Standish, ME 04091');
+  const result = await reverseGeocode(db, forward.coordinates.latitude, forward.coordinates.longitude);
   assert.equal(result.match.id, 12);
   assert.equal(result.side, 'right');
   assert.equal(result.number, 984);
+  await db.close();
+});
+
+test('reverseGeocode returns an odd number on a right side whose range is odd', async () => {
+  const db = await makeDb();
+  const forward = await geocode(db, '11 Grove St, Freeport, ME 04032');
+  const result = await reverseGeocode(db, forward.coordinates.latitude, forward.coordinates.longitude);
+  assert.equal(result.match.id, 60);
+  assert.equal(result.side, 'right');
+  assert.equal(result.number, 11);
   await db.close();
 });
 

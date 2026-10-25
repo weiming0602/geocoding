@@ -1,13 +1,15 @@
 const { NotFoundError, OutOfRangeError } = require('./errors');
 const { validateCoordinate, flatDistanceMeters } = require('./nextCrossStreet');
 const { nearestTopologyNodeId, buildPathGeometry } = require('./roadReroute');
+const { rankRoutes, relevantWeightedPoints, viaRouteRows, viaNodesForPoint } = require('./routePreference');
 
 // Test-only: the street-following path a *simulated* drive replays as fake
 // GPS fixes (see ui/shared/driveSimulation.ts and the Road Alerts sandbox),
 // so Road Alerts can be exercised from a desk -- same reasoning as
 // testRoadSignals.js's fake hazards. Gated behind ALLOW_TEST_ROAD_SIGNALS
-// in server.js. Never offered as real navigation: same TIGER caveats as
-// roadReroute.js (no one-way data, no speeds -- every street is two-way).
+// in server.js. Never offered as real navigation: same caveats as
+// roadReroute.js -- directed by OSM one-way data where matched (else
+// two-way), and no speed data.
 
 // Straight-line cap on a simulated trip -- comfortably covers any drive
 // worth sitting through at a desk, and keeps the bounding box below small.
@@ -18,6 +20,9 @@ const MAX_DRIVE_DISTANCE_METERS = 150000;
 // ~0.2s instead of ~3.3s; a route that genuinely needs a longer way around
 // than this just comes back as a NotFoundError rather than a slow query.
 const BBOX_MARGIN_DEGREES = 0.1;
+// Same role as roadReroute.js's ROUTE_DIRECTED: every route query here
+// (pgr_dijkstra, and pgr_dijkstraVia for weighted-point routes) uses it.
+const ROUTE_DIRECTED = true;
 
 /**
  * pgr_dijkstra's first argument is SQL text it EXECUTEs itself, so the
@@ -25,24 +30,27 @@ const BBOX_MARGIN_DEGREES = 0.1;
  * value already passed validateCoordinate (real, range-checked numbers),
  * same rule as roadReroute.js's buildAvoidHazardEdgesSql.
  */
-function buildBoundedEdgesSql(start, end) {
-  const minLon = Math.min(start.longitude, end.longitude);
-  const minLat = Math.min(start.latitude, end.latitude);
-  const maxLon = Math.max(start.longitude, end.longitude);
-  const maxLat = Math.max(start.latitude, end.latitude);
+function buildBoundedEdgesSql(start, end, extraPoints = []) {
+  const points = [start, end, ...extraPoints];
+  const minLon = Math.min(...points.map((p) => p.longitude));
+  const minLat = Math.min(...points.map((p) => p.latitude));
+  const maxLon = Math.max(...points.map((p) => p.longitude));
+  const maxLat = Math.max(...points.map((p) => p.latitude));
   return (
-    'SELECT id, source, target, cost FROM streets_routing_edges ' +
+    'SELECT id, source, target, cost, reverse_cost FROM streets_routing_edges ' +
     `WHERE geom && ST_Expand(ST_MakeEnvelope(${minLon}, ${minLat}, ${maxLon}, ${maxLat}, 4326), ${BBOX_MARGIN_DEGREES})`
   );
 }
 
 /**
- * Shortest street path from start to end as a GeoJSON LineString, plus
- * its length. Throws OutOfRangeError past MAX_DRIVE_DISTANCE_METERS,
+ * Street path from start to end as a GeoJSON LineString, plus its length
+ * -- the shortest one, unless a route along the driver's weighted points
+ * (routine streets) is preferred by routePreference.js's ranking, in
+ * which case `usesWeightedPoints` is true. Throws OutOfRangeError past MAX_DRIVE_DISTANCE_METERS,
  * NotFoundError if either end isn't near routable street data or no
  * connected path exists.
  */
-async function getDriveRoute(db, { startLatitude, startLongitude, endLatitude, endLongitude }) {
+async function getDriveRoute(db, { startLatitude, startLongitude, endLatitude, endLongitude, weightedPoints = [] }) {
   validateCoordinate(startLatitude, startLongitude, 'start');
   validateCoordinate(endLatitude, endLongitude, 'end');
   const start = { latitude: startLatitude, longitude: startLongitude };
@@ -69,14 +77,22 @@ async function getDriveRoute(db, { startLatitude, startLongitude, endLatitude, e
   // Same explicit ::bigint casts as roadReroute.js's pgr_ksp call --
   // pgr_dijkstra is overloaded the same way.
   const { rows: pathRows } = await db.query(
-    `SELECT seq, node, edge, agg_cost FROM pgr_dijkstra($1, $2::bigint, $3::bigint, false) ORDER BY seq`,
+    `SELECT seq, node, edge, agg_cost FROM pgr_dijkstra($1, $2::bigint, $3::bigint, ${ROUTE_DIRECTED}) ORDER BY seq`,
     [buildBoundedEdgesSql(start, end), startNode, endNode]
   );
   if (pathRows.length === 0) {
     throw new NotFoundError('no street route found between these points');
   }
 
-  const usedEdgeIds = pathRows.filter((row) => row.edge !== -1).map((row) => row.edge);
+  const paths = [{ rows: pathRows, distanceMeters: pathRows[pathRows.length - 1].agg_cost }];
+  for (const point of relevantWeightedPoints(weightedPoints, start, end)) {
+    const viaNodes = await viaNodesForPoint(db, point, start);
+    if (viaNodes.length === 0) continue;
+    const rows = await viaRouteRows(db, buildBoundedEdgesSql(start, end, [point]), [startNode, ...viaNodes, endNode], ROUTE_DIRECTED);
+    if (rows.length > 0) paths.push({ rows, distanceMeters: rows[rows.length - 1].route_agg_cost });
+  }
+
+  const usedEdgeIds = [...new Set(paths.flatMap(({ rows }) => rows.filter((row) => row.edge >= 0).map((row) => row.edge)))];
   const { rows: edgeRows } = await db.query(
     `SELECT id, source, target, ST_AsGeoJSON(geom) AS geojson FROM streets_routing_edges WHERE id = ANY($1)`,
     [usedEdgeIds]
@@ -88,10 +104,17 @@ async function getDriveRoute(db, { startLatitude, startLongitude, endLatitude, e
     ])
   );
 
-  return {
-    geometry: { type: 'LineString', coordinates: buildPathGeometry(pathRows, edgesById) },
-    distanceMeters: pathRows[pathRows.length - 1].agg_cost,
-  };
+  const [best] = rankRoutes(
+    paths.map(({ rows, distanceMeters }) => ({
+      geometry: { type: 'LineString', coordinates: buildPathGeometry(rows, edgesById) },
+      distanceMeters,
+    })),
+    weightedPoints,
+    1,
+    start,
+    end
+  );
+  return best;
 }
 
 module.exports = { getDriveRoute, buildBoundedEdgesSql, MAX_DRIVE_DISTANCE_METERS, BBOX_MARGIN_DEGREES };

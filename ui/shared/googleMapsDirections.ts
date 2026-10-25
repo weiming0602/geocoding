@@ -8,7 +8,7 @@ import type { Coordinates, RerouteOption } from './api/types';
 // (roadReroute.js) already did that -- just handing the result off so
 // Google's own app can actually turn-by-turn navigate it, which this
 // product deliberately doesn't try to do itself (see roadReroute.js's own
-// "not a real routing engine" caveats: no live traffic, no one-way data).
+// "not a real routing engine" caveats: no live traffic, no speed data).
 const BASE_URL = 'https://www.google.com/maps/dir/';
 
 // A full route can have hundreds of points; Google's own guidance for

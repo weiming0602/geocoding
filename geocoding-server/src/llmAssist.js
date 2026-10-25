@@ -76,23 +76,28 @@ async function attemptLlmAssistInner(db, { usersDb, email }, parsed, originalInp
   }
 
   // candidateStreetNames matched this candidate on EITHER side's ZIP
-  // (zipl OR zipr -- see its own query), but matchByStreetAndZip only
-  // ever queries the side the house number's own parity selects. Prefer
-  // the caller's own ZIP when they gave one (guaranteed to match one of
-  // the two sides, since that's what scoped the candidate query); only
-  // fall back to the candidate's own ZIP, parity-aware, when the caller
-  // gave none at all. Blindly preferring picked.zipl (the original,
-  // buggy version of this line) silently handed over the wrong side's
-  // ZIP whenever a street straddles a ZIP boundary (e.g. the "Greely Rd"
-  // fixture: zipl 04021 / zipr 04097).
-  const zip = parsed.zip
-    || (parsed.number % 2 === 1 ? (picked.zipl || picked.zipr) : (picked.zipr || picked.zipl));
+  // (zipl OR zipr -- see its own query). Prefer the caller's own ZIP when
+  // they gave one (guaranteed to match one of the two sides, since that's
+  // what scoped the candidate query). With none, try each of the
+  // candidate's own ZIPs: which side holds this house number (and so
+  // which ZIP applies) isn't knowable from its parity alone -- see
+  // geocodeMatching.js's sideFraction -- and matchByStreetAndZip itself
+  // works out the side once it has the right ZIP. A street straddling a
+  // ZIP boundary (the "Greely Rd" fixture: zipl 04021 / zipr 04097) is
+  // exactly the case where picking one blindly goes wrong.
+  const zipsToTry = parsed.zip ? [parsed.zip] : [...new Set([picked.zipl, picked.zipr].filter(Boolean))];
   const correctedAddress = describeCandidate(picked);
 
-  let result;
-  try {
-    result = await matchByStreetAndZip(db, parsed.number, picked.fullname, zip, parsed.state, offsetFeet);
-  } catch (err) {
+  let result = null;
+  for (const zip of zipsToTry) {
+    try {
+      result = await matchByStreetAndZip(db, parsed.number, picked.fullname, zip, parsed.state, offsetFeet);
+      break;
+    } catch {
+      // Try the next ZIP; if none works, the failure is logged just below.
+    }
+  }
+  if (!result) {
     // The picked candidate's STREET NAME is real, but that doesn't
     // guarantee its address ranges cover this house number
     // (OutOfRangeError) or that it re-resolves at all under this exact

@@ -41,6 +41,31 @@ const { EMAIL_PATTERN, allowsTestWeightedPoints, allowsTestRoadSignals } = requi
 // else) -- see serverSetup.js. Uses its own Road Alerts accounts
 // (roadAlertsAccounts.js), never the geocoding product's quota accounts.
 
+/**
+ * The weighted points (routine streets) a Road Alerts route should
+ * prefer for this account -- see routePreference.js. Real, qualified
+ * points always; developer-seeded test points too when
+ * ALLOW_TEST_WEIGHTED_POINTS is set, so the preference can be exercised
+ * from the sandbox. Best-effort: a failure here just means no preference,
+ * never a failed route.
+ */
+async function loadRouteWeightedPoints(usersDb, email) {
+  const points = [];
+  try {
+    points.push(...(await getWeightedPoints(usersDb, email)));
+  } catch (err) {
+    console.error('Failed to load weighted points for routing:', err);
+  }
+  if (allowsTestWeightedPoints()) {
+    try {
+      points.push(...(await getTestWeightedPoints(usersDb, email)));
+    } catch (err) {
+      console.error('Failed to load test weighted points for routing:', err);
+    }
+  }
+  return points.map((p) => ({ latitude: p.latitude, longitude: p.longitude, weight: p.weight }));
+}
+
 /** Registers every Road Alerts route on `app`. `db` is the read-only geocoding pool (streets/topology). */
 function registerRoadAlertsRoutes(app, { db, usersDbPromise }) {
   // Registers (or re-registers) a Road Alerts account -- email only, no
@@ -549,6 +574,7 @@ function registerRoadAlertsRoutes(app, { db, usersDbPromise }) {
       await checkRoadAlertsAccess(usersDb, email, serviceKey);
 
       const result = await getRoadReroute(db, {
+        weightedPoints: await loadRouteWeightedPoints(usersDb, email),
         driverLatitude: driverLatitude !== undefined ? Number(driverLatitude) : undefined,
         driverLongitude: driverLongitude !== undefined ? Number(driverLongitude) : undefined,
         driverHeading: driverHeading !== undefined ? Number(driverHeading) : undefined,
@@ -931,6 +957,15 @@ function registerRoadAlertsRoutes(app, { db, usersDbPromise }) {
   // the map/comments/reroute UI against a stable hazard for as long as
   // they want, across as many days as they want, without depending on a
   // real hazard staying live (or staying in range) that whole time.
+  // Which developer test tools this server has switched on -- lets the
+  // frontend show its Road Alerts sandbox tab only where the sandbox can
+  // actually work (never on production, where both are off). Public and
+  // unauthenticated on purpose: it only reveals two booleans, and the
+  // sandbox tab needs to know before anyone has signed in.
+  app.get('/road-alerts/test/enabled', (req, res) => {
+    res.json({ testRoadSignals: allowsTestRoadSignals(), testWeightedPoints: allowsTestWeightedPoints() });
+  });
+
   app.post('/road-alerts/test/signals', async (req, res) => {
     if (!allowsTestRoadSignals()) {
       return res.status(404).json({ error: 'not found' });
@@ -1102,6 +1137,7 @@ function registerRoadAlertsRoutes(app, { db, usersDbPromise }) {
       await checkRoadAlertsAccess(usersDb, email, serviceKey);
 
       const result = await getDriveRoute(db, {
+        weightedPoints: await loadRouteWeightedPoints(usersDb, email),
         startLatitude: startLatitude !== undefined ? Number(startLatitude) : undefined,
         startLongitude: startLongitude !== undefined ? Number(startLongitude) : undefined,
         endLatitude: endLatitude !== undefined ? Number(endLatitude) : undefined,
