@@ -40,6 +40,7 @@ import {
 import { buildGoogleMapsDirectionsUrl } from '../../../shared/googleMapsDirections';
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
 import PageHeader from '../components/PageHeader';
+import { rerouteErrorMessage } from '../rerouteErrorMessage';
 import RoadAlertsRegistration from '../components/RoadAlertsRegistration';
 import RoadAlertsSandboxMap, { type SandboxPoint } from '../components/RoadAlertsSandboxMap';
 import RoadAlertsTabs from '../components/RoadAlertsTabs';
@@ -258,7 +259,7 @@ export default function RoadAlerts() {
   // same as the comments panel above.
   const [expandedRerouteSignalId, setExpandedRerouteSignalId] = useState<string | null>(null);
   const [rerouteBySignalId, setRerouteBySignalId] = useState<
-    Record<string, RoadRerouteResponse | 'loading' | 'error'>
+    Record<string, RoadRerouteResponse | 'loading' | { error: string }>
   >({});
   // Which option row is currently hovered, so RoadRerouteMap can call out
   // the matching route -- only one reroute panel is ever open at once
@@ -1096,7 +1097,11 @@ export default function RoadAlerts() {
         return;
       }
       setExpandedRerouteSignalId(signal.id);
-      if (rerouteBySignalId[signal.id]) return; // already fetched once this session
+      // A successful result is kept for the session; a failed one is retried
+      // on the next click -- e.g. a hazard that was too far away a minute
+      // ago may be within range now.
+      const previous = rerouteBySignalId[signal.id];
+      if (previous && (previous === 'loading' || !('error' in previous))) return;
 
       const current = accountRef.current;
       if (!current || !position || typeof signal.latitude !== 'number' || typeof signal.longitude !== 'number') {
@@ -1116,8 +1121,15 @@ export default function RoadAlerts() {
           serviceKey: current.serviceKey,
         });
         setRerouteBySignalId((prev) => ({ ...prev, [signal.id]: response }));
-      } catch {
-        setRerouteBySignalId((prev) => ({ ...prev, [signal.id]: 'error' }));
+      } catch (err) {
+        const hazardDistanceMeters = haversineDistanceMeters(
+          { latitude: position.latitude, longitude: position.longitude },
+          { latitude: signal.latitude, longitude: signal.longitude }
+        );
+        setRerouteBySignalId((prev) => ({
+          ...prev,
+          [signal.id]: { error: rerouteErrorMessage(err, hazardDistanceMeters) },
+        }));
       }
     },
     [expandedRerouteSignalId, rerouteBySignalId, position]
@@ -1538,10 +1550,10 @@ export default function RoadAlerts() {
                       }}
                     >
                       {rerouteState === 'loading' && <p className="card-meta">Finding a way around…</p>}
-                      {rerouteState === 'error' && (
-                        <p className="card-meta">Could not find a detour right now.</p>
+                      {rerouteState && rerouteState !== 'loading' && 'error' in rerouteState && (
+                        <p className="card-meta">{rerouteState.error}</p>
                       )}
-                      {rerouteState && rerouteState !== 'loading' && rerouteState !== 'error' && position && (
+                      {rerouteState && rerouteState !== 'loading' && !('error' in rerouteState) && position && (
                         <>
                           {rerouteState.options.length === 0 ? (
                             <p className="card-meta">No alternate route found around this hazard.</p>
