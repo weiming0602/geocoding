@@ -39,6 +39,7 @@ import {
 } from '../../../shared/roadAlertsMatching';
 import { buildGoogleMapsDirectionsUrl } from '../../../shared/googleMapsDirections';
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
+import AlertSketch from '../components/AlertSketch';
 import PageHeader from '../components/PageHeader';
 import RoadAlertsRegistration from '../components/RoadAlertsRegistration';
 import RoadAlertsSandboxMap, { type SandboxPoint } from '../components/RoadAlertsSandboxMap';
@@ -318,6 +319,9 @@ export default function RoadAlerts() {
   // TRAIL_MAX_SAMPLES, oldest dropped first. Never persisted. Reset in
   // handleStart, same as lastFixRef.
   const trailRef = useRef<TimedCoordinates[]>([]);
+  // A rendering copy of trailRef for the hazard cards' sketches (see
+  // AlertSketch) -- the ref stays the source of truth for matching.
+  const [trail, setTrail] = useState<TimedCoordinates[]>([]);
   // This account's real, already-qualified weighted points -- populated
   // by refreshRealWeightedPoints below. A ref, not state: nothing here
   // renders directly from it, it's only read inside the long-lived
@@ -464,6 +468,7 @@ export default function RoadAlerts() {
     // Discard the trail and any in-progress route match the moment
     // driving stops -- see docs/ROAD_ALERTS_DESIGN.md's privacy model.
     trailRef.current = [];
+    setTrail([]);
     setOnRouteIds(new Set());
 
     // A Stop-then-Start cycle should re-subscribe cleanly rather than
@@ -623,6 +628,7 @@ export default function RoadAlerts() {
       if (hasDetectedMovementRef.current && now - lastFetchAtRef.current >= POLL_MIN_INTERVAL_MS) {
         lastFetchAtRef.current = now;
         trailRef.current = [...trailRef.current, current].slice(-TRAIL_MAX_SAMPLES);
+        setTrail(trailRef.current);
         fetchSignals(latitude, longitude, estimatedHeadingDeg);
 
         // Only from real GPS-driven polling (never handleManualCheck's direct
@@ -703,6 +709,7 @@ export default function RoadAlerts() {
     setHasDetectedMovement(false);
     lastFixRef.current = null;
     trailRef.current = [];
+    setTrail([]);
     setOnRouteIds(new Set());
     setAlertedSignalId(null);
     const id = navigator.geolocation.watchPosition(
@@ -1492,6 +1499,16 @@ export default function RoadAlerts() {
                 {signal.direction ? ` (${signal.direction})` : ''}
               </div>
               <p className="card-body">{signal.speech[detailLevel]}</p>
+              {position && typeof signal.latitude === 'number' && typeof signal.longitude === 'number' && (
+                <AlertSketch
+                  input={{
+                    trail,
+                    position: { latitude: position.latitude, longitude: position.longitude },
+                    headingDeg: position.heading,
+                    hazard: { latitude: signal.latitude, longitude: signal.longitude },
+                  }}
+                />
+              )}
               {(() => {
                 const crossStreet = crossStreetBySignalId[signal.id];
                 if (!crossStreet || crossStreet === 'loading' || crossStreet === 'none') return null;
