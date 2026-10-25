@@ -272,7 +272,9 @@ read-write).
   two-way; the UI's caveat text says so. It also carries no speed/road-
   class-beyond-MTFCC data, so `durationSeconds` in the response is always
   `null` rather than a fabricated estimate -- only `distanceMeters` is
-  real. The rejoin target is a real intersection 0.8-2.5 km past the
+  real. Range is 15 km (`MAX_HAZARD_DISTANCE_METERS`), covering the corners
+  of the alert search's 10 km bounding box. The rejoin target is a real
+  intersection 0.8-2.5 km past the
   hazard within 60 degrees of the direction of travel, nearest that
   estimate (up to 3 tried); the search is limited to a bounding box around
   driver/hazard/rejoin (~0.1 s, vs ~8.6 s over the whole graph). A driver

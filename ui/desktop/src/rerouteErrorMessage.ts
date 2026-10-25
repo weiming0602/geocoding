@@ -3,7 +3,7 @@ import { ApiError } from '../../shared/api/client';
 // Mirrors geocoding-server/src/roadReroute.js's MAX_HAZARD_DISTANCE_METERS
 // (same dual-maintenance pattern as other server/client constant pairs in
 // this repo) -- beyond this the server answers 422 instead of a detour.
-export const REROUTE_MAX_DISTANCE_METERS = 10000;
+export const REROUTE_MAX_DISTANCE_METERS = 15000;
 
 /**
  * What to tell the driver when "Show a way around this" fails, instead of

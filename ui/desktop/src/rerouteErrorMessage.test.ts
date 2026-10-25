@@ -5,8 +5,8 @@ import { rerouteErrorMessage } from './rerouteErrorMessage';
 
 describe('rerouteErrorMessage', () => {
   it('explains an out-of-range hazard with its distance and the 5 km limit', () => {
-    expect(rerouteErrorMessage(new ApiError('hazard is 10612m away', 422), 10612)).toBe(
-      "This hazard is 10.6 km away -- detours are offered once you're within 10 km of it. Try again as you get closer."
+    expect(rerouteErrorMessage(new ApiError('hazard is 16120m away', 422), 16120)).toBe(
+      "This hazard is 16.1 km away -- detours are offered once you're within 15 km of it. Try again as you get closer."
     );
   });
 

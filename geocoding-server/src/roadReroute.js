@@ -14,11 +14,12 @@ const REJOIN_DISTANCE_METERS = 1500;
 // it rules out a legitimately close parallel road.
 const AVOID_RADIUS_METERS = 150;
 // Beyond this, a "detour" isn't a real answer to a hazard this far
-// away yet. Matches the Road Alerts page's own alert radius (10 km), so a
-// hazard the driver has just been alerted about can always get a detour
-// -- at 5 km (the previous limit) the button failed for every alert in
-// the outer half of that radius.
-const MAX_HAZARD_DISTANCE_METERS = 10000;
+// away yet. Covers everything the Road Alerts page can alert on, so a
+// hazard the driver has just been alerted about can always get a detour:
+// its 10 km search is a bounding box (roadSignals.js's filterByBbox), not
+// a circle, so its corners reach ~14.1 km. At 5 km (the previous limit)
+// the button failed for most alerts.
+const MAX_HAZARD_DISTANCE_METERS = 15000;
 // Where the detour rejoins: a real intersection between these distances
 // past the hazard, within REJOIN_MAX_ANGLE_DEG of the direction of
 // travel, picked closest to the REJOIN_DISTANCE_METERS straight-line
