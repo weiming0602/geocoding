@@ -94,10 +94,19 @@ read-write).
 - Desktop app build: `cd ui/desktop && npm run build` (`tsc -b && vite build`)
 
 # Code style
-- Odd/even house-number convention (odd → left range/offset left, even →
-  right range/offset right) is implemented independently in both
-  `geocoding/interpolate.py` and `geocoding-server/src/geocode.js`. If you
-  change the rule, change it in both places.
+- **There is no fixed odd/even side.** TIGER's left/right follow the
+  direction each segment happens to be digitized in, so which side holds
+  odd numbers varies per segment (~57% of Maine/NH segments carry odd
+  numbers on the *right*; ~23% have one parity on only one side, e.g.
+  Freeport's Grove St: nothing left, odd 99->1 right). Forward geocoding
+  (`geocodeMatching.js`'s `sideFraction`) picks the side whose own ZIP
+  matches and whose range contains the number with the same parity, then
+  offsets to that side; "odd -> left" survives only as the tie-breaker for
+  the ~315 segments with the same parity on both sides. Reverse geocoding
+  (`reverseGeocode.js`'s `roundToRangeParity`) rounds to the matched
+  side's own range parity. `geocoding/interpolate.py` takes the side as an
+  explicit argument and has no rule of its own. Never reintroduce a
+  parity -> side mapping.
 - `geocode.js` queries `UPPER(fullname)`; there's a matching expression
   index in `schema.py`. Don't drop or rename either without checking the
   other — without the index, batch geocoding is ~10x slower.
