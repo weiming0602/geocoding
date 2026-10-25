@@ -54,12 +54,27 @@ self.addEventListener('push', (event) => {
 });
 
 // In-tab alerts: the open Road Alerts page asks the service worker to show
-// the notification, so it gets the same picture as a background push.
+// the notification, so it gets the same picture as a background push. It
+// replies on the message's port once shown, so the page can fall back to a
+// plain notification if no reply comes (see roadAlertNotifications.ts).
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'road-alert-notification') {
-    event.waitUntil(showRoadAlert(event.data));
+    const reply = event.ports && event.ports[0];
+    event.waitUntil(
+      showRoadAlert(event.data).then(
+        () => reply && reply.postMessage({ shown: true }),
+        () => reply && reply.postMessage({ shown: false })
+      )
+    );
   }
 });
+
+// Take over open tabs as soon as a new version installs, instead of
+// waiting until every tab of the site has been closed -- otherwise an
+// already-open Road Alerts tab keeps talking to the previous service
+// worker (which may not handle the message above) after a deploy.
+self.addEventListener('install', () => self.skipWaiting());
+self.addEventListener('activate', (event) => event.waitUntil(self.clients.claim()));
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();

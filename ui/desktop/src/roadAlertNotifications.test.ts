@@ -31,18 +31,51 @@ describe('showAlertNotification', () => {
     delete (navigator as unknown as Record<string, unknown>).serviceWorker;
   });
 
+  // A fake active service worker: replies on the transferred port the way
+  // public/sw.js does, or stays silent like an outdated one would.
+  function fakeWorker(reply: { shown: boolean } | null) {
+    return {
+      postMessage: vi.fn((_message: unknown, ports: MessagePort[]) => {
+        if (reply) ports[0].postMessage(reply);
+      }),
+    };
+  }
+
   it('hands the notification and its sketch to the active service worker', async () => {
-    const postMessage = vi.fn();
-    stubNotifications('granted', { getRegistration: () => Promise.resolve({ active: { postMessage } }) });
+    const worker = fakeWorker({ shown: true });
+    stubNotifications('granted', { getRegistration: () => Promise.resolve({ active: worker }) });
     showAlertNotification('Serious road alert', 'Crash ahead', sketch);
-    await vi.waitFor(() => expect(postMessage).toHaveBeenCalled());
-    expect(postMessage).toHaveBeenCalledWith({
+    await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+    expect(worker.postMessage.mock.calls[0][0]).toEqual({
       type: 'road-alert-notification',
       title: 'Serious road alert',
       body: 'Crash ahead',
       sketch,
     });
+    await new Promise((resolve) => setTimeout(resolve, 50));
     expect(NotificationMock).not.toHaveBeenCalled();
+  });
+
+  it('falls back to a plain notification when the service worker never confirms (e.g. an outdated version)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const worker = fakeWorker(null);
+      stubNotifications('granted', { getRegistration: () => Promise.resolve({ active: worker }) });
+      showAlertNotification('Serious road alert', 'Crash ahead', sketch);
+      await vi.waitFor(() => expect(worker.postMessage).toHaveBeenCalled());
+      expect(NotificationMock).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1600);
+      expect(NotificationMock).toHaveBeenCalledWith('Serious road alert', { body: 'Crash ahead' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('falls back to a plain notification when the service worker reports it could not show one', async () => {
+    const worker = fakeWorker({ shown: false });
+    stubNotifications('granted', { getRegistration: () => Promise.resolve({ active: worker }) });
+    showAlertNotification('Serious road alert', 'Crash ahead', sketch);
+    await vi.waitFor(() => expect(NotificationMock).toHaveBeenCalledWith('Serious road alert', { body: 'Crash ahead' }));
   });
 
   it('falls back to a plain page notification when no service worker is active', async () => {
@@ -52,11 +85,11 @@ describe('showAlertNotification', () => {
   });
 
   it('does nothing without notification permission', async () => {
-    const postMessage = vi.fn();
-    stubNotifications('default', { getRegistration: () => Promise.resolve({ active: { postMessage } }) });
+    const worker = fakeWorker({ shown: true });
+    stubNotifications('default', { getRegistration: () => Promise.resolve({ active: worker }) });
     showAlertNotification('Serious road alert', 'Crash ahead', sketch);
     await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(postMessage).not.toHaveBeenCalled();
+    expect(worker.postMessage).not.toHaveBeenCalled();
     expect(NotificationMock).not.toHaveBeenCalled();
   });
 });

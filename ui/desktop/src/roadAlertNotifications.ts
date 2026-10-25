@@ -135,6 +135,10 @@ export type AlertSketchInput = {
   hazard: { latitude: number; longitude: number };
 };
 
+// Drawing the sketch and showing the notification takes the service
+// worker well under this; past it, assume it isn't going to happen.
+const SERVICE_WORKER_REPLY_TIMEOUT_MS = 1500;
+
 function showPageNotification(title: string, body: string): void {
   try {
     const notification = new Notification(title, { body });
@@ -168,11 +172,28 @@ export function showAlertNotification(title: string, body: string, sketch?: Aler
     .getRegistration()
     .then((registration) => {
       const worker = registration?.active;
-      if (worker) {
-        worker.postMessage({ type: 'road-alert-notification', title, body, sketch });
-      } else {
+      if (!worker) {
         showPageNotification(title, body);
+        return;
       }
+      // The service worker confirms on this channel once it has shown the
+      // notification. No confirmation in time (e.g. an older service
+      // worker version that doesn't handle this message) means it wasn't
+      // shown -- never drop an alert silently, show a plain one instead.
+      const channel = new MessageChannel();
+      let settled = false;
+      const fallback = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        showPageNotification(title, body);
+      }, SERVICE_WORKER_REPLY_TIMEOUT_MS);
+      channel.port1.onmessage = (event: MessageEvent<{ shown?: boolean }>) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(fallback);
+        if (!event.data?.shown) showPageNotification(title, body);
+      };
+      worker.postMessage({ type: 'road-alert-notification', title, body, sketch }, [channel.port2]);
     })
     .catch(() => showPageNotification(title, body));
 }
