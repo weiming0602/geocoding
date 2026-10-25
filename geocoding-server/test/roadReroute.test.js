@@ -159,3 +159,26 @@ test('getRoadReroute throws NotFoundError when nothing lies past the hazard in t
   );
   await db.close();
 });
+
+// The fixture's two detours are the same length, so with no preference
+// either could come first. A weighted point (a routine street) on one of
+// them must put that one first, flagged -- whichever side it's on.
+for (const [side, latitude] of [['north (top)', NODES.N4.latitude], ['south (bottom)', NODES.N6.latitude]]) {
+  test(`getRoadReroute lists the detour through a weighted point first -- ${side}`, async () => {
+    const db = await makeFixtureDb();
+    const routinePoint = { latitude, longitude: NODES.N5.longitude / 2, weight: 5 };
+    const result = await getRoadReroute(db, {
+      driverLatitude: DRIVER.latitude,
+      driverLongitude: DRIVER.longitude,
+      hazardLatitude: HAZARD.latitude,
+      hazardLongitude: HAZARD.longitude,
+      weightedPoints: [routinePoint],
+    });
+    const [first, ...rest] = result.options;
+    assert.equal(first.usesWeightedPoints, true);
+    assert.equal(first.weightedPointsPassed, 1);
+    assert.ok(first.geometry.coordinates.some(([, lat]) => Math.abs(lat - latitude) < 1e-9), 'first option should run along that row');
+    assert.ok(rest.every((option) => option.usesWeightedPoints === false));
+    await db.close();
+  });
+}
