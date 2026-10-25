@@ -56,6 +56,44 @@ geocoding request. Current as of August 2026.
   has full US coverage on its own), with real point data layered on top
   only where a state actually makes it available.
 
+### 3. OpenStreetMap — one-way streets (Road Alerts routing only)
+
+- **What it is:** OpenStreetMap's road network, downloaded as Geofabrik's
+  daily per-state extracts (`download.geofabrik.de`, ~90 MB for Maine,
+  ~70 MB for New Hampshire). Only one thing is taken from it: whether each
+  road is one-way (`oneway`, roundabouts, motorways), and in which
+  direction.
+- **Why it matters:** TIGER has no one-way or direction data at all, so
+  Road Alerts' detours used to treat every street as two-way and could
+  send a driver the wrong way down a divided highway or ramp (measured:
+  ~2 km the wrong way along US Route 1 in Brunswick on a real test trip).
+  `geocoding/osm_oneway.py` matches each OSM road onto the TIGER segments
+  it overlaps (within 15 m, >= 80% coverage, names agreeing) and records
+  the allowed direction in a separate `street_oneway` table, which the
+  routing graph reads. As of October 2026: 16,968 Maine/NH segments
+  one-way, including ~95% of interstate segments and ~88% of ramps; any
+  interstate/ramp segment without a confident match is excluded from
+  routing rather than assumed two-way.
+- **License:** Open Database License (ODbL) 1.0, © OpenStreetMap
+  contributors (openstreetmap.org/copyright). Free for commercial use, with
+  conditions:
+  - **Attribution** — "© OpenStreetMap contributors" wherever routes built
+    with this data are shown (Road Alerts' reroute caveat, the Help pages,
+    the sandbox).
+  - **Share-alike** — `street_oneway` (OSM directions copied onto TIGER
+    segments) is a derivative database. Offering routes built from it to
+    the public means offering that derived data under the ODbL on request
+    (it's a `tlid -> direction` table; TIGER itself is public domain, so
+    this gives away nothing proprietary).
+  - **Kept out of geocoding** — the OSM-derived data lives only in
+    `osm_ways`/`street_oneway` and is read only by routing
+    (`roadReroute.js`, `testDriveRoute.js`). Geocoding (`geocode.js`,
+    `reverseGeocode.js`, `interpolate.py`, batch) never touches it, so
+    geocoding results stay TIGER + E911 only, free of ODbL terms.
+  This is a reading of the ODbL, not legal advice.
+- **Coverage today:** Maine and New Hampshire, refreshed by
+  `annual_update.py` (or `python -m geocoding.osm_oneway`).
+
 ## How the data gets in (and stays current)
 
 | Script | What it does |

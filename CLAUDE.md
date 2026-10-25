@@ -27,7 +27,11 @@ read-write).
   points, insert-only/safe to re-run): `.venv\Scripts\python -m
   geocoding.annual_update "dbname=geocoding"` -- see `ops/` for the
   systemd timer/service pair and a crontab alternative to schedule it.
-- Python tests: `.venv\Scripts\python -m pytest` (37 tests in `tests/`) —
+  Also refreshes OpenStreetMap one-way restrictions for routing (downloads
+  Geofabrik's ~90MB/state extracts to `data/osm/`; `--skip-osm-oneway` to
+  skip). On its own: `python -m geocoding.osm_oneway "dbname=geocoding"
+  --states ME NH` (~6 min for ME+NH, mostly the download).
+- Python tests: `.venv\Scripts\python -m pytest` (71 tests in `tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)
 - Server: `cd geocoding-server && node src/server.js` -- for anything
@@ -266,10 +270,16 @@ read-write).
   hazard along the driver's heading (or the driver-to-hazard bearing if
   no heading is known) -- an estimate, labeled as such in the response
   and the UI, not real hazard-extent data. **TIGER carries no one-way/
-  direction data at all** (confirmed against Census's own field
-  documentation -- not something we forgot to ingest, it simply isn't in
-  this dataset), so every route is computed as if every street were
-  two-way; the UI's caveat text says so. It also carries no speed/road-
+  direction data at all**, so routing is **directed using OpenStreetMap
+  one-way data matched onto TIGER segments** (`geocoding/osm_oneway.py` ->
+  `street_oneway` table -> `streets_routing_edges.cost`/`reverse_cost`,
+  `-1` = not allowed; `pgr_ksp`/`pgr_dijkstra` run with `directed =
+  true`). A segment with no confident OSM match stays two-way, **except
+  limited-access highways/ramps (MTFCC S1100/S1630), which are closed to
+  routing instead** -- missing a route beats sending a driver the wrong
+  way down a ramp. OSM data is ODbL: `street_oneway` is used for routing
+  only, never by geocoding (see `DATA_SOURCES.md`); never add OSM-derived
+  columns to `streets`/`street_names`. TIGER also carries no speed/road-
   class-beyond-MTFCC data, so `durationSeconds` in the response is always
   `null` rather than a fabricated estimate -- only `distanceMeters` is
   real. A driver/rejoin point with no routable street data within ~300m,
