@@ -6,7 +6,7 @@ import { rerouteErrorMessage } from './rerouteErrorMessage';
 describe('rerouteErrorMessage', () => {
   it('explains an out-of-range hazard with its distance and the 5 km limit', () => {
     expect(rerouteErrorMessage(new ApiError('hazard is 10612m away', 422), 10612)).toBe(
-      "This hazard is 10.6 km away -- detours are offered once you're within 5 km of it. Try again as you get closer."
+      "This hazard is 10.6 km away -- detours are offered once you're within 10 km of it. Try again as you get closer."
     );
   });
 
@@ -16,9 +16,15 @@ describe('rerouteErrorMessage', () => {
     );
   });
 
-  it("explains when the estimated point past the hazard isn't near a mapped street", () => {
+  it('explains when there is no mapped street past the hazard to rejoin', () => {
+    expect(rerouteErrorMessage(new ApiError('no routable street data past this hazard to rejoin', 404), 3000)).toBe(
+      "Couldn't plan a detour here: there's no mapped street past this hazard in your direction of travel to rejoin."
+    );
+  });
+
+  it('explains when the driver is not near a mapped street', () => {
     expect(rerouteErrorMessage(new ApiError('no routable street data near this location yet', 404), 3000)).toMatch(
-      /^Couldn't plan a detour here: the estimated point past this hazard isn't near a mapped street/
+      /you don't seem to be near a mapped street/
     );
   });
 

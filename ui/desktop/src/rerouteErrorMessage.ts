@@ -3,7 +3,7 @@ import { ApiError } from '../../shared/api/client';
 // Mirrors geocoding-server/src/roadReroute.js's MAX_HAZARD_DISTANCE_METERS
 // (same dual-maintenance pattern as other server/client constant pairs in
 // this repo) -- beyond this the server answers 422 instead of a detour.
-export const REROUTE_MAX_DISTANCE_METERS = 5000;
+export const REROUTE_MAX_DISTANCE_METERS = 10000;
 
 /**
  * What to tell the driver when "Show a way around this" fails, instead of
@@ -19,15 +19,14 @@ export function rerouteErrorMessage(err: unknown, hazardDistanceMeters: number |
       `${REROUTE_MAX_DISTANCE_METERS / 1000} km of it. Try again as you get closer.`
     );
   }
-  // roadReroute.js's two 404s: a point it couldn't snap to the street
-  // network (usually the estimated "past the hazard" point landing in open
-  // country -- it's a fixed distance along the driver's heading, not a
-  // real road position), or no route existing at all.
+  // roadReroute.js's 404s: no mapped street past the hazard in the
+  // direction of travel to rejoin, the driver not near a mapped street,
+  // or no route existing at all.
+  if (err instanceof ApiError && err.status === 404 && /past this hazard/.test(err.message)) {
+    return "Couldn't plan a detour here: there's no mapped street past this hazard in your direction of travel to rejoin.";
+  }
   if (err instanceof ApiError && err.status === 404 && /no routable street data/.test(err.message)) {
-    return (
-      "Couldn't plan a detour here: the estimated point past this hazard isn't near a mapped street. " +
-      'Try again in a moment from a little further along.'
-    );
+    return "Couldn't plan a detour here: you don't seem to be near a mapped street right now. Try again in a moment.";
   }
   if (err instanceof ApiError && err.status === 404) {
     return 'No way around this hazard was found from where you are.';

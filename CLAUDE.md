@@ -272,8 +272,13 @@ read-write).
   two-way; the UI's caveat text says so. It also carries no speed/road-
   class-beyond-MTFCC data, so `durationSeconds` in the response is always
   `null` rather than a fabricated estimate -- only `distanceMeters` is
-  real. A driver/rejoin point with no routable street data within ~300m,
-  or a hazard with no route around it at all, throws `NotFoundError`
+  real. The rejoin target is a real intersection 0.8-2.5 km past the
+  hazard within 60 degrees of the direction of travel, nearest that
+  estimate (up to 3 tried); the search is limited to a bounding box around
+  driver/hazard/rejoin (~0.1 s, vs ~8.6 s over the whole graph). A driver
+  with no routable street data within ~300m, no intersection past the
+  hazard to rejoin, or a hazard with no route around it at all, throws
+  `NotFoundError`
   (404); a hazard beyond `MAX_HAZARD_DISTANCE_METERS` throws
   `OutOfRangeError` (422), same convention as `/road-signals/cross-street`.
 - **LLM-assisted geocoding** (`geocoding-server/src/llmAssist.js`, wired
