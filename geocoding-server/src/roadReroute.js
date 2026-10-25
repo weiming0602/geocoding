@@ -1,6 +1,7 @@
 const { NotFoundError, OutOfRangeError } = require('./errors');
 const { validateCoordinate, flatDistanceMeters } = require('./nextCrossStreet');
 const { metersPerDegree } = require('./interpolate');
+const { rankRoutes, relevantWeightedPoints, viaRouteRows, viaNodesForPoint } = require('./routePreference');
 
 // 511 gives only a single point per hazard, never a real start/end span
 // (see roadSignals.js) -- this is a deliberate approximation of "past
@@ -46,6 +47,10 @@ const MAX_NODE_SNAP_DISTANCE_METERS = 300;
 // choices" this feature exists to offer, same target_count ORS was
 // asked for previously.
 const ROUTE_OPTION_COUNT = 3;
+// Whether route searches honor one-way restrictions -- every query below
+// (pgr_ksp, and pgr_dijkstraVia for weighted-point routes) uses this, so
+// they always agree.
+const ROUTE_DIRECTED = true;
 const BBOX_MARGIN_DEGREES = 0.05;
 
 /**
@@ -192,7 +197,10 @@ function buildPathGeometry(pathRows, edgesById) {
  * null rather than a fabricated estimate. Both limitations are surfaced
  * to the driver in the UI, not hidden here.
  */
-async function getRoadReroute(db, { driverLatitude, driverLongitude, driverHeading, hazardLatitude, hazardLongitude }) {
+async function getRoadReroute(
+  db,
+  { driverLatitude, driverLongitude, driverHeading, hazardLatitude, hazardLongitude, weightedPoints = [] }
+) {
   validateCoordinate(driverLatitude, driverLongitude, 'driver');
   validateCoordinate(hazardLatitude, hazardLongitude, 'hazard');
 
@@ -225,6 +233,7 @@ async function getRoadReroute(db, { driverLatitude, driverLongitude, driverHeadi
 
   let pathRows = [];
   let rejoinPoint = null;
+  let rejoinNode = null;
   for (const candidate of candidates) {
     const edgesSql = buildAvoidHazardEdgesSql(hazardLatitude, hazardLongitude, [
       { latitude: driverLatitude, longitude: driverLongitude },
@@ -238,12 +247,13 @@ async function getRoadReroute(db, { driverLatitude, driverLongitude, driverHeadi
     // throws "function pgr_ksp(...) is not unique").
     ({ rows: pathRows } = await db.query(
       `SELECT path_id, path_seq, node, edge, agg_cost
-       FROM pgr_ksp($1, $2::bigint, $3::bigint, ${ROUTE_OPTION_COUNT}, true)
+       FROM pgr_ksp($1, $2::bigint, $3::bigint, ${ROUTE_OPTION_COUNT}, ${ROUTE_DIRECTED})
        ORDER BY path_id, path_seq`,
       [edgesSql, startNode, candidate.id]
     ));
     if (pathRows.length > 0) {
       rejoinPoint = { latitude: candidate.latitude, longitude: candidate.longitude };
+      rejoinNode = candidate;
       break;
     }
   }
@@ -253,7 +263,25 @@ async function getRoadReroute(db, { driverLatitude, driverLongitude, driverHeadi
     throw new NotFoundError('no route found around this hazard');
   }
 
-  const usedEdgeIds = [...new Set(pathRows.filter((row) => row.edge !== -1).map((row) => row.edge))];
+  // Candidate routes: pgr_ksp's shortest options, plus one through each
+  // weighted point (the driver's routine streets) that's roughly on the
+  // way -- then all ranked together by rankRoutes, which prefers a route
+  // passing a weighted point unless it's ~3x longer (see routePreference.js).
+  const paths = pathIds.map((pathId) => {
+    const rows = pathRows.filter((row) => row.path_id === pathId);
+    return { rows, distanceMeters: rows[rows.length - 1].agg_cost };
+  });
+  const driver = { latitude: driverLatitude, longitude: driverLongitude };
+  const hazard = { latitude: hazardLatitude, longitude: hazardLongitude };
+  for (const point of relevantWeightedPoints(weightedPoints, driver, rejoinPoint)) {
+    const viaNodes = await viaNodesForPoint(db, point, driver);
+    if (viaNodes.length === 0) continue;
+    const viaEdgesSql = buildAvoidHazardEdgesSql(hazardLatitude, hazardLongitude, [driver, hazard, rejoinNode, point]);
+    const rows = await viaRouteRows(db, viaEdgesSql, [startNode, ...viaNodes, rejoinNode.id], ROUTE_DIRECTED);
+    if (rows.length > 0) paths.push({ rows, distanceMeters: rows[rows.length - 1].route_agg_cost });
+  }
+
+  const usedEdgeIds = [...new Set(paths.flatMap(({ rows }) => rows.filter((row) => row.edge >= 0).map((row) => row.edge)))];
   const { rows: edgeRows } = await db.query(
     `SELECT id, source, target, ST_AsGeoJSON(geom) AS geojson FROM streets_routing_edges WHERE id = ANY($1)`,
     [usedEdgeIds]
@@ -265,14 +293,17 @@ async function getRoadReroute(db, { driverLatitude, driverLongitude, driverHeadi
     ])
   );
 
-  const options = pathIds.map((pathId) => {
-    const rows = pathRows.filter((row) => row.path_id === pathId);
-    return {
+  const options = rankRoutes(
+    paths.map(({ rows, distanceMeters }) => ({
       geometry: { type: 'LineString', coordinates: buildPathGeometry(rows, edgesById) },
-      distanceMeters: rows[rows.length - 1].agg_cost,
+      distanceMeters,
       durationSeconds: null,
-    };
-  });
+    })),
+    weightedPoints,
+    ROUTE_OPTION_COUNT,
+    driver,
+    rejoinPoint
+  );
 
   return { options, rejoinPoint };
 }

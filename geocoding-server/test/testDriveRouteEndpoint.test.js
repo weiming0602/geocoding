@@ -152,3 +152,46 @@ test('GET /road-alerts/test/drive-route still uses a one-way street in its legal
       },
     }
   ));
+
+// Weighted points (routine streets): a test weighted point on the north
+// detour row makes the ~2397 m route through it preferred over the
+// ~2000 m direct row -- the preference wins unless a route is ~3x longer.
+function withBothFlags(callback) {
+  return async (ctx) => {
+    const saved = process.env.ALLOW_TEST_WEIGHTED_POINTS;
+    process.env.ALLOW_TEST_WEIGHTED_POINTS = 'true';
+    try {
+      await withFlagEnabled(callback)(ctx);
+    } finally {
+      if (saved !== undefined) process.env.ALLOW_TEST_WEIGHTED_POINTS = saved;
+      else delete process.env.ALLOW_TEST_WEIGHTED_POINTS;
+    }
+  };
+}
+
+test('GET /road-alerts/test/drive-route prefers a route along the account\'s weighted points', () =>
+  withTestServer(
+    withBothFlags(async ({ port, usersDb }) => {
+      const serviceKey = await registerTestAccount(usersDb);
+      const { addTestWeightedPoint } = require('../src/testWeightedPoints');
+      await addTestWeightedPoint(usersDb, TEST_EMAIL, { latitude: NODES.N4.latitude, longitude: NODES.N5.longitude / 2, weight: 5 });
+
+      const body = await (await fetch(driveRouteUrl(port, { ...BASE_PARAMS, serviceKey }))).json();
+      assert.equal(body.usesWeightedPoints, true);
+      // 200 m north + ~2000 m across + 200 m back south.
+      assert.ok(Math.abs(body.distanceMeters - 2397) < 10, `expected the ~2397m north row, got ${body.distanceMeters}`);
+      assert.ok(body.geometry.coordinates.some(([, lat]) => lat > 0.001), 'expected the route to run along the north row');
+    }),
+    FIXTURE_OPTIONS
+  ));
+
+test('GET /road-alerts/test/drive-route takes the shortest route when the account has no weighted points', () =>
+  withTestServer(
+    withBothFlags(async ({ port, usersDb }) => {
+      const serviceKey = await registerTestAccount(usersDb);
+      const body = await (await fetch(driveRouteUrl(port, { ...BASE_PARAMS, serviceKey }))).json();
+      assert.equal(body.usesWeightedPoints, false);
+      assert.ok(Math.abs(body.distanceMeters - 2000) < 5);
+    }),
+    FIXTURE_OPTIONS
+  ));
