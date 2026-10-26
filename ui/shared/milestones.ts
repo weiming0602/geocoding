@@ -152,6 +152,64 @@ export const MILESTONES: Milestone[] = [
       "A new setting lets you control how much of your driving pattern gets remembered -- from bare minimum to most complete -- so you can balance privacy against catching more relevant alerts.",
   },
   {
+    date: 'Sep 16, 2026',
+    title: 'Serious hazards chime and notify you',
+    description:
+      "A serious or need-to-know hazard ahead now plays a short chime before it's read aloud, and pops up a notification if Road Alerts isn't the tab you're looking at.",
+  },
+  {
+    date: 'Sep 20, 2026',
+    title: 'Find places near where you are',
+    description: 'Find Places can now search around your current location with one tap, no map click needed.',
+  },
+  {
+    date: 'Oct 2, 2026',
+    title: 'Clearer alerts that name the road',
+    description:
+      'Spoken alerts and notifications now say which road a hazard is on and which lanes are affected, instead of a bare "Closed".',
+  },
+  {
+    date: 'Oct 2, 2026',
+    title: 'Tap an alert to see it on the map',
+    description: 'Selecting a hazard in the list brings both it and your own position into view on the map.',
+  },
+  {
+    date: 'Oct 4, 2026',
+    title: 'No more alarms for ordinary traffic',
+    description:
+      "Plain congestion no longer sets off a chime or a notification, even when it's heavy -- those are saved for hazards that actually block or endanger the road.",
+  },
+  {
+    date: 'Oct 15, 2026',
+    title: 'Look up addresses without an account',
+    description:
+      'Single address and reverse lookups are now free to try with no sign-up (with a fair-use rate limit), and a public API reference documents every geocoding endpoint for developers.',
+  },
+  {
+    date: 'Oct 23, 2026',
+    title: 'Typos in street names, handled',
+    description:
+      "For account holders, an address that doesn't match because of a misspelled street or wrong town is now checked against the real streets nearby and resolved to the one you meant -- never to an address that doesn't exist.",
+  },
+  {
+    date: 'Oct 25, 2026',
+    title: 'The right side of the street, every time',
+    description:
+      'Fixed how house numbers are matched to each side of a street: addresses that used to come back "not found" now resolve, and every estimated point lands on the correct side of the road.',
+  },
+  {
+    date: 'Oct 25, 2026',
+    title: 'See where a hazard is at a glance',
+    description:
+      'Every alert now shows a small sketch of your recent route, which way you are heading, and where the hazard is, with the distance to it.',
+  },
+  {
+    date: 'Oct 25, 2026',
+    title: 'Detours that work in more places, instantly',
+    description:
+      'Ways around a hazard now appear in rural areas and for any hazard you are alerted about, not just nearby ones, in a fraction of a second instead of several, and explain why when no detour is possible.',
+  },
+  {
     date: 'Coming soon',
     title: 'New Hampshire accuracy upgrade',
     description: 'The same real per-house location data, for New Hampshire.',
