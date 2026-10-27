@@ -1,7 +1,14 @@
 const { NotFoundError, OutOfRangeError } = require('./errors');
 const { validateCoordinate, flatDistanceMeters } = require('./nextCrossStreet');
 const { metersPerDegree } = require('./interpolate');
-const { rankRoutes, weightedViaGroups, viaRouteRows, viaNodesForPoint } = require('./routePreference');
+const {
+  rankRoutes,
+  relevantWeightedPoints,
+  groupCandidatePoints,
+  bestWeightedGroup,
+  viaRouteRows,
+  viaNodesForPoint,
+} = require('./routePreference');
 
 // 511 gives only a single point per hazard, never a real start/end span
 // (see roadSignals.js) -- this is a deliberate approximation of "past
@@ -271,19 +278,25 @@ async function getRoadReroute(
   });
   const driver = { latitude: driverLatitude, longitude: driverLongitude };
   const hazard = { latitude: hazardLatitude, longitude: hazardLongitude };
-  for (const group of weightedViaGroups(weightedPoints, driver, rejoinPoint)) {
-    const viaNodes = [];
-    // Each point's street is entered from the end nearer the previous stop,
-    // so the route doesn't double back along it.
-    let previous = driver;
-    for (const point of group) {
-      viaNodes.push(...(await viaNodesForPoint(db, point, previous)));
-      previous = point;
-    }
+  // One route through each relevant point on its own...
+  for (const point of relevantWeightedPoints(weightedPoints, driver, rejoinPoint)) {
+    const viaNodes = await viaNodesForPoint(db, point, driver);
     if (viaNodes.length === 0) continue;
-    const viaEdgesSql = buildAvoidHazardEdgesSql(hazardLatitude, hazardLongitude, [driver, hazard, rejoinNode, ...group]);
+    const viaEdgesSql = buildAvoidHazardEdgesSql(hazardLatitude, hazardLongitude, [driver, hazard, rejoinNode, point]);
     const rows = await viaRouteRows(db, viaEdgesSql, [startNode, ...viaNodes, rejoinNode.id], ROUTE_DIRECTED);
     if (rows.length > 0) paths.push({ rows, distanceMeters: rows[rows.length - 1].route_agg_cost });
+  }
+  // ...and one through the best combination of them, by driving distance.
+  const groupPoints = groupCandidatePoints(weightedPoints, driver, rejoinPoint);
+  if (groupPoints.length >= 2) {
+    const groupEdgesSql = buildAvoidHazardEdgesSql(hazardLatitude, hazardLongitude, [driver, hazard, rejoinNode, ...groupPoints]);
+    const group = await bestWeightedGroup(
+      db, groupEdgesSql, weightedPoints, driver, rejoinPoint, startNode, rejoinNode.id, ROUTE_DIRECTED
+    );
+    if (group && group.points.length >= 2) {
+      const rows = await viaRouteRows(db, groupEdgesSql, [startNode, ...group.nodes, rejoinNode.id], ROUTE_DIRECTED);
+      if (rows.length > 0) paths.push({ rows, distanceMeters: rows[rows.length - 1].route_agg_cost });
+    }
   }
 
   const usedEdgeIds = [...new Set(paths.flatMap(({ rows }) => rows.filter((row) => row.edge >= 0).map((row) => row.edge)))];
