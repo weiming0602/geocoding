@@ -782,9 +782,21 @@ export default function RoadAlerts() {
       simulatingRef.current = true;
       setSimulationProgress({ label, distanceMeters: 0, totalMeters: plan.totalMeters, done: false });
       setSimulatedRoute(plan.points.map((point) => [point.longitude, point.latitude]));
+      let lastDistance = 0;
       const emitFix = () => {
         const nowMs = Date.now();
         const fix = positionAlongRoute(plan, ((nowMs - startedAtMs) / 1000) * speedMps);
+        // Every route corner passed since the last fix goes into the driven
+        // path too -- fast-forwarded fixes can be hundreds of meters apart,
+        // and joining them directly cut straight across blocks.
+        const passed = plan.points.filter(
+          (_, i) => plan.cumulativeMeters[i] > lastDistance && plan.cumulativeMeters[i] < fix.distanceMeters
+        );
+        lastDistance = fix.distanceMeters;
+        if (passed.length > 0) {
+          drivenPathRef.current = [...drivenPathRef.current, ...passed.map(({ latitude, longitude }) => ({ latitude, longitude }))];
+          setDrivenPath(drivenPathRef.current);
+        }
         onPosition({
           coords: {
             latitude: fix.latitude,
