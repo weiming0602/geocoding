@@ -310,8 +310,17 @@ async function makeUsersDb() {
  * than the standard seedFixtureStreets rows. `geoOptions` controls that
  * seeding pool's own createTestDatabase() call (e.g. `{ postgis: true,
  * pgrouting: true }`), independent of `seedStreets`'s own default.
+ *
+ * `serverModule` picks which entry point to start -- '../src/server'
+ * (every route, the default) or one half of the production split,
+ * '../src/geocodingServer' / '../src/roadAlertsServer' (see
+ * serverSplit.test.js). All three export the same { app, db,
+ * usersDbPromise } shape.
  */
-async function withTestServer(callback, { seedStreets = true, geoOptions = {}, geoSeed } = {}) {
+async function withTestServer(
+  callback,
+  { seedStreets = true, geoOptions = {}, geoSeed, serverModule = '../src/server' } = {}
+) {
   const geo = seedStreets
     ? await makeFixtureDsn()
     : await createTestDatabase({ postgis: false, ...geoOptions }).then(async ({ pool, dsn, drop }) => {
@@ -330,8 +339,16 @@ async function withTestServer(callback, { seedStreets = true, geoOptions = {}, g
 
   process.env.GEOCODING_DSN = geo.dsn;
   process.env.USERS_DSN = users.dsn;
-  delete require.cache[require.resolve('../src/server')];
-  const server = require('../src/server');
+  // The route modules too, not just the entry point: they're what
+  // actually require roadSignals.js/hereTraffic.js etc., so a test that
+  // clears one of those (to reset its module-scope cache -- see
+  // roadSignalsEndpoint.test.js's withFetch) only gets a fresh copy if
+  // the route module is re-required as well. Same freshness server.js
+  // had back when every route lived in it directly.
+  for (const mod of [serverModule, '../src/geocodingRoutes', '../src/roadAlertsRoutes']) {
+    delete require.cache[require.resolve(mod)];
+  }
+  const server = require(serverModule);
   const httpServer = server.app.listen(0);
   const usersDb = await server.usersDbPromise;
 
