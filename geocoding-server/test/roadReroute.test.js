@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { OutOfRangeError, NotFoundError } = require('../src/errors');
-const { getRoadReroute, buildPathGeometry, MAX_HAZARD_DISTANCE_METERS } = require('../src/roadReroute');
+const { getRoadReroute, buildPathGeometry, alternativeRoutes, MAX_HAZARD_DISTANCE_METERS } = require('../src/roadReroute');
 const { createTestDatabase } = require('./helpers');
 const { seedRoadRerouteFixture, DRIVER, HAZARD, REJOIN, NODES } = require('./roadRerouteFixture');
 
@@ -225,5 +225,25 @@ test('getRoadReroute falls back to the plain detours if weighted-point routing f
   } finally {
     console.error = originalError;
     await db.close();
+  }
+});
+
+// Shortest S-A-B-E is 300 m. S-A-C-B-E (301 m) is a near-copy -- one block
+// dodged, two thirds of it the same streets -- the kind of "alternative"
+// pgr_ksp kept returning in Portland (three options sharing 95-99%).
+// S-D-E (400 m) is a genuinely different way. Edges inline, no tables.
+test('alternativeRoutes skips near-copies of an earlier option in favor of a genuinely different route', async () => {
+  const { pool, drop } = await createTestDatabase({ pgrouting: true });
+  try {
+    const edgesSql = `SELECT * FROM (VALUES
+      (1, 1, 2, 100.0), (2, 2, 3, 100.0), (3, 3, 4, 100.0),
+      (4, 2, 5, 50.5), (5, 5, 3, 50.5),
+      (6, 1, 6, 200.0), (7, 6, 4, 200.0)
+    ) AS t(id, source, target, cost)`;
+    const routes = await alternativeRoutes(pool, edgesSql, 1, 4, 3, false);
+    assert.deepEqual(routes.map((r) => Math.round(r.distanceMeters)), [300, 400]);
+    assert.deepEqual(routes[1].rows.map((r) => Number(r.node)), [1, 6, 4]);
+  } finally {
+    await drop();
   }
 });
