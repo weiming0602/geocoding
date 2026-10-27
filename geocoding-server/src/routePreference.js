@@ -175,27 +175,41 @@ const MAX_POINT_TO_STREET_METERS = 300;
 
 /**
  * Via vertices that make a route actually drive the street segment a
- * weighted point is on: both of that segment's end intersections, the one
- * nearer `from` first. (The nearest intersection alone isn't enough --
- * weighted points usually sit mid-street, and on a long rural segment the
- * nearest intersection can be far away and reachable without ever using
- * that street.) Returns [] if no street is within
- * MAX_POINT_TO_STREET_METERS.
+ * weighted point is on: both of that segment's end intersections, in the
+ * order the segment may be driven. (The nearest intersection alone isn't
+ * enough -- weighted points usually sit mid-street, and on a long rural
+ * segment the nearest intersection can be far away and reachable without
+ * ever using that street.) A one-way segment is entered at its legal
+ * start -- ordering by proximity alone forced long loops to drive a
+ * one-way street, e.g. 13.6 km instead of 5 km for a short Portland trip.
+ * A two-way segment is entered from the end nearer `from`. Segments closed
+ * in both directions are skipped for the next nearest. Returns [] if no
+ * usable street is within MAX_POINT_TO_STREET_METERS.
+ *
+ * `e.*` rather than naming reverse_cost: before one-way data existed the
+ * edges view had no reverse_cost column, and a missing one means two-way.
  */
 async function viaNodesForPoint(db, point, from) {
   const { rows } = await db.query(
-    `SELECT source, target,
-            ST_Distance(ST_StartPoint(geom)::geography, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography) AS source_dist,
-            ST_Distance(ST_EndPoint(geom)::geography, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography) AS target_dist
-     FROM streets_routing_edges
-     WHERE ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $5)
-     ORDER BY geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)
-     LIMIT 1`,
+    `SELECT e.*,
+            ST_Distance(ST_StartPoint(e.geom)::geography, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography) AS source_dist,
+            ST_Distance(ST_EndPoint(e.geom)::geography, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography) AS target_dist
+     FROM streets_routing_edges e
+     WHERE ST_DWithin(e.geom::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $5)
+     ORDER BY e.geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)
+     LIMIT 5`,
     [point.longitude, point.latitude, from.longitude, from.latitude, MAX_POINT_TO_STREET_METERS]
   );
-  if (rows.length === 0) return [];
-  const { source, target, source_dist: sourceDist, target_dist: targetDist } = rows[0];
-  return sourceDist <= targetDist ? [source, target] : [target, source];
+  for (const row of rows) {
+    const forward = row.cost >= 0;
+    const backward = (row.reverse_cost ?? row.cost) >= 0;
+    if (forward && !backward) return [row.source, row.target];
+    if (backward && !forward) return [row.target, row.source];
+    if (forward && backward) {
+      return row.source_dist <= row.target_dist ? [row.source, row.target] : [row.target, row.source];
+    }
+  }
+  return [];
 }
 
 /**
