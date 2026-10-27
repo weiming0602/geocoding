@@ -301,24 +301,50 @@ async function viaNodesForPoint(db, point, from) {
 }
 
 /**
- * pgr_dijkstraVia rows for start -> via... -> end over `edgesSql`, or []
- * if any leg is unreachable (strict). `directed` must match the caller's
- * other route queries. Rows have the same (node, edge) shape
- * buildPathGeometry expects; total length is the last row's
- * route_agg_cost.
+ * Route rows for start -> via... -> end over `edgesSql`, or [] if any leg
+ * is unreachable. `directed` must match the caller's other route queries.
+ * Rows have the same (node, edge) shape buildPathGeometry expects; total
+ * length is the last row's route_agg_cost.
+ *
+ * Every leg comes from ONE plain pgr_dijkstra call (its combinations
+ * form, so the graph is built once), joined here -- not pgr_dijkstraVia,
+ * which in pgRouting 4.0.1 dies with std::bad_alloc when a leg is
+ * unreachable instead of returning no rows. That happened for real: a
+ * weighted point on the hazard's own street, cut off by the avoid circle,
+ * crashed every detour request (500) for that driver.
  */
 async function viaRouteRows(db, edgesSql, nodeIds, directed) {
   // Consecutive repeats (a via vertex that IS the start/end) would be a
-  // zero-length leg; pgr_dijkstraVia needs distinct neighbors.
-  nodeIds = nodeIds.filter((id, i) => i === 0 || String(id) !== String(nodeIds[i - 1]));
-  if (nodeIds.length < 3) return [];
+  // zero-length leg.
+  const ids = nodeIds
+    .map((id) => String(BigInt(id))) // also guarantees plain integers for the SQL below
+    .filter((id, i, all) => i === 0 || id !== all[i - 1]);
+  if (ids.length < 3) return [];
+  const legs = ids.slice(1).map((target, i) => [ids[i], target]);
+  const pairsSql = `SELECT * FROM (VALUES ${legs.map(([a, b]) => `(${a}::bigint, ${b}::bigint)`).join(', ')}) AS t(source, target)`;
   const { rows } = await db.query(
-    `SELECT seq, path_id, node, edge, route_agg_cost
-     FROM pgr_dijkstraVia($1, $2::bigint[], directed => $3, strict => true)
-     ORDER BY seq`,
-    [edgesSql, nodeIds, directed]
+    `SELECT start_vid, end_vid, node, edge, agg_cost
+     FROM pgr_dijkstra($1, $2, directed => $3)
+     ORDER BY start_vid, end_vid, path_seq`,
+    [edgesSql, pairsSql, directed]
   );
-  return rows;
+  const byLeg = new Map();
+  for (const row of rows) {
+    const key = `${row.start_vid}>${row.end_vid}`;
+    if (!byLeg.has(key)) byLeg.set(key, []);
+    byLeg.get(key).push(row);
+  }
+  const result = [];
+  let total = 0;
+  for (const [a, b] of legs) {
+    const legRows = byLeg.get(`${a}>${b}`);
+    if (!legRows) return []; // unreachable leg
+    for (const row of legRows) {
+      result.push({ seq: result.length + 1, node: row.node, edge: row.edge, route_agg_cost: total + row.agg_cost });
+    }
+    total += legRows[legRows.length - 1].agg_cost;
+  }
+  return result;
 }
 
 module.exports = {

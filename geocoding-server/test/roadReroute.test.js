@@ -182,3 +182,48 @@ for (const [side, latitude] of [['north (top)', NODES.N4.latitude], ['south (bot
     await db.close();
   });
 }
+
+// From a real Portland report: a weighted point on the hazard's own
+// street, whose segment the avoid circle cuts off from everything else.
+// The route through it is impossible -- the detours must still come back
+// (pgr_dijkstraVia crashed on that unreachable leg, failing every detour
+// request with a 500).
+test('getRoadReroute still returns detours when a weighted point sits on the blocked street past the hazard', async () => {
+  const db = await makeFixtureDb();
+  const onBlockedStreet = { latitude: 0, longitude: HAZARD.longitude + 300 / 111320, weight: 5 };
+  const result = await getRoadReroute(db, {
+    driverLatitude: DRIVER.latitude,
+    driverLongitude: DRIVER.longitude,
+    hazardLatitude: HAZARD.latitude,
+    hazardLongitude: HAZARD.longitude,
+    weightedPoints: [onBlockedStreet],
+  });
+  assert.equal(result.options.length, 2);
+  assert.ok(result.options.every((option) => option.distanceMeters > 2200));
+  await db.close();
+});
+
+test('getRoadReroute falls back to the plain detours if weighted-point routing fails', async () => {
+  const db = await makeFixtureDb();
+  const failing = {
+    query: (text, params) => {
+      if (/FROM streets_routing_edges e\s+WHERE ST_DWithin/.test(text)) return Promise.reject(new Error('boom'));
+      return db.query(text, params);
+    },
+  };
+  const originalError = console.error;
+  console.error = () => {};
+  try {
+    const result = await getRoadReroute(failing, {
+      driverLatitude: DRIVER.latitude,
+      driverLongitude: DRIVER.longitude,
+      hazardLatitude: HAZARD.latitude,
+      hazardLongitude: HAZARD.longitude,
+      weightedPoints: [{ latitude: NODES.N4.latitude, longitude: NODES.N5.longitude / 2, weight: 5 }],
+    });
+    assert.equal(result.options.length, 2);
+  } finally {
+    console.error = originalError;
+    await db.close();
+  }
+});

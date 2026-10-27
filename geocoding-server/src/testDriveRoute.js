@@ -91,22 +91,29 @@ async function getDriveRoute(db, { startLatitude, startLongitude, endLatitude, e
   }
 
   const paths = [{ rows: pathRows, distanceMeters: pathRows[pathRows.length - 1].agg_cost }];
-  // One route through each relevant point on its own...
-  for (const point of relevantWeightedPoints(weightedPoints, start, end)) {
-    const viaNodes = await viaNodesForPoint(db, point, start);
-    if (viaNodes.length === 0) continue;
-    const rows = await viaRouteRows(db, buildBoundedEdgesSql(start, end, [point]), [startNode, ...viaNodes, endNode], ROUTE_DIRECTED);
-    if (rows.length > 0) paths.push({ rows, distanceMeters: rows[rows.length - 1].route_agg_cost });
-  }
-  // ...and one through the best combination of them, by driving distance.
-  const groupPoints = groupCandidatePoints(weightedPoints, start, end);
-  if (groupPoints.length >= 2) {
-    const groupEdgesSql = buildBoundedEdgesSql(start, end, groupPoints);
-    const group = await bestWeightedGroup(db, groupEdgesSql, weightedPoints, start, end, startNode, endNode, ROUTE_DIRECTED);
-    if (group && group.points.length >= 2) {
-      const rows = await viaRouteRows(db, groupEdgesSql, [startNode, ...group.nodes, endNode], ROUTE_DIRECTED);
+  // Weighted-point routes are a preference on top of the plain routes
+  // above, never a reason to fail: if anything here breaks, log it and
+  // still return the simulated drive without them.
+  try {
+    // One route through each relevant point on its own...
+    for (const point of relevantWeightedPoints(weightedPoints, start, end)) {
+      const viaNodes = await viaNodesForPoint(db, point, start);
+      if (viaNodes.length === 0) continue;
+      const rows = await viaRouteRows(db, buildBoundedEdgesSql(start, end, [point]), [startNode, ...viaNodes, endNode], ROUTE_DIRECTED);
       if (rows.length > 0) paths.push({ rows, distanceMeters: rows[rows.length - 1].route_agg_cost });
     }
+    // ...and one through the best combination of them, by driving distance.
+    const groupPoints = groupCandidatePoints(weightedPoints, start, end);
+    if (groupPoints.length >= 2) {
+      const groupEdgesSql = buildBoundedEdgesSql(start, end, groupPoints);
+      const group = await bestWeightedGroup(db, groupEdgesSql, weightedPoints, start, end, startNode, endNode, ROUTE_DIRECTED);
+      if (group && group.points.length >= 2) {
+        const rows = await viaRouteRows(db, groupEdgesSql, [startNode, ...group.nodes, endNode], ROUTE_DIRECTED);
+        if (rows.length > 0) paths.push({ rows, distanceMeters: rows[rows.length - 1].route_agg_cost });
+      }
+    }
+  } catch (err) {
+    console.error('Weighted-point routes failed; using the plain routes only:', err);
   }
 
   const usedEdgeIds = [...new Set(paths.flatMap(({ rows }) => rows.filter((row) => row.edge >= 0).map((row) => row.edge)))];
