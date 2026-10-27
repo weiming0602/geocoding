@@ -296,7 +296,16 @@ read-write).
   driver/hazard/rejoin (~0.1 s, vs ~8.6 s over the whole graph). A driver
   with no routable street data within ~300m, no intersection past the
   hazard to rejoin, or a hazard with no route around it at all, throws
-  `NotFoundError`
+  `NotFoundError`. **Routes prefer the driver's weighted points**
+  (routine streets; `src/routePreference.js`): besides the plain shortest
+  options, a route is computed through each weighted point roughly on the
+  way (via both ends of the street segment it sits on, `pgr_dijkstraVia`),
+  and every candidate is ranked by length x 0.3-0.7 (heavier weight =
+  bigger discount) if it passes within 30 m of a weighted point -- so a
+  routine-road route wins unless it's ~3x longer; flagged
+  `usesWeightedPoints` and shown as "uses your usual roads". Same for the
+  sandbox's drive-route. Weighted points are sparse (~every 3 min of
+  driving), which is why this isn't a per-edge cost discount
   (404); a hazard beyond `MAX_HAZARD_DISTANCE_METERS` throws
   `OutOfRangeError` (422), same convention as `/road-signals/cross-street`.
 - **LLM-assisted geocoding** (`geocoding-server/src/llmAssist.js`, wired

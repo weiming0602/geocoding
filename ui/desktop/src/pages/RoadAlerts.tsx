@@ -26,6 +26,7 @@ import type {
   CrossStreetResponse,
   RoadAlertsRoutineDensity,
   RoadAlertsTopicResponse,
+  RerouteOption,
   RoadRerouteResponse,
   RoadSignal,
   RoadSignalSeverity,
@@ -38,7 +39,13 @@ import {
   shouldStronglyAlert,
   type WeightedPoint,
 } from '../../../shared/roadAlertsMatching';
-import { buildDrivePlan, positionAlongRoute, type DrivePlan } from '../../../shared/driveSimulation';
+import {
+  buildDrivePlan,
+  positionAlongRoute,
+  routeAheadOf,
+  routeOverlap,
+  type DrivePlan,
+} from '../../../shared/driveSimulation';
 import { buildGoogleMapsDirectionsUrl } from '../../../shared/googleMapsDirections';
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
 import AlertSketch from '../components/AlertSketch';
@@ -119,6 +126,13 @@ const MIN_RELIABLE_DISPLACEMENT_METERS = 15;
 // Never persisted anywhere -- see docs/ROAD_ALERTS_DESIGN.md's Privacy
 // model section.
 const TRAIL_MAX_SAMPLES = 4;
+// The route actually driven since Start, for the alert sketches (cards and
+// notifications) -- separate from the short matching trail above, which
+// must stay short. A point is kept every this many meters...
+const DRIVEN_PATH_STEP_METERS = 15;
+// ...and past this many points every other one is dropped (the shape
+// survives; ~30 km at 15 m spacing before the first thinning).
+const DRIVEN_PATH_MAX_POINTS = 2000;
 
 const SEVERITY_LABELS: Record<RoadSignalSeverity, string> = {
   serious: 'Serious',
@@ -366,9 +380,12 @@ export default function RoadAlerts() {
   // TRAIL_MAX_SAMPLES, oldest dropped first. Never persisted. Reset in
   // handleStart, same as lastFixRef.
   const trailRef = useRef<TimedCoordinates[]>([]);
-  // A rendering copy of trailRef for the hazard cards' sketches (see
-  // AlertSketch) -- the ref stays the source of truth for matching.
-  const [trail, setTrail] = useState<TimedCoordinates[]>([]);
+  // Every point actually passed since Start (DRIVEN_PATH_STEP_METERS
+  // apart), drawn in the alert sketches so the route driven stays in the
+  // picture. Same privacy model as the trail: in this tab only, never sent
+  // to the server, discarded on Stop.
+  const drivenPathRef = useRef<{ latitude: number; longitude: number }[]>([]);
+  const [drivenPath, setDrivenPath] = useState<{ latitude: number; longitude: number }[]>([]);
   // This account's real, already-qualified weighted points -- populated
   // by refreshRealWeightedPoints below. A ref, not state: nothing here
   // renders directly from it, it's only read inside the long-lived
@@ -532,8 +549,15 @@ export default function RoadAlerts() {
 
     // Discard the trail and any in-progress route match the moment
     // driving stops -- see docs/ROAD_ALERTS_DESIGN.md's privacy model.
+    // Except a simulated drive's driven path: it's a made-up drive, not
+    // where anyone really was, so it stays on the map and in the sketches
+    // until the next Start -- seeing the whole route taken is the point
+    // of the test.
     trailRef.current = [];
-    setTrail([]);
+    if (!wasSimulating) {
+      drivenPathRef.current = [];
+      setDrivenPath([]);
+    }
     setOnRouteIds(new Set());
 
     // A Stop-then-Start cycle should re-subscribe cleanly rather than
@@ -613,13 +637,13 @@ export default function RoadAlerts() {
               // looking at this tab -- otherwise the fresh list entry and
               // the speech about to play are already enough.
               if (document.hidden) {
-                // The notification picture: last ~minute of trail, where the
-                // driver is and which way they're heading, and the hazard
-                // (see public/alert-sketch.js). The trail stays in this
+                // The notification picture: the route driven since Start,
+                // where the driver is and which way they're heading, and the
+                // hazard (see public/alert-sketch.js). The path stays in this
                 // browser -- it's passed to this device's own service
                 // worker, never sent to the server.
                 showAlertNotification(`${SEVERITY_LABELS[signal.severity]} road alert`, signal.speech.brief, {
-                  trail: trailRef.current.map(({ latitude: lat, longitude: lon }) => ({ latitude: lat, longitude: lon })),
+                  trail: drivenPathRef.current,
                   position: { latitude, longitude },
                   headingDeg: heading,
                   hazard: { latitude: signal.latitude, longitude: signal.longitude },
@@ -680,6 +704,14 @@ export default function RoadAlerts() {
       setPosition({ latitude, longitude, heading: estimatedHeadingDeg });
       positionRef.current = { latitude, longitude };
 
+      const lastDriven = drivenPathRef.current[drivenPathRef.current.length - 1];
+      if (!lastDriven || haversineDistanceMeters(lastDriven, { latitude, longitude }) >= DRIVEN_PATH_STEP_METERS) {
+        let path = [...drivenPathRef.current, { latitude, longitude }];
+        if (path.length > DRIVEN_PATH_MAX_POINTS) path = path.filter((_, i) => i % 2 === 0 || i === path.length - 1);
+        drivenPathRef.current = path;
+        setDrivenPath(path);
+      }
+
       if (
         !hasDetectedMovementRef.current &&
         estimatedSpeedMps !== null &&
@@ -693,7 +725,6 @@ export default function RoadAlerts() {
       if (hasDetectedMovementRef.current && now - lastFetchAtRef.current >= POLL_MIN_INTERVAL_MS) {
         lastFetchAtRef.current = now;
         trailRef.current = [...trailRef.current, current].slice(-TRAIL_MAX_SAMPLES);
-        setTrail(trailRef.current);
         fetchSignals(latitude, longitude, estimatedHeadingDeg);
 
         // Only from real GPS-driven polling (never handleManualCheck's direct
@@ -734,6 +765,58 @@ export default function RoadAlerts() {
       pingWeightedPoint(latitude, longitude, false);
     },
     [fetchSignals, pingWeightedPoint]
+  );
+
+  // Feeds onPosition fake fixes along `drive`'s route instead of real GPS
+  // -- everything downstream (movement detection, polling, matching,
+  // chime, speech) is the real code path, unchanged. Fixes carry their own
+  // heading/speed, the same way a phone that reports
+  // GeolocationCoordinates.heading/speed does. Called again with a new
+  // plan when the driver picks a detour mid-drive (handleDriveRerouteOption).
+  const runSimulatedDrive = useCallback(
+    (drive: { plan: DrivePlan; speedMps: number; label: string }) => {
+      simulatedDriveRef.current = drive;
+      const { plan, speedMps, label } = drive;
+      const startedAtMs = Date.now();
+      if (simulationTimerRef.current !== null) clearInterval(simulationTimerRef.current);
+      simulatingRef.current = true;
+      setSimulationProgress({ label, distanceMeters: 0, totalMeters: plan.totalMeters, done: false });
+      setSimulatedRoute(plan.points.map((point) => [point.longitude, point.latitude]));
+      let lastDistance = 0;
+      const emitFix = () => {
+        const nowMs = Date.now();
+        const fix = positionAlongRoute(plan, ((nowMs - startedAtMs) / 1000) * speedMps);
+        // Every route corner passed since the last fix goes into the driven
+        // path too -- fast-forwarded fixes can be hundreds of meters apart,
+        // and joining them directly cut straight across blocks.
+        const passed = plan.points.filter(
+          (_, i) => plan.cumulativeMeters[i] > lastDistance && plan.cumulativeMeters[i] < fix.distanceMeters
+        );
+        lastDistance = fix.distanceMeters;
+        if (passed.length > 0) {
+          drivenPathRef.current = [...drivenPathRef.current, ...passed.map(({ latitude, longitude }) => ({ latitude, longitude }))];
+          setDrivenPath(drivenPathRef.current);
+        }
+        onPosition({
+          coords: {
+            latitude: fix.latitude,
+            longitude: fix.longitude,
+            heading: fix.headingDeg,
+            speed: fix.done ? 0 : speedMps,
+            accuracy: 5,
+            altitude: null,
+            altitudeAccuracy: null,
+          },
+          timestamp: nowMs,
+        } as unknown as GeolocationPosition);
+        setSimulationProgress({ label, distanceMeters: fix.distanceMeters, totalMeters: plan.totalMeters, done: fix.done });
+        if (fix.done) handleStop();
+      };
+      simulationTimerRef.current = setInterval(emitFix, SIMULATED_FIX_INTERVAL_MS);
+      emitFix();
+      setWatching(true);
+    },
+    [onPosition, handleStop]
   );
 
   const handleStart = useCallback(() => {
@@ -778,44 +861,16 @@ export default function RoadAlerts() {
     setHasDetectedMovement(false);
     lastFixRef.current = null;
     trailRef.current = [];
-    setTrail([]);
+    drivenPathRef.current = [];
+    setDrivenPath([]);
     setOnRouteIds(new Set());
     setAlertedSignalId(null);
 
     // Simulated drive (from the sandbox): feed onPosition fake fixes along
-    // the route instead of real GPS -- everything downstream (movement
-    // detection, polling, matching, chime, speech) is the real code path,
-    // unchanged. Fixes carry their own heading/speed, the same way a
-    // phone that reports GeolocationCoordinates.heading/speed does.
+    // the route instead of real GPS -- see runSimulatedDrive.
     const simulatedDrive = simulatedDriveRef.current;
     if (simulatedDrive) {
-      const { plan, speedMps, label } = simulatedDrive;
-      const startedAtMs = Date.now();
-      if (simulationTimerRef.current !== null) clearInterval(simulationTimerRef.current);
-      simulatingRef.current = true;
-      setSimulationProgress({ label, distanceMeters: 0, totalMeters: plan.totalMeters, done: false });
-      setSimulatedRoute(plan.points.map((point) => [point.longitude, point.latitude]));
-      const emitFix = () => {
-        const nowMs = Date.now();
-        const fix = positionAlongRoute(plan, ((nowMs - startedAtMs) / 1000) * speedMps);
-        onPosition({
-          coords: {
-            latitude: fix.latitude,
-            longitude: fix.longitude,
-            heading: fix.headingDeg,
-            speed: fix.done ? 0 : speedMps,
-            accuracy: 5,
-            altitude: null,
-            altitudeAccuracy: null,
-          },
-          timestamp: nowMs,
-        } as unknown as GeolocationPosition);
-        setSimulationProgress({ label, distanceMeters: fix.distanceMeters, totalMeters: plan.totalMeters, done: fix.done });
-        if (fix.done) handleStop();
-      };
-      simulationTimerRef.current = setInterval(emitFix, SIMULATED_FIX_INTERVAL_MS);
-      emitFix();
-      setWatching(true);
+      runSimulatedDrive(simulatedDrive);
       return;
     }
 
@@ -826,7 +881,7 @@ export default function RoadAlerts() {
     );
     watchIdRef.current = id;
     setWatching(true);
-  }, [onPosition, handleStop]);
+  }, [onPosition, handleStop, runSimulatedDrive]);
 
   // Starts watching as soon as an account is ready, rather than waiting on
   // a press -- opening this page should surface alerts on its own. Depends
@@ -1209,6 +1264,84 @@ export default function RoadAlerts() {
     }
   }, [signals, position]);
 
+  // The running simulated drive's target (its route's last point), or
+  // undefined when not simulating.
+  const simulationDestination = () => {
+    const points = simulatedDriveRef.current?.plan.points;
+    const last = points?.[points.length - 1];
+    return last ? { latitude: last.latitude, longitude: last.longitude } : undefined;
+  };
+
+  // "Drive this route" on a detour, mid simulated drive: the route is
+  // recalculated from where the car is NOW to the drive's target (see
+  // simulationDestination), then driven. The detour was computed a little
+  // while ago from where the car used to be, so driving it from its own
+  // first point sent the car back there and into a U-turn. If the car is
+  // still on the chosen route, only the part ahead of it is driven;
+  // otherwise (it has passed where the detour turns off) fresh detours are
+  // fetched from here and the one closest to the chosen route is driven.
+  // The trail so far and alerts already raised are kept; detours computed
+  // for the old route are dropped.
+  const [switchingRoute, setSwitchingRoute] = useState(false);
+  const handleDriveRerouteOption = useCallback(
+    async (signal: RoadSignal, option: RerouteOption, index: number) => {
+      const drive = simulatedDriveRef.current;
+      const current = accountRef.current;
+      if (!drive || !simulatingRef.current || !current) return;
+      const carNow = () => lastFixRef.current ?? positionRef.current;
+      const here = carNow();
+      if (!here) return;
+
+      let route = routeAheadOf(here, option.geometry.coordinates);
+      if (!route && typeof signal.latitude === 'number' && typeof signal.longitude === 'number') {
+        setSwitchingRoute(true);
+        try {
+          const fresh = await getRoadReroute({
+            driverLatitude: here.latitude,
+            driverLongitude: here.longitude,
+            driverHeading: position?.heading ?? undefined,
+            hazardLatitude: signal.latitude,
+            hazardLongitude: signal.longitude,
+            destination: simulationDestination(),
+            email: current.email,
+            serviceKey: current.serviceKey,
+          });
+          const closest = [...fresh.options].sort(
+            (a, b) =>
+              routeOverlap(b.geometry.coordinates, option.geometry.coordinates) -
+              routeOverlap(a.geometry.coordinates, option.geometry.coordinates)
+          )[0];
+          // The car kept moving while that was fetched.
+          const latest = carNow() ?? here;
+          if (closest) {
+            route =
+              routeAheadOf(latest, closest.geometry.coordinates) ?? [
+                [latest.longitude, latest.latitude],
+                ...closest.geometry.coordinates,
+              ];
+          }
+        } catch {
+          // Keep driving the current route -- nothing better to switch to.
+        } finally {
+          setSwitchingRoute(false);
+        }
+      }
+      if (!route || !simulatingRef.current) return;
+      let plan: DrivePlan;
+      try {
+        plan = buildDrivePlan(route);
+      } catch {
+        return;
+      }
+      const baseLabel = drive.label.replace(/ \(detour option \d+\)$/, '');
+      runSimulatedDrive({ plan, speedMps: drive.speedMps, label: `${baseLabel} (detour option ${index + 1})` });
+      setRerouteBySignalId({});
+      setExpandedRerouteSignalId(null);
+      setHoveredRouteIndex(null);
+    },
+    [runSimulatedDrive, position]
+  );
+
   const handleToggleReroute = useCallback(
     async (signal: RoadSignal) => {
       setHoveredRouteIndex(null);
@@ -1237,6 +1370,9 @@ export default function RoadAlerts() {
           hazardLatitude: signal.latitude,
           hazardLongitude: signal.longitude,
           hazardRoadway: signal.roadway ?? undefined,
+          // A simulated drive knows where it's going: route there, not to
+          // an estimated point past the hazard.
+          destination: simulatingRef.current ? simulationDestination() : undefined,
           email: current.email,
           serviceKey: current.serviceKey,
         });
@@ -1264,6 +1400,12 @@ export default function RoadAlerts() {
       window.speechSynthesis?.cancel();
     };
   }, []);
+
+  // The driven path as map coordinates (see drivenPath).
+  const drivenLine = useMemo<[number, number][]>(
+    () => drivenPath.map(({ latitude, longitude }) => [longitude, latitude]),
+    [drivenPath]
+  );
 
   const mapPoints = useMemo<SandboxPoint[]>(
     () =>
@@ -1574,6 +1716,7 @@ export default function RoadAlerts() {
                 focusPoint={focusPoint}
                 onPointClick={handleMarkerClick}
                 routeLine={simulatedRoute}
+                drivenLine={drivenLine}
                 followDriver={simulatedRoute !== null && followCar}
               />
             </div>
@@ -1652,7 +1795,7 @@ export default function RoadAlerts() {
               {position && typeof signal.latitude === 'number' && typeof signal.longitude === 'number' && (
                 <AlertSketch
                   input={{
-                    trail,
+                    trail: drivenPath,
                     position: { latitude: position.latitude, longitude: position.longitude },
                     headingDeg: position.heading,
                     hazard: { latitude: signal.latitude, longitude: signal.longitude },
@@ -1728,6 +1871,7 @@ export default function RoadAlerts() {
                                   longitude: signal.longitude as number,
                                 }}
                                 rejoinPoint={rerouteState.rejoinPoint}
+                                rejoinLabel={rerouteState.endsAtDestination ? 'Destination' : undefined}
                                 options={rerouteState.options}
                                 highlightedIndex={hoveredRouteIndex}
                               />
@@ -1767,7 +1911,24 @@ export default function RoadAlerts() {
                                       {option.durationSeconds !== null
                                         ? `, ~${Math.round(option.durationSeconds / 60)} min`
                                         : ''}
+                                      {option.usesWeightedPoints && (
+                                        <span className="tag tag-accent" style={{ marginLeft: 6 }}>
+                                          ★ uses your usual roads
+                                        </span>
+                                      )}
                                     </p>
+                                    <div style={{ display: 'flex', gap: 'var(--space-2)', flexShrink: 0 }}>
+                                    {simulationProgress && !simulationProgress.done && rerouteState.endsAtDestination && (
+                                      <button
+                                        type="button"
+                                        className="btn btn-primary"
+                                        style={{ padding: '2px 10px', fontSize: 13 }}
+                                        onClick={() => handleDriveRerouteOption(signal, option, index)}
+                                        disabled={switchingRoute}
+                                      >
+                                        {switchingRoute ? 'Recalculating…' : 'Drive this route'}
+                                      </button>
+                                    )}
                                     {position && (
                                       <a
                                         className="btn btn-ghost"
@@ -1783,12 +1944,14 @@ export default function RoadAlerts() {
                                         Navigate with Google Maps
                                       </a>
                                     )}
+                                    </div>
                                   </div>
                                 ))}
                               </div>
                               <p className="card-meta" style={{ marginTop: 'var(--space-2)' }}>
-                                Rejoin point is estimated ~1 mi past the hazard, not exact -- 511 data doesn't give
-                                the hazard's full extent. Routes are based on street connectivity only -- they
+                                {rerouteState.endsAtDestination
+                                  ? "Routes go to your simulated drive's target."
+                                  : "Rejoin point is estimated ~1 mi past the hazard, not exact -- 511 data doesn't give the hazard's full extent."} Routes are based on street connectivity only -- they
                                 don't account for one-way streets.
                               </p>
                             </>

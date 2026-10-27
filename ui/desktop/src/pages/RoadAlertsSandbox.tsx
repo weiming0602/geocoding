@@ -43,6 +43,7 @@ const DEFAULT_TEST_POINT_WEIGHT = '5';
 const FAST_FORWARD_OPTIONS = [1, 2, 5, 10];
 
 type DriveRoute = {
+  usesWeightedPoints: boolean;
   coordinates: [number, number][];
   distanceMeters: number;
   start: Coordinates;
@@ -188,7 +189,13 @@ export default function RoadAlertsSandbox() {
       const start = await resolvePlace(driveStart, 'start');
       const end = await resolvePlace(driveTarget, 'target');
       const route = await getTestDriveRoute({ email: account.email, serviceKey: account.serviceKey, start, end });
-      setDriveRoute({ coordinates: route.geometry.coordinates, distanceMeters: route.distanceMeters, start, end });
+      setDriveRoute({
+        coordinates: route.geometry.coordinates,
+        distanceMeters: route.distanceMeters,
+        usesWeightedPoints: route.usesWeightedPoints === true,
+        start,
+        end,
+      });
     } catch (err) {
       setDriveRoute(null);
       setError(err instanceof Error ? err.message : 'Could not build a route.');
@@ -242,12 +249,20 @@ export default function RoadAlertsSandbox() {
       color: '#e0392b',
       label: `Test hazard ${s.id}: ${s.description ?? s.roadway ?? s.severity}`,
     }));
-    const endpoints = driveRoute
-      ? [
-          { ...driveRoute.start, color: '#2e9e5b', label: 'Simulated drive start' },
-          { ...driveRoute.end, color: '#222222', label: 'Simulated drive target' },
-        ]
-      : [];
+    // Start/target dots: from the previewed route once there is one,
+    // otherwise as soon as the box holds coordinates (a map click fills it
+    // with "lat, lng") -- an address only gets a dot once Preview has looked
+    // it up. Not fitted to, so a click doesn't move the camera.
+    const typedPlace = (text: string) => {
+      const trimmed = text.trim();
+      return trimmed ? parseCoordinateInput(trimmed) : null;
+    };
+    const startDot = driveRoute?.start ?? typedPlace(driveStart);
+    const targetDot = driveRoute?.end ?? typedPlace(driveTarget);
+    const endpoints = [
+      ...(startDot ? [{ ...startDot, color: '#2e9e5b', label: 'Simulated drive start', skipFit: true }] : []),
+      ...(targetDot ? [{ ...targetDot, color: '#222222', label: 'Simulated drive target', skipFit: true }] : []),
+    ];
     // Shown the moment the map is clicked in hazard mode -- the hazard
     // itself isn't saved until "Create hazard" (it needs a severity), and
     // without this a click left no visible trace at all.
@@ -255,7 +270,7 @@ export default function RoadAlertsSandbox() {
       ? [{ ...pendingHazardClick, color: '#f4a29a', label: 'New test hazard (not saved yet)', skipFit: true }]
       : [];
     return [...real, ...test, ...signals, ...endpoints, ...pending];
-  }, [realPoints, testPoints, testSignals, driveRoute, pendingHazardClick]);
+  }, [realPoints, testPoints, testSignals, driveRoute, driveStart, driveTarget, pendingHazardClick]);
 
   if (!account) {
     return (
@@ -440,12 +455,14 @@ export default function RoadAlertsSandbox() {
             <span className="text-muted" style={{ fontSize: 13 }}>
               {(driveRoute.distanceMeters / 1000).toFixed(1)} km
               {estimatedMinutes !== null && ` -- about ${Math.max(1, Math.round(estimatedMinutes))} min at this speed`}
+              {driveRoute.usesWeightedPoints && ' -- ★ via your weighted points (usual roads)'}
             </span>
           )}
         </div>
         <p className="text-muted" style={{ margin: 'var(--space-2) 0 0', fontSize: 12 }}>
-          Shortest path over our TIGER streets (every street treated as two-way, no speed data) -- a test route,
-          not navigation. Road Alerts checks for hazards about every 15 real seconds, so at high fast-forward it
+          Shortest path over our TIGER streets (every street treated as two-way, no speed data), except that a route
+          through your weighted points -- your usual roads, real or test (purple dots) -- is preferred unless it's
+          about 3x longer. A test route, not navigation. Road Alerts checks for hazards about every 15 real seconds, so at high fast-forward it
           covers more road between checks.
         </p>
       </div>

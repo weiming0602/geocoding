@@ -218,6 +218,9 @@ export type TestRoadSignalsResponse = {
 export type TestDriveRouteResponse = {
   geometry: { type: 'LineString'; coordinates: [number, number][] };
   distanceMeters: number;
+  // Same weighted-point preference as RerouteOption.
+  usesWeightedPoints?: boolean;
+  weightedPointsPassed?: number;
 };
 
 // POST /road-alerts/register -- idempotent: an already-registered email
@@ -428,11 +431,19 @@ export type RerouteOption = {
   geometry: { type: 'LineString'; coordinates: [number, number][] };
   distanceMeters: number;
   durationSeconds: number | null;
+  // Whether this route passes the driver's weighted points (routine
+  // streets) -- such routes are ranked first unless ~3x longer (see
+  // geocoding-server/src/routePreference.js).
+  usesWeightedPoints?: boolean;
+  weightedPointsPassed?: number;
 };
 
 export type RoadRerouteResponse = {
   options: RerouteOption[];
+  // Where every option ends: the destination when one was sent (then
+  // endsAtDestination is true), otherwise an estimated point past the hazard.
   rejoinPoint: { latitude: number; longitude: number };
+  endsAtDestination?: boolean;
 };
 
 // GET /admin/transactions -- owner/manager-only view of completed

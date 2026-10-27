@@ -144,6 +144,31 @@ function allowsTestRoadSignals() {
   return process.env.ALLOW_TEST_ROAD_SIGNALS === 'true';
 }
 
+/**
+ * The weighted points (routine streets) a Road Alerts route should
+ * prefer for this account -- see routePreference.js. Real, qualified
+ * points always; developer-seeded test points too when
+ * ALLOW_TEST_WEIGHTED_POINTS is set, so the preference can be exercised
+ * from the sandbox. Best-effort: a failure here just means no preference,
+ * never a failed route.
+ */
+async function loadRouteWeightedPoints(usersDb, email) {
+  const points = [];
+  try {
+    points.push(...(await getWeightedPoints(usersDb, email)));
+  } catch (err) {
+    console.error('Failed to load weighted points for routing:', err);
+  }
+  if (allowsTestWeightedPoints()) {
+    try {
+      points.push(...(await getTestWeightedPoints(usersDb, email)));
+    } catch (err) {
+      console.error('Failed to load test weighted points for routing:', err);
+    }
+  }
+  return points.map((p) => ({ latitude: p.latitude, longitude: p.longitude, weight: p.weight }));
+}
+
 // A client with no server-reachable filesystem path (e.g. a phone) sends the
 // picked file's contents directly instead; fileContent takes priority when
 // both are present since the client only sets one or the other.
@@ -1170,8 +1195,17 @@ app.get('/road-signals/cross-street', async (req, res) => {
 // client-resends-the-hazard's-own-coordinates reasoning as
 // /road-signals/cross-street above.
 app.get('/road-signals/reroute', async (req, res) => {
-  const { driverLatitude, driverLongitude, driverHeading, hazardLatitude, hazardLongitude, email, serviceKey } =
-    req.query;
+  const {
+    driverLatitude,
+    driverLongitude,
+    driverHeading,
+    hazardLatitude,
+    hazardLongitude,
+    destinationLatitude,
+    destinationLongitude,
+    email,
+    serviceKey,
+  } = req.query;
   try {
     if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
       throw new ValidationError('email must be a valid email address');
@@ -1184,11 +1218,14 @@ app.get('/road-signals/reroute', async (req, res) => {
     await checkRoadAlertsAccess(usersDb, email, serviceKey);
 
     const result = await getRoadReroute(db, {
+      weightedPoints: await loadRouteWeightedPoints(usersDb, email),
       driverLatitude: driverLatitude !== undefined ? Number(driverLatitude) : undefined,
       driverLongitude: driverLongitude !== undefined ? Number(driverLongitude) : undefined,
       driverHeading: driverHeading !== undefined ? Number(driverHeading) : undefined,
       hazardLatitude: hazardLatitude !== undefined ? Number(hazardLatitude) : undefined,
       hazardLongitude: hazardLongitude !== undefined ? Number(hazardLongitude) : undefined,
+      destinationLatitude: destinationLatitude !== undefined ? Number(destinationLatitude) : undefined,
+      destinationLongitude: destinationLongitude !== undefined ? Number(destinationLongitude) : undefined,
     });
 
     res.json(result);
@@ -1746,6 +1783,7 @@ app.get('/road-alerts/test/drive-route', async (req, res) => {
     await checkRoadAlertsAccess(usersDb, email, serviceKey);
 
     const result = await getDriveRoute(db, {
+      weightedPoints: await loadRouteWeightedPoints(usersDb, email),
       startLatitude: startLatitude !== undefined ? Number(startLatitude) : undefined,
       startLongitude: startLongitude !== undefined ? Number(startLongitude) : undefined,
       endLatitude: endLatitude !== undefined ? Number(endLatitude) : undefined,

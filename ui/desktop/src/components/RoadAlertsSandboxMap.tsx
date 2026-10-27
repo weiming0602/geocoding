@@ -52,6 +52,11 @@ type Props = {
   // A simulated drive's route (GeoJSON [lon, lat] pairs), drawn as a line
   // and fit into view whenever it changes -- see RoadAlertsSandbox.tsx.
   routeLine?: [number, number][] | null;
+  // Where the car has actually been ([lon, lat] pairs), drawn over
+  // routeLine in a darker colour so the road already driven stays on the
+  // map when routeLine changes (a detour switch) or the drive ends. Never
+  // fit to -- it only ever grows behind the car.
+  drivenLine?: [number, number][] | null;
   // Keeps the camera centred on driverPosition as it moves -- e.g. a
   // simulated drive on RoadAlerts.tsx, where the car would otherwise
   // drive off the edge of the map. Only the centre moves, never the
@@ -60,6 +65,7 @@ type Props = {
 };
 
 const ROUTE_SOURCE_ID = 'sandbox-route';
+const DRIVEN_SOURCE_ID = 'sandbox-driven';
 
 // Plain DOM Markers (one per point), not BatchMapView's WebGL circle
 // layer -- a sandbox never has more than a handful of points at once
@@ -74,6 +80,7 @@ export default function RoadAlertsSandboxMap({
   focusPoint,
   onPointClick,
   routeLine,
+  drivenLine,
   followDriver = false,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
@@ -112,6 +119,17 @@ export default function RoadAlertsSandboxMap({
         source: ROUTE_SOURCE_ID,
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: { 'line-color': '#1b6fd6', 'line-width': 4, 'line-opacity': 0.75 },
+      });
+      map.addSource(DRIVEN_SOURCE_ID, {
+        type: 'geojson',
+        data: { type: 'FeatureCollection', features: [] },
+      });
+      map.addLayer({
+        id: DRIVEN_SOURCE_ID,
+        type: 'line',
+        source: DRIVEN_SOURCE_ID,
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': '#0b2f6b', 'line-width': 6, 'line-opacity': 0.9 },
       });
       setReady(true);
     });
@@ -230,6 +248,19 @@ export default function RoadAlertsSandboxMap({
       map.fitBounds(bounds, { padding: 60, maxZoom: 15, animate: false });
     }
   }, [routeLine, ready]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const source = map.getSource(DRIVEN_SOURCE_ID) as GeoJSONSource | undefined;
+    source?.setData({
+      type: 'FeatureCollection',
+      features:
+        drivenLine && drivenLine.length > 1
+          ? [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: drivenLine } }]
+          : [],
+    });
+  }, [drivenLine, ready]);
 
   useEffect(() => {
     const map = mapRef.current;
