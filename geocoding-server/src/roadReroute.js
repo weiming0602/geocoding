@@ -50,6 +50,8 @@ const REJOIN_CANDIDATE_COUNT = 3;
 // whatever node happens to be nearest -- however far -- would silently
 // produce a nonsensical route rather than an honest "no data here yet".
 const MAX_NODE_SNAP_DISTANCE_METERS = 300;
+// A driver within this of a street node is on it -- see startNodeAhead.
+const ON_NODE_METERS = 10;
 // How many distinct route options to offer -- the "couple of choices"
 // this feature exists to offer, same target_count ORS was asked for
 // previously.
@@ -105,6 +107,34 @@ function destinationPointFlat(lat, lon, bearingDeg, distanceMeters) {
 async function nearestTopologyNodeId(db, latitude, longitude) {
   const node = await nearestTopologyNode(db, latitude, longitude);
   return node ? node.id : null;
+}
+
+/**
+ * The street node to start a driver's route from: the nearest one ahead
+ * of them (within 90 degrees of `heading`), or the nearest overall when
+ * the heading is unknown or nothing lies ahead. Plain nearest can be
+ * behind the car -- the route then began by driving back to it, a U-turn
+ * mid-street. A node the driver is practically on counts either way.
+ */
+async function startNodeAhead(db, latitude, longitude, heading) {
+  if (typeof heading !== 'number' || Number.isNaN(heading) || heading < 0) {
+    return nearestTopologyNodeId(db, latitude, longitude);
+  }
+  const { rows } = await db.query(
+    `SELECT id, ST_Y(geom) AS latitude, ST_X(geom) AS longitude FROM streets_topology_nodes
+     WHERE ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
+     ORDER BY geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)
+     LIMIT 10`,
+    [longitude, latitude, MAX_NODE_SNAP_DISTANCE_METERS]
+  );
+  if (rows.length === 0) return null;
+  const ahead = rows.find((node) => {
+    if (flatDistanceMeters(latitude, longitude, node.latitude, node.longitude) <= ON_NODE_METERS) return true;
+    const bearing = bearingDegreesFlat(latitude, longitude, node.latitude, node.longitude);
+    const difference = Math.abs(((bearing - heading + 540) % 360) - 180);
+    return difference <= 90;
+  });
+  return (ahead ?? rows[0]).id;
 }
 
 /** Like nearestTopologyNodeId, but { id, latitude, longitude } (the node's own position) or null. */
@@ -311,7 +341,7 @@ async function getRoadReroute(
   const estimate = destinationPointFlat(hazardLatitude, hazardLongitude, bearing, REJOIN_DISTANCE_METERS);
 
   const [startNode, candidates] = await Promise.all([
-    nearestTopologyNodeId(db, driverLatitude, driverLongitude),
+    startNodeAhead(db, driverLatitude, driverLongitude, driverHeading),
     hasDestination
       ? nearestTopologyNode(db, destinationLatitude, destinationLongitude).then((node) => (node ? [node] : []))
       : rejoinCandidates(db, hazardLatitude, hazardLongitude, bearing, estimate),
@@ -412,6 +442,7 @@ module.exports = {
   getRoadReroute,
   nearestTopologyNodeId,
   nearestTopologyNode,
+  startNodeAhead,
   bearingDegreesFlat,
   destinationPointFlat,
   buildPathGeometry,

@@ -1,6 +1,6 @@
-import { describe, expect, test } from 'vitest';
+import { describe, expect, it, test } from 'vitest';
 
-import { buildDrivePlan, positionAlongRoute } from './driveSimulation';
+import { buildDrivePlan, positionAlongRoute, routeAheadOf, routeOverlap } from './driveSimulation';
 
 // ~111.32m per degree of latitude -- same approximation geo.test.ts uses.
 const METERS_PER_DEGREE_LAT = 111320;
@@ -66,5 +66,41 @@ describe('positionAlongRoute', () => {
 
   test('clamps a negative distance to the start', () => {
     expect(positionAlongRoute(plan, -10).distanceMeters).toBe(0);
+  });
+});
+
+describe('routeAheadOf', () => {
+  // A straight route due east along the equator, 0 -> 1000 m.
+  const M = 1 / 111320;
+  const route: [number, number][] = [
+    [0, 0],
+    [300 * M, 0],
+    [600 * M, 0],
+    [1000 * M, 0],
+  ];
+
+  it('drops the part of the route behind the car, starting from the car itself', () => {
+    const car = { latitude: 5 * M, longitude: 450 * M }; // on the road, 450 m along
+    const ahead = routeAheadOf(car, route)!;
+    expect(ahead[0]).toEqual([car.longitude, car.latitude]);
+    expect(ahead[1][0]).toBeCloseTo(450 * M, 10);
+    expect(ahead.slice(2)).toEqual([route[2], route[3]]);
+    // Never goes back west of the car: no U-turn.
+    expect(Math.min(...ahead.slice(1).map(([lon]) => lon))).toBeGreaterThanOrEqual(450 * M - 1e-12);
+  });
+
+  it('returns null when the car is no longer on the route', () => {
+    expect(routeAheadOf({ latitude: 200 * M, longitude: 450 * M }, route)).toBeNull();
+  });
+});
+
+describe('routeOverlap', () => {
+  const M = 1 / 111320;
+  it('is 1 for a route along another and lower for one that leaves it', () => {
+    const main: [number, number][] = [[0, 0], [1000 * M, 0]];
+    const same: [number, number][] = [[100 * M, 0], [500 * M, 0], [900 * M, 0]];
+    const leaves: [number, number][] = [[100 * M, 0], [500 * M, 300 * M], [900 * M, 300 * M]];
+    expect(routeOverlap(same, main)).toBe(1);
+    expect(routeOverlap(leaves, main)).toBeCloseTo(1 / 3);
   });
 });
