@@ -249,12 +249,20 @@ export default function RoadAlertsSandbox() {
       color: '#e0392b',
       label: `Test hazard ${s.id}: ${s.description ?? s.roadway ?? s.severity}`,
     }));
-    const endpoints = driveRoute
-      ? [
-          { ...driveRoute.start, color: '#2e9e5b', label: 'Simulated drive start' },
-          { ...driveRoute.end, color: '#222222', label: 'Simulated drive target' },
-        ]
-      : [];
+    // Start/target dots: from the previewed route once there is one,
+    // otherwise as soon as the box holds coordinates (a map click fills it
+    // with "lat, lng") -- an address only gets a dot once Preview has looked
+    // it up. Not fitted to, so a click doesn't move the camera.
+    const typedPlace = (text: string) => {
+      const trimmed = text.trim();
+      return trimmed ? parseCoordinateInput(trimmed) : null;
+    };
+    const startDot = driveRoute?.start ?? typedPlace(driveStart);
+    const targetDot = driveRoute?.end ?? typedPlace(driveTarget);
+    const endpoints = [
+      ...(startDot ? [{ ...startDot, color: '#2e9e5b', label: 'Simulated drive start', skipFit: true }] : []),
+      ...(targetDot ? [{ ...targetDot, color: '#222222', label: 'Simulated drive target', skipFit: true }] : []),
+    ];
     // Shown the moment the map is clicked in hazard mode -- the hazard
     // itself isn't saved until "Create hazard" (it needs a severity), and
     // without this a click left no visible trace at all.
@@ -262,7 +270,7 @@ export default function RoadAlertsSandbox() {
       ? [{ ...pendingHazardClick, color: '#f4a29a', label: 'New test hazard (not saved yet)', skipFit: true }]
       : [];
     return [...real, ...test, ...signals, ...endpoints, ...pending];
-  }, [realPoints, testPoints, testSignals, driveRoute, pendingHazardClick]);
+  }, [realPoints, testPoints, testSignals, driveRoute, driveStart, driveTarget, pendingHazardClick]);
 
   if (!account) {
     return (
