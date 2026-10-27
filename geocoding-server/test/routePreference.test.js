@@ -1,7 +1,14 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { rankRoutes, relevantWeightedPoints, weightFactor, distanceToPolylineMeters } = require('../src/routePreference');
+const {
+  rankRoutes,
+  relevantWeightedPoints,
+  pointsInTravelOrder,
+  weightedViaGroups,
+  weightFactor,
+  distanceToPolylineMeters,
+} = require('../src/routePreference');
 
 // Near the equator, where metersPerDegree is 111320 for both axes.
 const M = 1 / 111320; // one meter in degrees
@@ -60,18 +67,45 @@ test('relevantWeightedPoints keeps points roughly on the way, heaviest first, no
   const onTheWay = { latitude: 200 * M, longitude: 1000 * M, weight: 2 };
   const heavier = { latitude: -300 * M, longitude: 900 * M, weight: 9 };
   const farOff = { latitude: 5000 * M, longitude: 1000 * M, weight: 50 }; // via it is ~5x the direct distance
-  const atStart = { latitude: 300 * M, longitude: 0, weight: 99 }; // inside the 500 m end zone
+  const atStart = { latitude: 20 * M, longitude: 0, weight: 99 }; // at the start itself (within 50 m)
   assert.deepEqual(relevantWeightedPoints([onTheWay, farOff, atStart, heavier], start, end), [heavier, onTheWay]);
 });
 
-// The reported case: a heavy weighted point ~335 m from the destination
-// (on the driver's own home street) is passed by nearly every route, so it
-// must not outrank a lighter point the route actually goes out of its way
-// along -- there, an interstate the driver uses.
-test('rankRoutes ignores weighted points right by the start or destination', () => {
-  const nearDestination = { latitude: 250 * M, longitude: 1800 * M, weight: 11 }; // ~320 m from END
-  const viaDirect = route(2000, [[0, 0], [1800 * M, 0], [1800 * M, 250 * M], [1800 * M, 0], [2000 * M, 0]]);
-  const [first] = rankRoutes([viaDirect, NORTH], [nearDestination, POINT_ON_NORTH], 3, START, END);
+// Reported in the sandbox: a weighted point ~350 m before the target must
+// still pull the route along that street (an earlier 500 m "near the end"
+// exclusion dropped it). Only points essentially AT an end are ignored.
+test('rankRoutes counts a weighted point a few hundred meters from the destination', () => {
+  const nearDestination = { latitude: 200 * M, longitude: 1650 * M, weight: 5 }; // ~400 m from END, on NORTH
+  const [first] = rankRoutes([DIRECT, NORTH], [nearDestination], 3, START, END);
   assert.equal(first.distanceMeters, 2400);
-  assert.equal(first.weightedPointsPassed, 1);
+  assert.equal(first.usesWeightedPoints, true);
+});
+
+test('rankRoutes puts the route meeting the most weighted points first, even past a heavier single point', () => {
+  const southDetour = route(2400, [[0, 0], [0, -200 * M], [2000 * M, -200 * M], [2000 * M, 0]]);
+  const heavySouth = { latitude: -200 * M, longitude: 1000 * M, weight: 20 };
+  const north1 = { latitude: 200 * M, longitude: 600 * M, weight: 2 };
+  const north2 = { latitude: 200 * M, longitude: 1400 * M, weight: 2 };
+  const [first] = rankRoutes([DIRECT, southDetour, NORTH], [heavySouth, north1, north2], 3, START, END);
+  assert.equal(first.weightedPointsPassed, 2);
+  assert.ok(first.geometry.coordinates.some(([, lat]) => lat > 0));
+});
+
+test('rankRoutes never lets a route over 3x the shortest win, however many points it passes', () => {
+  const longWay = route(6500, NORTH.geometry.coordinates);
+  const [first] = rankRoutes([DIRECT, longWay], [POINT_ON_NORTH], 3, START, END);
+  assert.equal(first.distanceMeters, 2000);
+});
+
+test('pointsInTravelOrder orders points by how far along the trip they are; weightedViaGroups adds the all-points route', () => {
+  const start = { latitude: 0, longitude: 0 };
+  const end = { latitude: 0, longitude: 3000 * M };
+  const late = { latitude: 100 * M, longitude: 2500 * M, weight: 9 };
+  const early = { latitude: -100 * M, longitude: 500 * M, weight: 1 };
+  const middle = { latitude: 100 * M, longitude: 1500 * M, weight: 4 };
+  assert.deepEqual(pointsInTravelOrder([late, early, middle], start, end), [early, middle, late]);
+  const groups = weightedViaGroups([late, early, middle], start, end);
+  assert.equal(groups.length, 4); // 3 singles (heaviest first) + all three together
+  assert.deepEqual(groups.at(-1), [early, middle, late]);
+  assert.deepEqual(weightedViaGroups([late], start, end), [[late]]);
 });

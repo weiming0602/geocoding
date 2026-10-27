@@ -9,11 +9,14 @@ const { metersPerDegree } = require('./interpolate');
 // driving, so they sit ~1-4 km apart along a routine, not on every street
 // -- which rules out simply discounting the streets right next to each
 // point (that saves a few dozen meters, never enough to change a route).
-// Instead: alongside the ordinary shortest routes, a route is computed
-// THROUGH each relevant weighted point, and every candidate is scored by
-// its length times a discount if it passes a weighted point. A route on
-// the driver's usual roads therefore wins unless it's roughly 1 /
-// MIN_FACTOR (~3x) longer.
+// Instead, alongside the ordinary shortest routes, routes are computed
+// THROUGH weighted points -- one per relevant point, plus one through all
+// of them in the order a driver heading from start to end would reach
+// them -- and candidates are ranked by how many weighted points they pass
+// (meeting as many of the driver's usual roads as possible comes first),
+// then by length x a weight-based discount, then by length. A route more
+// than MAX_LENGTH_RATIO x the shortest candidate never outranks a shorter
+// one, however many points it passes.
 
 // A route counts as passing a weighted point if it comes within this of it.
 const PASS_RADIUS_METERS = 30;
@@ -25,13 +28,19 @@ const MAX_FACTOR = 0.7;
 // most this many times the direct distance -- roughly "on the way",
 // matching the 1 / MIN_FACTOR break-even above.
 const MAX_VIA_DETOUR_RATIO = 3;
-// Ignore a weighted point this close to the start or end -- for routing
-// through AND for scoring. Nearly every route passes a point right by the
-// destination (a driver's home street, say), so it says nothing about
-// which way they came; counting it let a heavy point ~300 m from the
-// target outrank an interstate the driver actually uses. Measured from
-// the trip's own start/end points.
-const MIN_ENDPOINT_DISTANCE_METERS = 500;
+// Ignore a weighted point this close to the start or end -- it IS where
+// the trip starts/ends, not a road to prefer on the way. Deliberately
+// small: a point a few hundred meters from the target is still a street
+// the driver would rather approach along (an earlier 500 m version wrongly
+// dropped those).
+const MIN_ENDPOINT_DISTANCE_METERS = 50;
+// A route longer than this many times the shortest candidate never
+// outranks a shorter one, however many weighted points it passes --
+// matching the 1 / MIN_FACTOR discount break-even.
+const MAX_LENGTH_RATIO = 3;
+// At most this many points (nearest the start first) in the one route
+// through all of them.
+const MAX_POINTS_IN_ONE_ROUTE = 8;
 // How many weighted points (heaviest first) to try routing through.
 const MAX_VIA_CANDIDATES = 3;
 
@@ -94,13 +103,44 @@ function relevantWeightedPoints(points, start, end) {
 }
 
 /**
+ * Relevant points (see relevantWeightedPoints, but up to
+ * MAX_POINTS_IN_ONE_ROUTE) in the order a driver going start -> end would
+ * reach them: by how far along the start -> end line each one projects.
+ */
+function pointsInTravelOrder(points, start, end) {
+  const [mPerDegLon, mPerDegLat] = metersPerDegree((start.latitude + end.latitude) / 2);
+  const ex = (end.longitude - start.longitude) * mPerDegLon;
+  const ey = (end.latitude - start.latitude) * mPerDegLat;
+  const along = (p) => (p.longitude - start.longitude) * mPerDegLon * ex + (p.latitude - start.latitude) * mPerDegLat * ey;
+  const direct = flatDistanceMeters(start, end);
+  return pointsAwayFromEnds(points, start, end)
+    .filter((p) => flatDistanceMeters(start, p) + flatDistanceMeters(p, end) <= MAX_VIA_DETOUR_RATIO * direct)
+    .sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0))
+    .slice(0, MAX_POINTS_IN_ONE_ROUTE)
+    .sort((a, b) => along(a) - along(b));
+}
+
+/**
+ * Which weighted points to route through, as candidate groups: each
+ * relevant point on its own, plus (when there are 2+) all of them in
+ * travel order -- the "meet as many usual roads as possible" route.
+ */
+function weightedViaGroups(points, start, end) {
+  const singles = relevantWeightedPoints(points, start, end).map((p) => [p]);
+  const ordered = pointsInTravelOrder(points, start, end);
+  return ordered.length >= 2 ? [...singles, ordered] : singles;
+}
+
+/**
  * Orders candidate routes ({ geometry, distanceMeters, ... }) from
  * `start` to `end` by preference and returns the best `limit`, each with
  * `usesWeightedPoints` (passes at least one of `points` along the way)
- * and `weightedPointsPassed` (how many). Score = distance x the best
- * discount among the points passed (1 if none); ties go to the shorter
- * route. Points near either end don't count (MIN_ENDPOINT_DISTANCE_METERS).
- * Routes with identical geometry are kept once.
+ * and `weightedPointsPassed` (how many). Among routes no longer than
+ * MAX_LENGTH_RATIO x the shortest: most weighted points passed first, then
+ * distance x the best discount among them, then distance; longer routes
+ * follow, shortest first. Points at either end don't count
+ * (MIN_ENDPOINT_DISTANCE_METERS). Routes with identical geometry are kept
+ * once.
  */
 function rankRoutes(routes, allPoints, limit, start, end) {
   const points = pointsAwayFromEnds(allPoints, start, end);
@@ -118,7 +158,14 @@ function rankRoutes(routes, allPoints, limit, start, end) {
       score: route.distanceMeters * factor,
     });
   }
-  scored.sort((a, b) => a.score - b.score || a.route.distanceMeters - b.route.distanceMeters);
+  const shortest = Math.min(...scored.map((entry) => entry.route.distanceMeters));
+  const withinRatio = (entry) => entry.route.distanceMeters <= MAX_LENGTH_RATIO * shortest;
+  scored.sort(
+    (a, b) =>
+      Number(withinRatio(b)) - Number(withinRatio(a)) ||
+      (withinRatio(a) ? b.route.weightedPointsPassed - a.route.weightedPointsPassed || a.score - b.score : 0) ||
+      a.route.distanceMeters - b.route.distanceMeters
+  );
   return scored.slice(0, limit).map((entry) => entry.route);
 }
 
@@ -175,6 +222,8 @@ async function viaRouteRows(db, edgesSql, nodeIds, directed) {
 module.exports = {
   rankRoutes,
   relevantWeightedPoints,
+  pointsInTravelOrder,
+  weightedViaGroups,
   weightFactor,
   distanceToPolylineMeters,
   viaRouteRows,
@@ -184,4 +233,5 @@ module.exports = {
   MAX_FACTOR,
   MAX_VIA_DETOUR_RATIO,
   MIN_ENDPOINT_DISTANCE_METERS,
+  MAX_LENGTH_RATIO,
 };
