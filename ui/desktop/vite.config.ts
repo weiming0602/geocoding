@@ -1,9 +1,25 @@
 /// <reference types="vitest/config" />
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv, type Plugin } from 'vite';
 import react from '@vitejs/plugin-react';
 
-export default defineConfig({
-  plugins: [react()],
+// The Road Alerts site (alerts.meridiangeocoding.com -- see
+// src/siteConfig.ts) is the same app built with VITE_APP=road-alerts; its
+// page title and Add-to-Home-Screen identity are static HTML, so they're
+// swapped here rather than at runtime.
+function roadAlertsSiteHtml(): Plugin {
+  return {
+    name: 'road-alerts-site-html',
+    transformIndexHtml(html) {
+      return html
+        .replace(/<title>[^<]*<\/title>/, '<title>Meridian Road Alerts — live traffic hazards ahead of you</title>')
+        .replace('href="/manifest.webmanifest"', 'href="/road-alerts.webmanifest"')
+        .replace('name="apple-mobile-web-app-title" content="Meridian"', 'name="apple-mobile-web-app-title" content="Road Alerts"');
+    },
+  };
+}
+
+export default defineConfig(({ mode }) => ({
+  plugins: [react(), ...(loadEnv(mode, process.cwd(), 'VITE_').VITE_APP === 'road-alerts' ? [roadAlertsSiteHtml()] : [])],
   server: {
     // ui/shared lives outside this app's root; Vite's dev server denies
     // filesystem access outside root by default.
@@ -27,4 +43,4 @@ export default defineConfig({
     environment: 'jsdom',
     setupFiles: ['./src/setupTests.ts'],
   },
-});
+}));

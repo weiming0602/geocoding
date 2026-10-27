@@ -99,6 +99,20 @@ read-write).
   runner, and neither `cd ui/desktop && npm run build` nor
   `geocoding-server`'s own test command touch it either.
 - Desktop app build: `cd ui/desktop && npm run build` (`tsc -b && vite build`)
+- **Two sites from `ui/desktop`** (`src/siteConfig.ts`): the geocoding site
+  (meridiangeocoding.com, the default build) and the Road Alerts site
+  (alerts.meridiangeocoding.com): `npm run dev:alerts` (port 5174) /
+  `npm run build:alerts`, i.e. Vite mode `road-alerts`, which loads the
+  committed `.env.road-alerts` (`VITE_APP=road-alerts`). The Road Alerts
+  build makes Road Alerts the home page, has its own nav/title/
+  `road-alerts.webmanifest`, and sends any geocoding page to
+  `VITE_GEOCODING_URL` (default `https://www.meridiangeocoding.com`). The
+  geocoding build keeps serving Road Alerts itself until
+  `VITE_ROAD_ALERTS_URL` is set on it -- then its Road Alerts nav item and
+  every `#/road-alerts...` route redirect to that site (same path). Both
+  use the same API. A browser's saved Road Alerts sign-in (localStorage)
+  doesn't carry over between the two origins -- re-registering with the
+  same email returns the same service key.
 
 # Code style
 - **There is no fixed odd/even side.** TIGER's left/right follow the

@@ -1,5 +1,7 @@
-import { HashRouter as Router, Route, Routes } from 'react-router';
+import type { ReactElement } from 'react';
+import { HashRouter as Router, Route, Routes, useLocation } from 'react-router';
 
+import ExternalRedirect from './components/ExternalRedirect';
 import Layout from './components/Layout';
 import ApiDocs from './pages/ApiDocs';
 import Batch from './pages/Batch';
@@ -25,6 +27,44 @@ import TermsOfUse from './pages/TermsOfUse';
 import ServiceWorkerNavigation from './components/ServiceWorkerNavigation';
 import { ImportAddressesStateProvider } from './state/ImportAddressesState';
 import { RecentLookupsProvider } from './state/RecentLookups';
+import { GEOCODING_SITE_URL, ROAD_ALERTS_MOVED, ROAD_ALERTS_SITE_URL, SITE, siteUrl } from './siteConfig';
+
+const ROAD_ALERTS_PAGES: [string, ReactElement][] = [
+  ['/road-alerts', <RoadAlerts />],
+  ['/road-alerts-sandbox', <RoadAlertsSandbox />],
+  ['/road-alert-test', <RoadAlertsTest />],
+  ['/road-alerts-alarm-test', <RoadAlertsAlarmTest />],
+  ['/road-alerts-home-board', <RoadAlertsHomeBoard />],
+];
+
+// Pages both sites keep: what Road Alerts' own help/legal links point to.
+const SHARED_PAGES: [string, ReactElement][] = [
+  ['/help', <Help />],
+  ['/privacy', <PrivacyPolicy />],
+  ['/terms', <TermsOfUse />],
+];
+
+/** The current hash path on the other site -- for old links to a page that now lives there. */
+function MovedTo({ base, label }: { base: string; label: string }) {
+  const location = useLocation();
+  return <ExternalRedirect to={siteUrl(base, location.pathname + location.search)} label={label} />;
+}
+
+/** alerts.meridiangeocoding.com: Road Alerts is home; anything else belongs to the geocoding site. */
+function RoadAlertsSiteRoutes() {
+  return (
+    <Routes>
+      <Route path="/" element={<RoadAlerts />} />
+      {ROAD_ALERTS_PAGES.map(([path, page]) => (
+        <Route key={path} path={path} element={page} />
+      ))}
+      {SHARED_PAGES.map(([path, page]) => (
+        <Route key={path} path={path} element={page} />
+      ))}
+      <Route path="*" element={<MovedTo base={GEOCODING_SITE_URL} label="This page" />} />
+    </Routes>
+  );
+}
 
 export default function App() {
   return (
@@ -33,32 +73,35 @@ export default function App() {
       <RecentLookupsProvider>
         <ImportAddressesStateProvider>
           <Layout>
-            <Routes>
-              <Route path="/" element={<Overview />} />
-              <Route path="/owner" element={<OwnerDashboard />} />
-              <Route path="/geocode" element={<Geocode />} />
-              <Route path="/reverse-geocode" element={<ReverseGeocode />} />
-              <Route path="/find-places" element={<FindPlaces />} />
-              <Route path="/road-alerts" element={<RoadAlerts />} />
-              {/* Hidden, same as /owner -- not in Layout's nav, reachable
-                  by direct URL only. A test-only console; see the page's
-                  own explainer for why. */}
-              <Route path="/road-alerts-sandbox" element={<RoadAlertsSandbox />} />
-              <Route path="/road-alert-test" element={<RoadAlertsTest />} />
-              <Route path="/road-alerts-alarm-test" element={<RoadAlertsAlarmTest />} />
-              <Route path="/road-alerts-home-board" element={<RoadAlertsHomeBoard />} />
-              <Route path="/import-addresses" element={<ImportAddresses />} />
-              <Route path="/batch" element={<Batch />} />
-              <Route path="/plan-quota" element={<PlanQuota />} />
-              <Route path="/pricing" element={<Pricing />} />
-              <Route path="/checkout" element={<Checkout />} />
-              <Route path="/progress" element={<Progress />} />
-              <Route path="/api-docs" element={<ApiDocs />} />
-              <Route path="/help" element={<Help />} />
-              <Route path="/privacy" element={<PrivacyPolicy />} />
-              <Route path="/terms" element={<TermsOfUse />} />
-              <Route path="/sitemap" element={<SiteMap />} />
-            </Routes>
+            {SITE === 'road-alerts' ? (
+              <RoadAlertsSiteRoutes />
+            ) : (
+              <Routes>
+                <Route path="/" element={<Overview />} />
+                <Route path="/owner" element={<OwnerDashboard />} />
+                <Route path="/geocode" element={<Geocode />} />
+                <Route path="/reverse-geocode" element={<ReverseGeocode />} />
+                <Route path="/find-places" element={<FindPlaces />} />
+                {ROAD_ALERTS_PAGES.map(([path, page]) => (
+                  <Route
+                    key={path}
+                    path={path}
+                    element={ROAD_ALERTS_MOVED ? <MovedTo base={ROAD_ALERTS_SITE_URL} label="Road Alerts" /> : page}
+                  />
+                ))}
+                <Route path="/import-addresses" element={<ImportAddresses />} />
+                <Route path="/batch" element={<Batch />} />
+                <Route path="/plan-quota" element={<PlanQuota />} />
+                <Route path="/pricing" element={<Pricing />} />
+                <Route path="/checkout" element={<Checkout />} />
+                <Route path="/progress" element={<Progress />} />
+                <Route path="/api-docs" element={<ApiDocs />} />
+                <Route path="/help" element={<Help />} />
+                <Route path="/privacy" element={<PrivacyPolicy />} />
+                <Route path="/terms" element={<TermsOfUse />} />
+                <Route path="/sitemap" element={<SiteMap />} />
+              </Routes>
+            )}
           </Layout>
         </ImportAddressesStateProvider>
       </RecentLookupsProvider>
