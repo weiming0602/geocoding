@@ -111,6 +111,30 @@ trace stored" language above:
   from a server that knows roughly where the driver currently is, is the
   only way to reach a closed app on that platform at all.
 
+**Addendum, 2026-10-18:** two real gaps in the above, both fixed:
+
+- The original "no destination ever becomes a stored point" guarantee
+  (`isEndpoint`, above) only excluded the single literal first/last GPS
+  fix of a drive. In practice that under-protected: the street right
+  outside someone's home or workplace is driven on nearly every trip, so
+  a ping taken a few minutes after Start -- while still near where the
+  drive began -- routinely qualified as "routine" within days, recording
+  exactly the kind of identifying location this section says is excluded.
+  Replaced with a radius-based buffer (`ui/shared/weightedPointBuffer.ts`,
+  `WEIGHTED_POINT_EXCLUSION_RADIUS_METERS`, 400m): a ping within that
+  radius of the session's start is never sent at all, and every other
+  ping is held in memory (never persisted, same as the 2026-09-12 trail)
+  until a later fix confirms the driver moved on from it; whatever's
+  still held at Stop gets one final check against the actual stop
+  position before being dropped.
+- Retention of a stored point that stopped being pinged entirely
+  (`deleteStalePoints`) defaulted to 180 days, run weekly -- meaning a
+  point could realistically sit in `geocoding_users` for over six months
+  after someone stopped driving that route. Tightened to a 21-day
+  retention window, run daily (`ops/geocoding-weighted-points-cleanup.timer`,
+  `ops/crontab.example`) so a stale point's worst-case lifetime stays
+  close to the retention window itself.
+
 ### User-facing setting: how much routine is remembered
 
 Exposed as a single choice, not a raw "weight threshold" (users don't

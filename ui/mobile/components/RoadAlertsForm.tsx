@@ -27,6 +27,7 @@ import type {
 } from '../../shared/api/types';
 import { bearingDegrees, haversineDistanceMeters, isAhead } from '../../shared/geo';
 import type { TimedCoordinates } from '../../shared/geo';
+import { WeightedPointPingBuffer } from '../../shared/weightedPointBuffer';
 import { buildGoogleMapsDirectionsUrl } from '../../shared/googleMapsDirections';
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../shared/hazardCategories';
 import { approachedWeightedPoints, findAlertsForWeightedPoints, type WeightedPoint } from '../../shared/roadAlertsMatching';
@@ -239,10 +240,13 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
   // (much tighter) hazard-check throttle -- see
   // WEIGHTED_POINT_PING_INTERVAL_MS.
   const lastWeightedPingAtRef = useRef(0);
-  // True only for the very first position fix after a Start press --
-  // that fix is this trip's origin, reported with isEndpoint so it's
-  // never recorded as a weighted point. Reset in handleStart.
-  const isFirstPositionOfSessionRef = useRef(true);
+  // Buffers weighted-point pings so none within
+  // WEIGHTED_POINT_EXCLUSION_RADIUS_METERS of either this drive's start or
+  // its eventual stop is ever sent -- see weightedPointBuffer.ts's own
+  // header comment for why the single-fix exclusion this replaced
+  // under-protected. Replaced in handleStart for a clean reset each
+  // drive. Mirrors ui/desktop's RoadAlerts.tsx exactly.
+  const weightedPointBufferRef = useRef(new WeightedPointPingBuffer());
   // Latest known fix, read from handleStop to report the trip's actual
   // endpoint -- a ref (not just the `position` state) so handleStop
   // doesn't need `position` in its own dependency array, which would
@@ -257,7 +261,7 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
   const weightedPointsRef = useRef<WeightedPoint[]>(weightedPoints);
   // Short in-memory trail for approachedWeightedPoints -- capped at
   // TRAIL_MAX_SAMPLES, oldest dropped first. Never persisted. Reset in
-  // handleStart, same as isFirstPositionOfSessionRef.
+  // handleStart, same as weightedPointBufferRef.
   const trailRef = useRef<TimedCoordinates[]>([]);
   useEffect(() => {
     voiceEnabledRef.current = voiceEnabled;
@@ -442,12 +446,15 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
     trailRef.current = [];
     setOnRouteIds(new Set());
 
-    // The last known fix is this trip's destination -- reported with
-    // isEndpoint so it's never recorded as a weighted point, same
-    // reasoning as the origin ping in onPosition below.
+    // Final flush: anything still buffered gets one last check against
+    // this trip's actual stop position -- still within the exclusion
+    // radius of it is dropped (it was this trip's destination), anything
+    // farther away (queued earlier, never confirmed before Stop) is sent
+    // now. See weightedPointBuffer.ts.
     const lastPosition = positionRef.current;
-    if (lastPosition) {
-      pingWeightedPoint(lastPosition.latitude, lastPosition.longitude, true);
+    const toSend = weightedPointBufferRef.current.flushAtStop(lastPosition ?? undefined);
+    for (const point of toSend) {
+      pingWeightedPoint(point.latitude, point.longitude, false);
     }
   }, [pingWeightedPoint]);
 
@@ -522,19 +529,18 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
         fetchSignals(latitude, longitude, heading);
       }
 
-      // The first fix after Start is this trip's origin -- reported with
-      // isEndpoint so it's never recorded as a weighted point (see
-      // pingWeightedPoint), and doesn't count against the throttle below
-      // since it's not a routine-route sample at all.
-      if (isFirstPositionOfSessionRef.current) {
-        isFirstPositionOfSessionRef.current = false;
-        pingWeightedPoint(latitude, longitude, true);
-        return;
-      }
-
+      // Sampled on the same WEIGHTED_POINT_PING_INTERVAL_MS cadence as
+      // before -- the very first sample of a drive establishes the
+      // buffer's start position (and is never sendable); every later one
+      // is queued and only actually sent once the buffer confirms it's
+      // far enough from both where the drive started and (at Stop) where
+      // it ended. See weightedPointBuffer.ts.
       if (now - lastWeightedPingAtRef.current < WEIGHTED_POINT_PING_INTERVAL_MS) return;
       lastWeightedPingAtRef.current = now;
-      pingWeightedPoint(latitude, longitude, false);
+      const toSend = weightedPointBufferRef.current.addPing({ latitude, longitude });
+      for (const point of toSend) {
+        pingWeightedPoint(point.latitude, point.longitude, false);
+      }
     },
     [fetchSignals, pingWeightedPoint]
   );
@@ -546,7 +552,7 @@ export default function RoadAlertsForm({ weightedPoints = [], onNotificationsVie
       if (status !== 'granted') {
         throw new Error('Location permission was not granted.');
       }
-      isFirstPositionOfSessionRef.current = true;
+      weightedPointBufferRef.current = new WeightedPointPingBuffer();
       trailRef.current = [];
       setOnRouteIds(new Set());
       const subscription = await Location.watchPositionAsync(

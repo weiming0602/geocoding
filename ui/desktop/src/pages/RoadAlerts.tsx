@@ -47,6 +47,7 @@ import {
   type DrivePlan,
 } from '../../../shared/driveSimulation';
 import { buildGoogleMapsDirectionsUrl } from '../../../shared/googleMapsDirections';
+import { WeightedPointPingBuffer } from '../../../shared/weightedPointBuffer';
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
 import AlertSketch from '../components/AlertSketch';
 import PageHeader from '../components/PageHeader';
@@ -344,11 +345,13 @@ export default function RoadAlerts() {
   // Throttles weighted-point pings independently of lastFetchAtRef's
   // (much tighter) hazard-check throttle -- see WEIGHTED_POINT_PING_INTERVAL_MS.
   const lastWeightedPingAtRef = useRef(0);
-  // True only for the very first position fix after a Start press -- that
-  // fix is this trip's origin, reported with isEndpoint so it's never
-  // recorded as a weighted point. Reset in handleStart. Mirrors
-  // ui/mobile's RoadAlertsForm.tsx exactly.
-  const isFirstPositionOfSessionRef = useRef(true);
+  // Buffers weighted-point pings so none within
+  // WEIGHTED_POINT_EXCLUSION_RADIUS_METERS of either this drive's start or
+  // its eventual stop is ever sent -- see weightedPointBuffer.ts's own
+  // header comment for why the single-fix exclusion this replaced
+  // under-protected. Replaced in handleStart for a clean reset each
+  // drive. Mirrors ui/mobile's RoadAlertsForm.tsx exactly.
+  const weightedPointBufferRef = useRef(new WeightedPointPingBuffer());
   // Latest known fix, read from handleStop to report the trip's actual
   // endpoint -- a ref (not just the `position` state) so handleStop
   // doesn't need `position` in its own dependency array.
@@ -573,12 +576,17 @@ export default function RoadAlerts() {
       });
     }
 
-    // The last known fix is this trip's destination -- reported with
-    // isEndpoint so it's never recorded as a weighted point, same
-    // reasoning as the origin ping in onPosition below.
+    // Final flush: anything still buffered gets one last check against
+    // this trip's actual stop position -- still within the exclusion
+    // radius of it is dropped (it was this trip's destination), anything
+    // farther away (queued earlier, never confirmed before Stop) is sent
+    // now. See weightedPointBuffer.ts.
     const lastPosition = positionRef.current;
-    if (lastPosition && !wasSimulating) {
-      pingWeightedPoint(lastPosition.latitude, lastPosition.longitude, true);
+    // A simulated drive's fixes are made up -- they never become weighted
+    // points (see simulatingRef), so there's nothing to flush.
+    const toSend = wasSimulating ? [] : weightedPointBufferRef.current.flushAtStop(lastPosition ?? undefined);
+    for (const point of toSend) {
+      pingWeightedPoint(point.latitude, point.longitude, false);
     }
   }, [pingWeightedPoint]);
 
@@ -746,23 +754,22 @@ export default function RoadAlerts() {
         }
       }
 
+      // Sampled on the same WEIGHTED_POINT_PING_INTERVAL_MS cadence as
+      // before -- the very first sample of a drive establishes the
+      // buffer's start position (and is never sendable); every later one
+      // is queued and only actually sent once the buffer confirms it's
+      // far enough from both where the drive started and (at Stop) where
+      // it ended. See weightedPointBuffer.ts.
       // A simulated drive never feeds the real routine-route model -- see
       // simulatingRef's own comment.
       if (simulatingRef.current) return;
 
-      // The first fix after Start is this trip's origin -- reported with
-      // isEndpoint so it's never recorded as a weighted point (see
-      // pingWeightedPoint), and doesn't count against the throttle below
-      // since it's not a routine-route sample at all.
-      if (isFirstPositionOfSessionRef.current) {
-        isFirstPositionOfSessionRef.current = false;
-        pingWeightedPoint(latitude, longitude, true);
-        return;
-      }
-
       if (now - lastWeightedPingAtRef.current < WEIGHTED_POINT_PING_INTERVAL_MS) return;
       lastWeightedPingAtRef.current = now;
-      pingWeightedPoint(latitude, longitude, false);
+      const toSend = weightedPointBufferRef.current.addPing({ latitude, longitude });
+      for (const point of toSend) {
+        pingWeightedPoint(point.latitude, point.longitude, false);
+      }
     },
     [fetchSignals, pingWeightedPoint]
   );
@@ -856,7 +863,7 @@ export default function RoadAlerts() {
       }
     }
 
-    isFirstPositionOfSessionRef.current = true;
+    weightedPointBufferRef.current = new WeightedPointPingBuffer();
     hasDetectedMovementRef.current = false;
     setHasDetectedMovement(false);
     lastFixRef.current = null;
