@@ -102,22 +102,48 @@ function relevantWeightedPoints(points, start, end) {
     .slice(0, MAX_VIA_CANDIDATES);
 }
 
+/** Straight-line length of start -> ...points -> end. */
+function tourLength(start, points, end) {
+  let total = 0;
+  let previous = start;
+  for (const p of [...points, end]) {
+    total += flatDistanceMeters(previous, p);
+    previous = p;
+  }
+  return total;
+}
+
+/** Every ordering of `items` (fine for MAX_POINTS_IN_ONE_ROUTE = 8: 40,320). */
+function permutations(items) {
+  if (items.length <= 1) return [items];
+  return items.flatMap((item, i) => permutations([...items.slice(0, i), ...items.slice(i + 1)]).map((rest) => [item, ...rest]));
+}
+
 /**
  * Relevant points (see relevantWeightedPoints, but up to
- * MAX_POINTS_IN_ONE_ROUTE) in the order a driver going start -> end would
- * reach them: by how far along the start -> end line each one projects.
+ * MAX_POINTS_IN_ONE_ROUTE, heaviest kept) in the order that makes the
+ * shortest straight-line path start -> points -> end. Ordering by how far
+ * along the start -> end line each point projects looked simpler but
+ * zig-zags: two points near the destination, one off to the side, made a
+ * real Brunswick -> Freeport route go past Freeport and back (43 km for
+ * a 21 km trip).
  */
 function pointsInTravelOrder(points, start, end) {
-  const [mPerDegLon, mPerDegLat] = metersPerDegree((start.latitude + end.latitude) / 2);
-  const ex = (end.longitude - start.longitude) * mPerDegLon;
-  const ey = (end.latitude - start.latitude) * mPerDegLat;
-  const along = (p) => (p.longitude - start.longitude) * mPerDegLon * ex + (p.latitude - start.latitude) * mPerDegLat * ey;
   const direct = flatDistanceMeters(start, end);
-  return pointsAwayFromEnds(points, start, end)
+  const chosen = pointsAwayFromEnds(points, start, end)
     .filter((p) => flatDistanceMeters(start, p) + flatDistanceMeters(p, end) <= MAX_VIA_DETOUR_RATIO * direct)
     .sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0))
-    .slice(0, MAX_POINTS_IN_ONE_ROUTE)
-    .sort((a, b) => along(a) - along(b));
+    .slice(0, MAX_POINTS_IN_ONE_ROUTE);
+  let best = chosen;
+  let bestLength = tourLength(start, chosen, end);
+  for (const order of permutations(chosen)) {
+    const length = tourLength(start, order, end);
+    if (length < bestLength) {
+      best = order;
+      bestLength = length;
+    }
+  }
+  return best;
 }
 
 /**
