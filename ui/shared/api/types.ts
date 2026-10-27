@@ -441,7 +441,10 @@ export type RerouteOption = {
 
 export type RoadRerouteResponse = {
   options: RerouteOption[];
+  // Where every option ends: the destination when one was sent (then
+  // endsAtDestination is true), otherwise an estimated point past the hazard.
   rejoinPoint: { latitude: number; longitude: number };
+  endsAtDestination?: boolean;
 };
 
 // GET /admin/transactions -- owner/manager-only view of completed
