@@ -150,3 +150,29 @@ test('groupCandidatePoints keeps relevant points, heaviest first, at most 6', ()
   assert.equal(chosen.length, 6);
   assert.deepEqual(chosen.map((p) => p.weight), [7, 6, 5, 4, 3, 2]);
 });
+
+test('viaRouteRows joins legs into one route, and returns [] when a leg is unreachable', async () => {
+  const { createTestDatabase } = require('./helpers');
+  const { seedRoadRerouteFixture } = require('./roadRerouteFixture');
+  const { viaRouteRows } = require('../src/routePreference');
+  const { pool, drop } = await createTestDatabase({ postgis: true, pgrouting: true });
+  try {
+    await seedRoadRerouteFixture(pool);
+    const { rows: nodes } = await pool.query('SELECT id FROM streets_topology_nodes ORDER BY ST_X(geom), ST_Y(geom)');
+    const { rows: edges } = await pool.query('SELECT source, target, cost FROM streets_routing_edges');
+    // Any two edges sharing a node: a two-leg trip whose length is their sum.
+    const [first] = edges;
+    const second = edges.find((e) => e !== first && (e.source === first.target || e.target === first.target) && e.source !== first.source);
+    const end = second.source === first.target ? second.target : second.source;
+    const allEdges = 'SELECT id, source, target, cost, cost AS reverse_cost FROM streets_routing_edges';
+    const rows = await viaRouteRows(pool, allEdges, [first.source, first.target, end], true);
+    assert.ok(Math.abs(rows.at(-1).route_agg_cost - (first.cost + second.cost)) < 1e-6);
+    assert.deepEqual(rows.map((r) => r.seq), rows.map((_, i) => i + 1));
+    // Without any edges touching `end`, the second leg can't be driven.
+    const cutOff = `${allEdges} WHERE source <> ${end} AND target <> ${end}`;
+    assert.deepEqual(await viaRouteRows(pool, cutOff, [first.source, first.target, end], true), []);
+    assert.ok(nodes.length > 0);
+  } finally {
+    await drop();
+  }
+});
