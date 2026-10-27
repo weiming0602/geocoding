@@ -50,6 +50,7 @@ import RoadAlertsTabs from '../components/RoadAlertsTabs';
 import RoadRerouteMap, { ROUTE_COLORS } from '../components/RoadRerouteMap';
 import {
   isPushCapable,
+  CHIME_DURATION_MS,
   playAlertChime,
   requestNotificationPermission,
   showAlertNotification,
@@ -589,6 +590,11 @@ export default function RoadAlerts() {
         const onRouteIds = new Set(routeAlerts.map((a) => a.signal.id));
         setOnRouteIds(onRouteIds);
 
+        // One chime (CHIME_RINGS rings) per check, however many hazards it
+        // raises -- several serious hazards arriving together used to ring
+        // once each, back to back.
+        let chimeDue = false;
+        const toSpeak: RoadSignal[] = [];
         for (const signal of response.signals) {
           if (spokenIdsRef.current.has(signal.id)) continue;
           if (typeof signal.latitude !== 'number' || typeof signal.longitude !== 'number') continue;
@@ -608,7 +614,7 @@ export default function RoadAlerts() {
             spokenIdsRef.current.add(signal.id);
             if (shouldStronglyAlert(signal.severity, signal.hazardCategory)) {
               setAlertedSignalId(signal.id);
-              playAlertChime();
+              chimeDue = true;
               // Only worth a real OS popup when the driver isn't already
               // looking at this tab -- otherwise the fresh list entry and
               // the speech about to play are already enough.
@@ -626,8 +632,15 @@ export default function RoadAlerts() {
                 });
               }
             }
-            speakSignal(signal);
+            toSpeak.push(signal);
           }
+        }
+        // Rings first, then the spoken alerts once they've finished.
+        if (chimeDue) {
+          playAlertChime();
+          setTimeout(() => toSpeak.forEach(speakSignal), CHIME_DURATION_MS);
+        } else {
+          toSpeak.forEach(speakSignal);
         }
       } catch (err) {
         if (err instanceof ApiError && (err.status === 404 || err.status === 401)) {
