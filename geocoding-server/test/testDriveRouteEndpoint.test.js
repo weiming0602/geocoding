@@ -195,3 +195,42 @@ test('GET /road-alerts/test/drive-route takes the shortest route when the accoun
     }),
     FIXTURE_OPTIONS
   ));
+
+// "Meet as many usual roads as possible": two light weighted points on the
+// north detour row against one much heavier point on the south row. The
+// north row meets two of the driver's points, so it wins despite the
+// heavier single point -- and over the ~2 km direct row.
+test('GET /road-alerts/test/drive-route prefers the route meeting the most weighted points', () =>
+  withTestServer(
+    withBothFlags(async ({ port, usersDb }) => {
+      const serviceKey = await registerTestAccount(usersDb);
+      const { addTestWeightedPoint } = require('../src/testWeightedPoints');
+      const north = NODES.N4.latitude;
+      await addTestWeightedPoint(usersDb, TEST_EMAIL, { latitude: north, longitude: NODES.N5.longitude * 0.3, weight: 1 });
+      await addTestWeightedPoint(usersDb, TEST_EMAIL, { latitude: north, longitude: NODES.N5.longitude * 0.7, weight: 1 });
+      await addTestWeightedPoint(usersDb, TEST_EMAIL, { latitude: NODES.N6.latitude, longitude: NODES.N7.longitude / 2, weight: 20 });
+
+      const body = await (await fetch(driveRouteUrl(port, { ...BASE_PARAMS, serviceKey }))).json();
+      assert.equal(body.weightedPointsPassed, 2);
+      assert.ok(body.geometry.coordinates.some(([, lat]) => lat > 0.001), 'expected the north row');
+      assert.ok(!body.geometry.coordinates.some(([, lat]) => lat < -0.001), 'expected not the south row');
+    }),
+    FIXTURE_OPTIONS
+  ));
+
+// The sandbox report: a weighted point ~350 m before the destination
+// still decides which way the route arrives.
+test('GET /road-alerts/test/drive-route arrives along a weighted point near the destination', () =>
+  withTestServer(
+    withBothFlags(async ({ port, usersDb }) => {
+      const serviceKey = await registerTestAccount(usersDb);
+      const { addTestWeightedPoint } = require('../src/testWeightedPoints');
+      const nearEnd = { latitude: NODES.N4.latitude, longitude: NODES.N5.longitude - 300 / 111320, weight: 5 };
+      await addTestWeightedPoint(usersDb, TEST_EMAIL, nearEnd);
+
+      const body = await (await fetch(driveRouteUrl(port, { ...BASE_PARAMS, serviceKey }))).json();
+      assert.equal(body.usesWeightedPoints, true);
+      assert.ok(body.geometry.coordinates.some(([, lat]) => lat > 0.001), 'expected the north row');
+    }),
+    FIXTURE_OPTIONS
+  ));

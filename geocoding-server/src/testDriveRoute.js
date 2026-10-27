@@ -1,7 +1,7 @@
 const { NotFoundError, OutOfRangeError } = require('./errors');
 const { validateCoordinate, flatDistanceMeters } = require('./nextCrossStreet');
 const { nearestTopologyNodeId, buildPathGeometry } = require('./roadReroute');
-const { rankRoutes, relevantWeightedPoints, viaRouteRows, viaNodesForPoint } = require('./routePreference');
+const { rankRoutes, weightedViaGroups, viaRouteRows, viaNodesForPoint } = require('./routePreference');
 
 // Test-only: the street-following path a *simulated* drive replays as fake
 // GPS fixes (see ui/shared/driveSimulation.ts and the Road Alerts sandbox),
@@ -85,10 +85,17 @@ async function getDriveRoute(db, { startLatitude, startLongitude, endLatitude, e
   }
 
   const paths = [{ rows: pathRows, distanceMeters: pathRows[pathRows.length - 1].agg_cost }];
-  for (const point of relevantWeightedPoints(weightedPoints, start, end)) {
-    const viaNodes = await viaNodesForPoint(db, point, start);
+  for (const group of weightedViaGroups(weightedPoints, start, end)) {
+    const viaNodes = [];
+    // Each point's street is entered from the end nearer the previous stop,
+    // so the route doesn't double back along it.
+    let previous = start;
+    for (const point of group) {
+      viaNodes.push(...(await viaNodesForPoint(db, point, previous)));
+      previous = point;
+    }
     if (viaNodes.length === 0) continue;
-    const rows = await viaRouteRows(db, buildBoundedEdgesSql(start, end, [point]), [startNode, ...viaNodes, endNode], ROUTE_DIRECTED);
+    const rows = await viaRouteRows(db, buildBoundedEdgesSql(start, end, group), [startNode, ...viaNodes, endNode], ROUTE_DIRECTED);
     if (rows.length > 0) paths.push({ rows, distanceMeters: rows[rows.length - 1].route_agg_cost });
   }
 
