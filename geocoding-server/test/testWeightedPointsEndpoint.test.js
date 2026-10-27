@@ -131,3 +131,48 @@ test('POST /road-alerts/test/weighted-points rejects a non-numeric latitude even
     }),
     { seedStreets: false }
   ));
+
+function weightedPointUrl(port, id, { email = TEST_EMAIL, serviceKey } = {}) {
+  const params = new URLSearchParams({ email });
+  if (serviceKey !== undefined) params.set('serviceKey', serviceKey);
+  return `http://127.0.0.1:${port}/road-alerts/test/weighted-points/${encodeURIComponent(id)}?${params.toString()}`;
+}
+
+test('DELETE /road-alerts/test/weighted-points/:id removes only that point', () =>
+  withTestServer(
+    withFlagEnabled(async ({ port, usersDb }) => {
+      const serviceKey = await registerTestAccount(usersDb);
+      const { addTestWeightedPoint } = require('../src/testWeightedPoints');
+      const first = await addTestWeightedPoint(usersDb, TEST_EMAIL, { latitude: 43.9, longitude: -69.8, weight: 0.9 });
+      const second = await addTestWeightedPoint(usersDb, TEST_EMAIL, { latitude: 44.0, longitude: -69.7, weight: 0.7 });
+
+      const deleteResponse = await fetch(weightedPointUrl(port, first.id, { serviceKey }), { method: 'DELETE' });
+      assert.equal(deleteResponse.status, 200);
+
+      const body = await (await fetch(weightedPointsUrl(port, { serviceKey }))).json();
+      assert.deepEqual(
+        body.weightedPoints.map((p) => Number(p.id)),
+        [Number(second.id)]
+      );
+
+      const again = await fetch(weightedPointUrl(port, first.id, { serviceKey }), { method: 'DELETE' });
+      assert.equal(again.status, 404);
+    }),
+    { seedStreets: false }
+  ));
+
+test("DELETE /road-alerts/test/weighted-points/:id can't delete another account's point", () =>
+  withTestServer(
+    withFlagEnabled(async ({ port, usersDb }) => {
+      const serviceKey = await registerTestAccount(usersDb);
+      await registerTestAccount(usersDb, 'bob@example.com');
+      const { addTestWeightedPoint } = require('../src/testWeightedPoints');
+      const bobs = await addTestWeightedPoint(usersDb, 'bob@example.com', { latitude: 43.9, longitude: -69.8, weight: 1 });
+
+      const response = await fetch(weightedPointUrl(port, bobs.id, { serviceKey }), { method: 'DELETE' });
+      assert.equal(response.status, 404);
+      const { rows } = await usersDb.query('SELECT count(*)::int AS n FROM road_alerts_test_weighted_points');
+      assert.equal(rows[0].n, 1);
+    }),
+    { seedStreets: false }
+  ));

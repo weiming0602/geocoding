@@ -8,6 +8,8 @@
   },
   "scripts": {
     "start": "node src/server.js",
+    "start:geocoding": "node src/geocodingServer.js",
+    "start:road-alerts": "node src/roadAlertsServer.js",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

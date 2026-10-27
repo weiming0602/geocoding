@@ -50,7 +50,7 @@ function bboxOf(wkt) {
  * it, plus its DSN (for tests that need to point a freshly-required
  * src/server.js at it via env vars) and a drop() to tear it all down.
  */
-async function createTestDatabase({ postgis = true, pgrouting = false } = {}) {
+async function createTestDatabase({ postgis = true, pgrouting = false, trgm = true } = {}) {
   const name = `geocoding_test_${crypto.randomBytes(8).toString('hex')}`;
 
   const admin = new Pool({ connectionString: ADMIN_DSN });
@@ -64,6 +64,9 @@ async function createTestDatabase({ postgis = true, pgrouting = false } = {}) {
   }
   if (pgrouting) {
     await pool.query('CREATE EXTENSION IF NOT EXISTS pgrouting');
+  }
+  if (trgm) {
+    await pool.query('CREATE EXTENSION IF NOT EXISTS pg_trgm');
   }
 
   async function drop() {
@@ -146,10 +149,15 @@ async function seedFixtureStreets(pool) {
              ST_SetSRID(ST_MakePoint(-70.78, 43.83), 4326))`
   );
 
+  // Each side's range holds a single parity, as real TIGER ranges do
+  // (~99.98% of sides). Rows 12/14/99/50 follow the common "odd on the
+  // left" layout; rows 60/61 are the equally real opposite layout (see
+  // geocodeMatching.js's sideFraction) -- which side holds odd numbers is
+  // a property of each segment's data, not a fixed rule.
   const rows = [
     {
-      id: 12, tlid: '78056932', fullname: 'Pequawket Trl', lfromadd: '988', ltoadd: '998',
-      rfromadd: '979', rtoadd: '991', zipl: '04091', zipr: '04091', state: 'Maine', state_abbr: 'ME',
+      id: 12, tlid: '78056932', fullname: 'Pequawket Trl', lfromadd: '989', ltoadd: '999',
+      rfromadd: '978', rtoadd: '990', zipl: '04091', zipr: '04091', state: 'Maine', state_abbr: 'ME',
       geometry: 'LINESTRING (-70.778377 43.833902, -70.778425 43.834164, -70.778486 43.834454)',
     },
     {
@@ -160,15 +168,15 @@ async function seedFixtureStreets(pool) {
     // A second segment of the same named street/ZIP, covering a different
     // address sub-range (real streets are split into many such segments).
     {
-      id: 14, tlid: '78012506', fullname: 'Pequawket Trl', lfromadd: '700', ltoadd: '738',
-      rfromadd: '701', rtoadd: '721', zipl: '04091', zipr: '04091', state: 'Maine', state_abbr: 'ME',
+      id: 14, tlid: '78012506', fullname: 'Pequawket Trl', lfromadd: '701', ltoadd: '739',
+      rfromadd: '700', rtoadd: '720', zipl: '04091', zipr: '04091', state: 'Maine', state_abbr: 'ME',
       geometry: 'LINESTRING (-70.79 43.83, -70.795 43.835)',
     },
     // Same fullname+zip as id=12/14 but in a different state, to test that
     // state disambiguates when everything else collides.
     {
-      id: 99, tlid: '99999999', fullname: 'Pequawket Trl', lfromadd: '100', ltoadd: '198',
-      rfromadd: '101', rtoadd: '199', zipl: '04091', zipr: '04091', state: 'New Hampshire', state_abbr: 'NH',
+      id: 99, tlid: '99999999', fullname: 'Pequawket Trl', lfromadd: '101', ltoadd: '199',
+      rfromadd: '100', rtoadd: '198', zipl: '04091', zipr: '04091', state: 'New Hampshire', state_abbr: 'NH',
       geometry: 'LINESTRING (-71.0 43.9, -71.01 43.91)',
     },
     // A real-world shape (e.g. "Greely Rd" in the actual dataset): zipl and
@@ -177,6 +185,22 @@ async function seedFixtureStreets(pool) {
       id: 50, tlid: '50000000', fullname: 'Greely Rd', lfromadd: '201', ltoadd: '291',
       rfromadd: '200', rtoadd: '292', zipl: '04021', zipr: '04097', state: 'Maine', state_abbr: 'ME',
       geometry: 'LINESTRING (-70.2 43.9, -70.21 43.91)',
+    },
+    // The real shape of "Grove St" in Freeport (ZIP 04032): no range or
+    // ZIP on the left at all, odd numbers 99 down to 1 on the right. A
+    // fixed "odd numbers are on the left" rule can never find any
+    // address on it.
+    {
+      id: 60, tlid: '60000000', fullname: 'Grove St', lfromadd: '', ltoadd: '',
+      rfromadd: '99', rtoadd: '1', zipl: '', zipr: '04032', state: 'Maine', state_abbr: 'ME',
+      geometry: 'LINESTRING (-70.10 43.86, -70.10 43.861)',
+    },
+    // Both sides populated, parities the other way round from rows 12/50:
+    // even numbers on the left, odd on the right.
+    {
+      id: 61, tlid: '61000000', fullname: 'Swapped Ave', lfromadd: '2', ltoadd: '98',
+      rfromadd: '1', rtoadd: '99', zipl: '04032', zipr: '04032', state: 'Maine', state_abbr: 'ME',
+      geometry: 'LINESTRING (-70.12 43.86, -70.12 43.861)',
     },
   ];
 
@@ -286,8 +310,17 @@ async function makeUsersDb() {
  * than the standard seedFixtureStreets rows. `geoOptions` controls that
  * seeding pool's own createTestDatabase() call (e.g. `{ postgis: true,
  * pgrouting: true }`), independent of `seedStreets`'s own default.
+ *
+ * `serverModule` picks which entry point to start -- '../src/server'
+ * (every route, the default) or one half of the production split,
+ * '../src/geocodingServer' / '../src/roadAlertsServer' (see
+ * serverSplit.test.js). All three export the same { app, db,
+ * usersDbPromise } shape.
  */
-async function withTestServer(callback, { seedStreets = true, geoOptions = {}, geoSeed } = {}) {
+async function withTestServer(
+  callback,
+  { seedStreets = true, geoOptions = {}, geoSeed, serverModule = '../src/server' } = {}
+) {
   const geo = seedStreets
     ? await makeFixtureDsn()
     : await createTestDatabase({ postgis: false, ...geoOptions }).then(async ({ pool, dsn, drop }) => {
@@ -306,8 +339,16 @@ async function withTestServer(callback, { seedStreets = true, geoOptions = {}, g
 
   process.env.GEOCODING_DSN = geo.dsn;
   process.env.USERS_DSN = users.dsn;
-  delete require.cache[require.resolve('../src/server')];
-  const server = require('../src/server');
+  // The route modules too, not just the entry point: they're what
+  // actually require roadSignals.js/hereTraffic.js etc., so a test that
+  // clears one of those (to reset its module-scope cache -- see
+  // roadSignalsEndpoint.test.js's withFetch) only gets a fresh copy if
+  // the route module is re-required as well. Same freshness server.js
+  // had back when every route lived in it directly.
+  for (const mod of [serverModule, '../src/geocodingRoutes', '../src/roadAlertsRoutes']) {
+    delete require.cache[require.resolve(mod)];
+  }
+  const server = require(serverModule);
   const httpServer = server.app.listen(0);
   const usersDb = await server.usersDbPromise;
 

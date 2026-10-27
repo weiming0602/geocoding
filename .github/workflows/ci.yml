@@ -79,3 +79,52 @@ jobs:
         working-directory: ui/desktop
       - run: npm test
         working-directory: ui/desktop
+
+  # Auto-deploys geocoding-server to the geocoding-test droplet after every
+  # merge to master, once all four test jobs above pass -- replaces the
+  # manual "ssh in, git pull, restart" dance this project did by hand
+  # throughout development. `needs:` gates this on every test job
+  # succeeding; `if:` additionally restricts it to real pushes to master
+  # (never a PR build, which would otherwise also match `on: push` for the
+  # PR's own head ref in some trigger configurations -- being explicit
+  # here costs nothing and avoids ever deploying untested/unmerged code).
+  #
+  # geocoding-prod is deliberately NOT auto-deployed here -- same "prove it
+  # on test first" pattern this project has used manually all along. A
+  # prod deploy stays a deliberate, separate action.
+  #
+  # One-time setup this job depends on (not done by this workflow itself):
+  # a dedicated ed25519 keypair was generated for this purpose (kept
+  # separate from any developer's own SSH access, same reasoning as this
+  # project's separate VAPID/Resend/deploy-key-per-environment pattern
+  # elsewhere). Its public half needs adding to root's
+  # ~/.ssh/authorized_keys on geocoding-test; its private half needs
+  # adding as the repo secret GEOCODING_TEST_SSH_KEY (Settings -> Secrets
+  # and variables -> Actions -> New repository secret). The host IP below
+  # is hardcoded, not a secret -- it's not sensitive on its own.
+  deploy-test:
+    name: Deploy to geocoding-test
+    needs: [python-tests, server-tests, shared-tests, desktop-tests]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Deploy over SSH and verify the service comes back healthy
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: 198.211.106.111
+          username: root
+          key: ${{ secrets.GEOCODING_TEST_SSH_KEY }}
+          script: |
+            set -e
+            sudo -u my_ai git -C /home/my_ai/geocoding pull origin master
+            sudo -u my_ai npm install --omit=dev --prefix /home/my_ai/geocoding/geocoding-server
+            systemctl restart geocoding-server
+            sleep 2
+            systemctl is-active geocoding-server
+            status=$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:3001/quota?email=ci-healthcheck@example.com")
+            if [ "$status" != "404" ]; then
+              echo "Unexpected health-check status after deploy: $status (expected 404, meaning the server answered but found no such account)"
+              exit 1
+            fi
+            echo "Deploy verified healthy (status $status)"

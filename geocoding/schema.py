@@ -14,6 +14,9 @@ run once per database -- see the one-time setup in the migration docs).
 Routing (see routing_topology.py) additionally requires `pgrouting`
 (`sudo apt install postgresql-18-pgrouting`, then
 CREATE EXTENSION IF NOT EXISTS pgrouting; -- also a one-time, manual step).
+LLM-assisted geocoding's candidate-street lookup (see geocoding-server/src/
+geocodeMatching.js's candidateStreetNames) additionally requires `pg_trgm`
+(CREATE EXTENSION IF NOT EXISTS pg_trgm; -- same one-time, manual pattern).
 """
 
 CREATE_TABLE_SQL = """
@@ -116,29 +119,42 @@ CREATE INDEX IF NOT EXISTS idx_streets_topology_nodes_geom
 """
 
 # pgr_dijkstra/pgr_ksp's edges-SQL parameter expects an (id, source,
-# target, cost) shape -- this view is that shape over our own streets +
-# topology nodes, so no separate routing-only copy of street data needs
-# to be maintained. cost is real-world meters (ST_Length on the geography
-# cast, not this codebase's usual flat-plane approximation -- PostGIS
-# already does accurate geodesic math here, no reason to hand-rolled a
-# worse one). No reverse_cost column: TIGER carries no one-way/direction
-# data at all (confirmed against Census's own field docs, not an ingest
-# gap), so every routing call passes directed := false rather than
-# pretending a directed/undirected distinction means anything here. Only
-# edges with a resolved tnidf/tnidt qualify -- a street row ingested
-# before this schema change (or never re-ingested since) simply doesn't
-# participate in routing until backfilled.
+# target, cost, reverse_cost) shape -- this view is that shape over our
+# own streets + topology nodes, so no separate routing-only copy of street
+# data needs to be maintained. cost/reverse_cost are real-world meters
+# (ST_Length on the geography cast) in the source -> target and
+# target -> source directions; -1 means "can't travel this way", which
+# pgRouting's directed mode treats as no edge. TIGER itself has no
+# one-way data at all, so direction comes from OpenStreetMap via
+# street_oneway (see osm_oneway.py). A segment with no row there (no
+# confident OSM match) is two-way -- except a limited-access highway or
+# ramp (MTFCC S1100/S1630), which is closed in both directions instead:
+# those are almost always one-way in reality, and routing the wrong way
+# down one is the failure this exists to prevent. source/target follow the segment's own geometry
+# (tnidf = start point, tnidt = end point), the same orientation
+# street_oneway.direction is expressed in. Only edges with a resolved
+# tnidf/tnidt qualify -- a street row ingested before that schema change
+# (or never re-ingested since) doesn't participate in routing until
+# backfilled.
+#
+# DROP + CREATE rather than CREATE OR REPLACE: Postgres can't add a
+# column (reverse_cost) to an existing view in place.
 CREATE_ROUTING_EDGES_VIEW_SQL = """
-CREATE OR REPLACE VIEW streets_routing_edges AS
+DROP VIEW IF EXISTS streets_routing_edges;
+CREATE VIEW streets_routing_edges AS
 SELECT
     s.id AS id,
     nf.id AS source,
     nt.id AS target,
-    ST_Length(s.geom::geography) AS cost,
+    CASE WHEN o.direction = -1 OR (o.tlid IS NULL AND s.mtfcc IN ('S1100', 'S1630')) THEN -1
+         ELSE ST_Length(s.geom::geography) END AS cost,
+    CASE WHEN o.direction = 1 OR (o.tlid IS NULL AND s.mtfcc IN ('S1100', 'S1630')) THEN -1
+         ELSE ST_Length(s.geom::geography) END AS reverse_cost,
     s.geom AS geom
 FROM streets s
 JOIN streets_topology_nodes nf ON nf.tnid = s.tnidf
 JOIN streets_topology_nodes nt ON nt.tnid = s.tnidt
+LEFT JOIN street_oneway o ON o.tlid = s.tlid
 WHERE s.tnidf IS NOT NULL AND s.tnidt IS NOT NULL;
 """
 

@@ -27,7 +27,11 @@ read-write).
   points, insert-only/safe to re-run): `.venv\Scripts\python -m
   geocoding.annual_update "dbname=geocoding"` -- see `ops/` for the
   systemd timer/service pair and a crontab alternative to schedule it.
-- Python tests: `.venv\Scripts\python -m pytest` (37 tests in `tests/`) —
+  Also refreshes OpenStreetMap one-way restrictions for routing (downloads
+  Geofabrik's ~90MB/state extracts to `data/osm/`; `--skip-osm-oneway` to
+  skip). On its own: `python -m geocoding.osm_oneway "dbname=geocoding"
+  --states ME NH` (~6 min for ME+NH, mostly the download).
+- Python tests: `.venv\Scripts\python -m pytest` (71 tests in `tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)
 - Server: `cd geocoding-server && node src/server.js` -- for anything
@@ -36,6 +40,19 @@ read-write).
   captures stdout (morgan's per-request log lines, plus every existing
   `console.log`/`console.error`) durably via journald instead of an
   ephemeral terminal or `/tmp` file.
+- Server entry points: `src/server.js` serves **every** route (local dev,
+  the test suite, and any box not yet split). Production can instead run
+  two processes on the same droplet -- `src/geocodingServer.js` (`PORT`,
+  default 3001) and `src/roadAlertsServer.js` (`ROAD_ALERTS_PORT`, default
+  3002), via `ops/geocoding-server.service` + `ops/road-alerts-server.service`
+  -- with nginx sending `/road-alerts/*` and `/road-signals*` to the
+  latter (`ops/nginx-api.conf.example`; rollout steps are in the
+  road-alerts unit's header). Routes live in `src/geocodingRoutes.js` /
+  `src/roadAlertsRoutes.js`, shared setup (pools, base app, test-flag
+  gates) in `src/serverSetup.js` -- add a new route to whichever group
+  it belongs to, never to an entry point; a Road Alerts route must stay
+  under `/road-alerts` or `/road-signals` or nginx will send it to the
+  wrong process (`test/serverSplit.test.js` enforces this).
 - Server tests: `cd geocoding-server && node --test` — **not** `npm test`,
   that script is a placeholder stub. 292 tests, same throwaway-database-
   per-test pattern (see `test/helpers.js`); 1 pre-existing skip on
@@ -75,7 +92,14 @@ read-write).
   `ops/` for the systemd service. Unlike every other script above, this
   is a **long-running process** (`Type=simple`, restarts on crash/exit),
   not a periodic one-shot triggered by a timer/cron -- it runs its own
-  internal 60-second loop for as long as it's up.
+  internal 60-second loop for as long as it's up. Road Alerts
+  notifications (this background push, and in-tab ones the page routes
+  through the service worker) carry a small sketch image -- recent trail
+  (in-tab only; the trail is never sent to the server), position/heading
+  arrow, hazard dot, distance -- drawn by `ui/desktop/public/alert-sketch.js`
+  (plain JS so `public/sw.js` can `importScripts` it). Only Chrome/Edge on
+  Windows/Android/ChromeOS display notification images; macOS, iOS and
+  Firefox show text only.
 - Mobile app: `cd ui/mobile && npm start`
 - Desktop app: `cd ui/desktop && npm run dev`
 - Desktop app tests: `cd ui/desktop && npm test` (vitest; `App.test.tsx` and
@@ -94,10 +118,19 @@ read-write).
 - Desktop app build: `cd ui/desktop && npm run build` (`tsc -b && vite build`)
 
 # Code style
-- Odd/even house-number convention (odd → left range/offset left, even →
-  right range/offset right) is implemented independently in both
-  `geocoding/interpolate.py` and `geocoding-server/src/geocode.js`. If you
-  change the rule, change it in both places.
+- **There is no fixed odd/even side.** TIGER's left/right follow the
+  direction each segment happens to be digitized in, so which side holds
+  odd numbers varies per segment (~57% of Maine/NH segments carry odd
+  numbers on the *right*; ~23% have one parity on only one side, e.g.
+  Freeport's Grove St: nothing left, odd 99->1 right). Forward geocoding
+  (`geocodeMatching.js`'s `sideFraction`) picks the side whose own ZIP
+  matches and whose range contains the number with the same parity, then
+  offsets to that side; "odd -> left" survives only as the tie-breaker for
+  the ~315 segments with the same parity on both sides. Reverse geocoding
+  (`reverseGeocode.js`'s `roundToRangeParity`) rounds to the matched
+  side's own range parity. `geocoding/interpolate.py` takes the side as an
+  explicit argument and has no rule of its own. Never reintroduce a
+  parity -> side mapping.
 - `geocode.js` queries `UPPER(fullname)`; there's a matching expression
   index in `schema.py`. Don't drop or rename either without checking the
   other — without the index, batch geocoding is ~10x slower.
@@ -160,7 +193,10 @@ read-write).
   404s and `scripts/road-alerts-push-worker.js` runs but never sends
   anything; generate the key pair once via `npx web-push
   generate-vapid-keys`, `VAPID_SUBJECT` is a `mailto:` contact address the
-  push spec requires).
+  push spec requires), `ANTHROPIC_API_KEY` (unset = LLM-assisted
+  geocoding is silently disabled -- an authenticated `/geocode` request
+  that fails to match just gets today's plain 404, same convention as
+  `HERE_API_KEY`; see `geocoding-server/src/llmAssist.js`).
 - Frontend PayPal env vars, both optional and both default to sandbox:
   `VITE_PAYPAL_CLIENT_ID` (`ui/desktop`, e.g. via a gitignored
   `ui/desktop/.env.local`) / `EXPO_PUBLIC_PAYPAL_CLIENT_ID` (`ui/mobile`)
@@ -263,16 +299,56 @@ read-write).
   hazard along the driver's heading (or the driver-to-hazard bearing if
   no heading is known) -- an estimate, labeled as such in the response
   and the UI, not real hazard-extent data. **TIGER carries no one-way/
-  direction data at all** (confirmed against Census's own field
-  documentation -- not something we forgot to ingest, it simply isn't in
-  this dataset), so every route is computed as if every street were
-  two-way; the UI's caveat text says so. It also carries no speed/road-
+  direction data at all**, so routing is **directed using OpenStreetMap
+  one-way data matched onto TIGER segments** (`geocoding/osm_oneway.py` ->
+  `street_oneway` table -> `streets_routing_edges.cost`/`reverse_cost`,
+  `-1` = not allowed; `pgr_ksp`/`pgr_dijkstra` run with `directed =
+  true`). A segment with no confident OSM match stays two-way, **except
+  limited-access highways/ramps (MTFCC S1100/S1630), which are closed to
+  routing instead** -- missing a route beats sending a driver the wrong
+  way down a ramp. OSM data is ODbL: `street_oneway` is used for routing
+  only, never by geocoding (see `DATA_SOURCES.md`); never add OSM-derived
+  columns to `streets`/`street_names`. TIGER also carries no speed/road-
   class-beyond-MTFCC data, so `durationSeconds` in the response is always
   `null` rather than a fabricated estimate -- only `distanceMeters` is
-  real. A driver/rejoin point with no routable street data within ~300m,
-  or a hazard with no route around it at all, throws `NotFoundError`
+  real. Range is 15 km (`MAX_HAZARD_DISTANCE_METERS`), covering the corners
+  of the alert search's 10 km bounding box. The rejoin target is a real
+  intersection 0.8-2.5 km past the
+  hazard within 60 degrees of the direction of travel, nearest that
+  estimate (up to 3 tried); the search is limited to a bounding box around
+  driver/hazard/rejoin (~0.1 s, vs ~8.6 s over the whole graph). A driver
+  with no routable street data within ~300m, no intersection past the
+  hazard to rejoin, or a hazard with no route around it at all, throws
+  `NotFoundError`. **Routes prefer the driver's weighted points**
+  (routine streets; `src/routePreference.js`): besides the plain shortest
+  options, a route is computed through each weighted point roughly on the
+  way (via both ends of the street segment it sits on, `pgr_dijkstraVia`),
+  and every candidate is ranked by length x 0.3-0.7 (heavier weight =
+  bigger discount) if it passes within 30 m of a weighted point -- so a
+  routine-road route wins unless it's ~3x longer; flagged
+  `usesWeightedPoints` and shown as "uses your usual roads". Same for the
+  sandbox's drive-route. Weighted points are sparse (~every 3 min of
+  driving), which is why this isn't a per-edge cost discount
   (404); a hazard beyond `MAX_HAZARD_DISTANCE_METERS` throws
   `OutOfRangeError` (422), same convention as `/road-signals/cross-street`.
+- **LLM-assisted geocoding** (`geocoding-server/src/llmAssist.js`, wired
+  into `POST /geocode` when the request is authenticated) retries a
+  failed geocode by asking Claude Haiku 4.5 to pick the real street
+  Meridian's own data already has that the caller most likely meant
+  (never free-text generation -- forced tool-use constrains it to
+  selecting from real `street_names` candidates or saying "none fit").
+  Requires `ANTHROPIC_API_KEY` (see above) and the `pg_trgm` Postgres
+  extension on the `geocoding` database (`CREATE EXTENSION IF NOT
+  EXISTS pg_trgm;` -- a one-time manual step, same as PostGIS/pgRouting
+  above; **if this is missing, every authenticated `/geocode` request
+  that would otherwise 404 degrades gracefully back to that same 404**,
+  not an error, per `llmAssist.js`'s own outer error handling). Every
+  attempt that reaches the LLM step is logged to a new
+  `llm_geocode_assists` table in `geocoding_users` (reviewed manually
+  via `psql`, same convention as `feedback`'s table) and capped at 50
+  attempts/account/day, independent of the account's normal quota
+  (quota is only ever charged on a successful geocode, but this feature
+  exists exclusively on the failure path).
 - `FEEDBACK_NOTIFY_EMAIL` (optional -- unset = stub) is where `POST
   /feedback` emails you when a comment/question comes in; uses the same
   SES credentials above. The comment is saved in `geocoding_users`'
@@ -344,6 +420,25 @@ read-write).
   same as every other quota-metered endpoint. `app.set('trust proxy',
   'loopback')` in `server.js` is required for this to key on the real
   client IP behind nginx rather than the proxy's own loopback address.
+- **Road Alerts test tooling** (local/dev only -- never set these where
+  real drivers are): `ALLOW_TEST_ROAD_SIGNALS=true` enables fake hazards
+  (`testRoadSignals.js`, merged into `GET /road-signals` for the owning
+  account) plus `GET /road-alerts/test/drive-route` (`testDriveRoute.js`,
+  pgRouting `pgr_dijkstra` over a bbox around start/end);
+  `ALLOW_TEST_WEIGHTED_POINTS=true` enables fake weighted points
+  (`testWeightedPoints.js`). Both are read at request time and 404 when
+  unset. `ui/desktop`'s hidden `/#/road-alerts-sandbox` page adds/
+  deletes both (map click or per-row Delete) and has a "Simulate a
+  drive" panel: start + target (address or `lat, lng`), speed, fast-
+  forward -> navigates to `/road-alerts` with the route in router state,
+  where `RoadAlerts.tsx` replays it as fake GPS fixes through the real
+  `onPosition` path (`ui/shared/driveSimulation.ts`) instead of
+  `navigator.geolocation`. Simulated fixes never ping the real
+  `/road-alerts/weighted-points` store (`simulatingRef`). Not covered:
+  `ui/mobile`, and the background push worker (it only sees real 511
+  hazards/real weighted points, so test hazards never trigger a push).
+  Run locally with `ALLOW_TEST_ROAD_SIGNALS=true
+  ALLOW_TEST_WEIGHTED_POINTS=true node src/server.js`.
 
 # Known gaps (don't assume these are done)
 - `ui/desktop` is deployed to DigitalOcean App Platform as a **Static

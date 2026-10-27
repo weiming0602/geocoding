@@ -1,0 +1,52 @@
+# systemd service for the Road Alerts half of the API
+# (geocoding-server/src/roadAlertsServer.js) -- a long-running process,
+# same shape as geocoding-server.service, running next to it on the same
+# droplet so a Road Alerts crash, restart, or deploy can't take down the
+# paid geocoding API. No extra droplet: it shares the box, Postgres, and
+# the checkout. nginx sends /road-alerts/* and /road-signals* here (see
+# ops/nginx-api.conf.example).
+#
+# Rollout order on a box that currently runs everything via server.js
+# (each step is safe on its own; nothing user-visible changes):
+#   1. Deploy the code (git pull). server.js still serves every route.
+#   2. Install and start this unit:
+#        sudo cp ops/road-alerts-server.service /etc/systemd/system/
+#        sudo systemctl daemon-reload
+#        sudo systemctl enable --now road-alerts-server
+#        curl -s localhost:3002/road-signals/push-public-key   # any JSON reply = up
+#   3. Add the Road Alerts location block to the API's nginx site (see
+#      ops/nginx-api.conf.example), then `sudo nginx -t && sudo systemctl
+#      reload nginx`. Road Alerts traffic now reaches this process.
+#   4. Point geocoding-server.service's ExecStart at src/geocodingServer.js
+#      instead of src/server.js, then `sudo systemctl daemon-reload &&
+#      sudo systemctl restart geocoding-server`. It stops serving Road
+#      Alerts routes itself.
+# To roll back: remove the nginx location block and reload (server.js,
+# if still in use, serves everything again), or revert step 4.
+#
+# Check status / logs:
+#   systemctl status road-alerts-server
+#   journalctl -u road-alerts-server -f
+
+[Unit]
+Description=geocoding-server Road Alerts API
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+# Same peer-authenticated Postgres role as geocoding-server.service --
+# see that file's comment on why this can't run as root.
+User=my_ai
+Group=my_ai
+WorkingDirectory=/home/my_ai/geocoding/geocoding-server
+# Reads the same .env as the geocoding process (dotenv, from this
+# directory) -- ROAD_ALERTS_PORT, not PORT, so a PORT in that shared .env
+# can't put both processes on the same port.
+Environment=ROAD_ALERTS_PORT=3002
+# Adjust this path to wherever `which node` resolves on the actual box.
+ExecStart=/usr/bin/node src/roadAlertsServer.js
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

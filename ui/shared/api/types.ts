@@ -211,6 +211,18 @@ export type TestRoadSignalsResponse = {
   signals: RoadSignal[];
 };
 
+// GET /road-alerts/test/drive-route -- the street path a simulated drive
+// replays (see ui/shared/driveSimulation.ts). Coordinates are GeoJSON
+// [lon, lat]. Same caveats as RoadRerouteResponse: one-way streets from
+// OpenStreetMap where matched (see geocoding/osm_oneway.py), no duration.
+export type TestDriveRouteResponse = {
+  geometry: { type: 'LineString'; coordinates: [number, number][] };
+  distanceMeters: number;
+  // Same weighted-point preference as RerouteOption.
+  usesWeightedPoints?: boolean;
+  weightedPointsPassed?: number;
+};
+
 // POST /road-alerts/register -- idempotent: an already-registered email
 // gets its existing service key back unchanged (alreadyRegistered: true),
 // never a new key. Free for every registered account right now, no trial
@@ -413,17 +425,26 @@ export type CrossStreetResponse = {
 // point, never a real start/end span) -- a fixed distance further along
 // the road past the hazard, not the hazard's actual cleared extent.
 // `durationSeconds` is always null -- TIGER carries no speed/road-class
-// data to estimate travel time from.
+// data to estimate travel time from. Routes obey one-way streets (from
+// OpenStreetMap, matched onto TIGER -- see geocoding/osm_oneway.py).
 export type RerouteOption = {
   // A GeoJSON LineString's `coordinates` field: [[lon, lat], ...].
   geometry: { type: 'LineString'; coordinates: [number, number][] };
   distanceMeters: number;
   durationSeconds: number | null;
+  // Whether this route passes the driver's weighted points (routine
+  // streets) -- such routes are ranked first unless ~3x longer (see
+  // geocoding-server/src/routePreference.js).
+  usesWeightedPoints?: boolean;
+  weightedPointsPassed?: number;
 };
 
 export type RoadRerouteResponse = {
   options: RerouteOption[];
+  // Where every option ends: the destination when one was sent (then
+  // endsAtDestination is true), otherwise an estimated point past the hazard.
   rejoinPoint: { latitude: number; longitude: number };
+  endsAtDestination?: boolean;
 };
 
 // GET /admin/transactions -- owner/manager-only view of completed

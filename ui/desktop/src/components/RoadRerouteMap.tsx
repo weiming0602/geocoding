@@ -18,6 +18,8 @@ type Props = {
   driverPosition: Point;
   hazardPosition: Point;
   rejoinPoint: Point;
+  // Hover label for the end marker (default: the estimated rejoin point).
+  rejoinLabel?: string;
   options: RerouteOption[];
   // Which option (index into `options`) to visually call out -- e.g. the
   // one the driver is currently hovering in the option list below the
@@ -65,6 +67,7 @@ export default function RoadRerouteMap({
   driverPosition,
   hazardPosition,
   rejoinPoint,
+  rejoinLabel = 'Estimated rejoin point (not exact)',
   options,
   highlightedIndex = null,
 }: Props) {
@@ -168,7 +171,7 @@ export default function RoadRerouteMap({
     const rejoinMarker = new Marker({ color: '#9b9797' })
       .setLngLat([rejoinPoint.longitude, rejoinPoint.latitude])
       .addTo(map);
-    attachHoverLabel(rejoinMarker, map, 'Estimated rejoin point (not exact)');
+    attachHoverLabel(rejoinMarker, map, rejoinLabel);
 
     const routePoints: [number, number][] = options.flatMap((option) => option.geometry.coordinates);
     const allPoints: [number, number][] = [
@@ -188,7 +191,7 @@ export default function RoadRerouteMap({
       hazardMarker.remove();
       rejoinMarker.remove();
     };
-  }, [ready, driverPosition, hazardPosition, rejoinPoint, options]);
+  }, [ready, driverPosition, hazardPosition, rejoinPoint, rejoinLabel, options]);
 
   useEffect(() => {
     const map = mapRef.current;

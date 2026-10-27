@@ -191,8 +191,9 @@ function RoadAlertsHelp() {
         turn-by-turn directions.
       </Text>
       <Text style={styles.caption}>
-        These routes are an estimate: they're based on street connectivity only (no live traffic,
-        and no one-way street data exists for this region yet), and the point where a route rejoins
+        These routes are an estimate: they follow one-way streets using OpenStreetMap data
+        (© OpenStreetMap contributors) and avoid any highway or ramp whose direction isn't known,
+        but there's no live traffic, and the point where a route rejoins
         your original road past the hazard is approximate, not exact.
       </Text>
 

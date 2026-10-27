@@ -21,6 +21,7 @@ import type {
   RoadSignal,
   RoadSignalSeverity,
   RoadSignalsResponse,
+  TestDriveRouteResponse,
   TestRoadSignalsResponse,
   TestWeightedPoint,
   TestWeightedPointsResponse,
@@ -241,6 +242,9 @@ export function getRoadReroute(
     hazardLatitude: number;
     hazardLongitude: number;
     hazardRoadway?: string;
+    // The trip's actual target, when known (a simulated drive) -- routes
+    // then go there instead of to an estimated rejoin point.
+    destination?: { latitude: number; longitude: number };
     email: string;
     serviceKey: string;
   },
@@ -256,6 +260,10 @@ export function getRoadReroute(
   });
   if (params.driverHeading != null) qs.set('driverHeading', String(params.driverHeading));
   if (params.hazardRoadway) qs.set('hazardRoadway', params.hazardRoadway);
+  if (params.destination) {
+    qs.set('destinationLatitude', String(params.destination.latitude));
+    qs.set('destinationLongitude', String(params.destination.longitude));
+  }
   return getJson<RoadRerouteResponse>(baseUrl, `/road-signals/reroute?${qs.toString()}`);
 }
 
@@ -430,6 +438,17 @@ export function clearTestWeightedPoints(
   return deleteJson<{ deleted: number }>(baseUrl, `/road-alerts/test/weighted-points?${qs.toString()}`);
 }
 
+export function deleteTestWeightedPoint(
+  params: { email: string; serviceKey: string; id: number | string },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<{ deleted: number }> {
+  const qs = new URLSearchParams({ email: params.email, serviceKey: params.serviceKey });
+  return deleteJson<{ deleted: number }>(
+    baseUrl,
+    `/road-alerts/test/weighted-points/${encodeURIComponent(String(params.id))}?${qs.toString()}`
+  );
+}
+
 // The real, always-on weighted-points store (see
 // geocoding-server/src/weightedPoints.js) -- reports one GPS ping from
 // an active Road Alerts monitoring session toward the account's
@@ -483,6 +502,15 @@ export function addTestRoadSignal(
   return postJson<RoadSignal>(baseUrl, '/road-alerts/test/signals', params);
 }
 
+// Which developer test tools the server has switched on (see
+// geocoding-server's GET /road-alerts/test/enabled) -- both false on
+// production.
+export function getRoadAlertsTestTools(
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<{ testRoadSignals: boolean; testWeightedPoints: boolean }> {
+  return getJson<{ testRoadSignals: boolean; testWeightedPoints: boolean }>(baseUrl, '/road-alerts/test/enabled');
+}
+
 export function getTestRoadSignals(
   params: { email: string; serviceKey: string },
   baseUrl = DEFAULT_API_BASE_URL
@@ -497,6 +525,41 @@ export function clearTestRoadSignals(
 ): Promise<{ deleted: number }> {
   const qs = new URLSearchParams({ email: params.email, serviceKey: params.serviceKey });
   return deleteJson<{ deleted: number }>(baseUrl, `/road-alerts/test/signals?${qs.toString()}`);
+}
+
+// `id` is the RoadSignal's own `test-`-prefixed id, as GET returns it.
+export function deleteTestRoadSignal(
+  params: { email: string; serviceKey: string; id: string },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<{ deleted: number }> {
+  const qs = new URLSearchParams({ email: params.email, serviceKey: params.serviceKey });
+  return deleteJson<{ deleted: number }>(
+    baseUrl,
+    `/road-alerts/test/signals/${encodeURIComponent(params.id)}?${qs.toString()}`
+  );
+}
+
+// Test-only street route for a simulated drive (see
+// geocoding-server/src/testDriveRoute.js) -- 404s unless the server has
+// ALLOW_TEST_ROAD_SIGNALS set, same as the fake hazards above.
+export function getTestDriveRoute(
+  params: {
+    email: string;
+    serviceKey: string;
+    start: Coordinates;
+    end: Coordinates;
+  },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<TestDriveRouteResponse> {
+  const qs = new URLSearchParams({
+    email: params.email,
+    serviceKey: params.serviceKey,
+    startLatitude: String(params.start.latitude),
+    startLongitude: String(params.start.longitude),
+    endLatitude: String(params.end.latitude),
+    endLongitude: String(params.end.longitude),
+  });
+  return getJson<TestDriveRouteResponse>(baseUrl, `/road-alerts/test/drive-route?${qs.toString()}`);
 }
 
 export function getTransactions(
