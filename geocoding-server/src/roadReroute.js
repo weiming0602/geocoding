@@ -103,14 +103,20 @@ function destinationPointFlat(lat, lon, bearingDeg, distanceMeters) {
  * bounds how far "nearest" is allowed to be.
  */
 async function nearestTopologyNodeId(db, latitude, longitude) {
+  const node = await nearestTopologyNode(db, latitude, longitude);
+  return node ? node.id : null;
+}
+
+/** Like nearestTopologyNodeId, but { id, latitude, longitude } (the node's own position) or null. */
+async function nearestTopologyNode(db, latitude, longitude) {
   const { rows } = await db.query(
-    `SELECT id FROM streets_topology_nodes
+    `SELECT id, ST_Y(geom) AS latitude, ST_X(geom) AS longitude FROM streets_topology_nodes
      WHERE ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $3)
      ORDER BY geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)
      LIMIT 1`,
     [longitude, latitude, MAX_NODE_SNAP_DISTANCE_METERS]
   );
-  return rows.length > 0 ? rows[0].id : null;
+  return rows.length > 0 ? rows[0] : null;
 }
 
 /**
@@ -257,6 +263,11 @@ function buildPathGeometry(pathRows, edgesById) {
  * yet, or if no route around the hazard exists at all (a dead end/
  * disconnected area).
  *
+ * With a destination (the driver's actual target -- today only a
+ * simulated drive knows one), routes go all the way there instead of to
+ * an estimated rejoin point; the response's rejoinPoint is then the
+ * destination's street node and endsAtDestination is true.
+ *
  * TIGER carries no one-way/direction data at all (confirmed against
  * Census's own field documentation, not an ingest gap) and no speed
  * data -- every edge is treated as two-way (`directed: false`)
@@ -265,10 +276,21 @@ function buildPathGeometry(pathRows, edgesById) {
  */
 async function getRoadReroute(
   db,
-  { driverLatitude, driverLongitude, driverHeading, hazardLatitude, hazardLongitude, weightedPoints = [] }
+  {
+    driverLatitude,
+    driverLongitude,
+    driverHeading,
+    hazardLatitude,
+    hazardLongitude,
+    destinationLatitude,
+    destinationLongitude,
+    weightedPoints = [],
+  }
 ) {
   validateCoordinate(driverLatitude, driverLongitude, 'driver');
   validateCoordinate(hazardLatitude, hazardLongitude, 'hazard');
+  const hasDestination = destinationLatitude !== undefined || destinationLongitude !== undefined;
+  if (hasDestination) validateCoordinate(destinationLatitude, destinationLongitude, 'destination');
 
   const directDistance = flatDistanceMeters(driverLatitude, driverLongitude, hazardLatitude, hazardLongitude);
   if (directDistance > MAX_HAZARD_DISTANCE_METERS) {
@@ -288,13 +310,17 @@ async function getRoadReroute(
 
   const [startNode, candidates] = await Promise.all([
     nearestTopologyNodeId(db, driverLatitude, driverLongitude),
-    rejoinCandidates(db, hazardLatitude, hazardLongitude, bearing, estimate),
+    hasDestination
+      ? nearestTopologyNode(db, destinationLatitude, destinationLongitude).then((node) => (node ? [node] : []))
+      : rejoinCandidates(db, hazardLatitude, hazardLongitude, bearing, estimate),
   ]);
   if (startNode === null) {
     throw new NotFoundError('no routable street data near this location yet');
   }
   if (candidates.length === 0) {
-    throw new NotFoundError('no routable street data past this hazard to rejoin');
+    throw new NotFoundError(
+      hasDestination ? 'no routable street data near the destination' : 'no routable street data past this hazard to rejoin'
+    );
   }
 
   let paths = [];
@@ -377,12 +403,13 @@ async function getRoadReroute(
     rejoinPoint
   );
 
-  return { options, rejoinPoint };
+  return { options, rejoinPoint, endsAtDestination: hasDestination };
 }
 
 module.exports = {
   getRoadReroute,
   nearestTopologyNodeId,
+  nearestTopologyNode,
   bearingDegreesFlat,
   destinationPointFlat,
   buildPathGeometry,

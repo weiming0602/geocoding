@@ -247,3 +247,38 @@ test('alternativeRoutes skips near-copies of an earlier option in favor of a gen
     await drop();
   }
 });
+
+// With a destination (a simulated drive's target), routes end there, not
+// at an estimated rejoin point. N5 is the top-right corner: the route
+// must avoid the blocked direct row and finish exactly at N5.
+test('getRoadReroute routes to the destination when one is given', async () => {
+  const db = await makeFixtureDb();
+  const result = await getRoadReroute(db, {
+    driverLatitude: DRIVER.latitude,
+    driverLongitude: DRIVER.longitude,
+    hazardLatitude: HAZARD.latitude,
+    hazardLongitude: HAZARD.longitude,
+    destinationLatitude: NODES.N5.latitude,
+    destinationLongitude: NODES.N5.longitude,
+  });
+  assert.equal(result.endsAtDestination, true);
+  assert.ok(Math.abs(result.rejoinPoint.latitude - NODES.N5.latitude) < 1e-9);
+  assert.ok(result.options.length >= 1);
+  for (const option of result.options) {
+    const [lon, lat] = option.geometry.coordinates.at(-1);
+    assert.ok(Math.abs(lon - NODES.N5.longitude) < 1e-6 && Math.abs(lat - NODES.N5.latitude) < 1e-6);
+  }
+  await db.close();
+});
+
+test('getRoadReroute without a destination still ends at the estimated rejoin point', async () => {
+  const db = await makeFixtureDb();
+  const result = await getRoadReroute(db, {
+    driverLatitude: DRIVER.latitude,
+    driverLongitude: DRIVER.longitude,
+    hazardLatitude: HAZARD.latitude,
+    hazardLongitude: HAZARD.longitude,
+  });
+  assert.equal(result.endsAtDestination, false);
+  await db.close();
+});

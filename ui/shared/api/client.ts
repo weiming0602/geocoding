@@ -242,6 +242,9 @@ export function getRoadReroute(
     hazardLatitude: number;
     hazardLongitude: number;
     hazardRoadway?: string;
+    // The trip's actual target, when known (a simulated drive) -- routes
+    // then go there instead of to an estimated rejoin point.
+    destination?: { latitude: number; longitude: number };
     email: string;
     serviceKey: string;
   },
@@ -257,6 +260,10 @@ export function getRoadReroute(
   });
   if (params.driverHeading != null) qs.set('driverHeading', String(params.driverHeading));
   if (params.hazardRoadway) qs.set('hazardRoadway', params.hazardRoadway);
+  if (params.destination) {
+    qs.set('destinationLatitude', String(params.destination.latitude));
+    qs.set('destinationLongitude', String(params.destination.longitude));
+  }
   return getJson<RoadRerouteResponse>(baseUrl, `/road-signals/reroute?${qs.toString()}`);
 }
 

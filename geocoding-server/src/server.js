@@ -1195,8 +1195,17 @@ app.get('/road-signals/cross-street', async (req, res) => {
 // client-resends-the-hazard's-own-coordinates reasoning as
 // /road-signals/cross-street above.
 app.get('/road-signals/reroute', async (req, res) => {
-  const { driverLatitude, driverLongitude, driverHeading, hazardLatitude, hazardLongitude, email, serviceKey } =
-    req.query;
+  const {
+    driverLatitude,
+    driverLongitude,
+    driverHeading,
+    hazardLatitude,
+    hazardLongitude,
+    destinationLatitude,
+    destinationLongitude,
+    email,
+    serviceKey,
+  } = req.query;
   try {
     if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
       throw new ValidationError('email must be a valid email address');
@@ -1215,6 +1224,8 @@ app.get('/road-signals/reroute', async (req, res) => {
       driverHeading: driverHeading !== undefined ? Number(driverHeading) : undefined,
       hazardLatitude: hazardLatitude !== undefined ? Number(hazardLatitude) : undefined,
       hazardLongitude: hazardLongitude !== undefined ? Number(hazardLongitude) : undefined,
+      destinationLatitude: destinationLatitude !== undefined ? Number(destinationLatitude) : undefined,
+      destinationLongitude: destinationLongitude !== undefined ? Number(destinationLongitude) : undefined,
     });
 
     res.json(result);
