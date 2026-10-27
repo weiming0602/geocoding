@@ -120,6 +120,13 @@ const MIN_RELIABLE_DISPLACEMENT_METERS = 15;
 // Never persisted anywhere -- see docs/ROAD_ALERTS_DESIGN.md's Privacy
 // model section.
 const TRAIL_MAX_SAMPLES = 4;
+// The route actually driven since Start, for the alert sketches (cards and
+// notifications) -- separate from the short matching trail above, which
+// must stay short. A point is kept every this many meters...
+const DRIVEN_PATH_STEP_METERS = 15;
+// ...and past this many points every other one is dropped (the shape
+// survives; ~30 km at 15 m spacing before the first thinning).
+const DRIVEN_PATH_MAX_POINTS = 2000;
 
 const SEVERITY_LABELS: Record<RoadSignalSeverity, string> = {
   serious: 'Serious',
@@ -367,9 +374,12 @@ export default function RoadAlerts() {
   // TRAIL_MAX_SAMPLES, oldest dropped first. Never persisted. Reset in
   // handleStart, same as lastFixRef.
   const trailRef = useRef<TimedCoordinates[]>([]);
-  // A rendering copy of trailRef for the hazard cards' sketches (see
-  // AlertSketch) -- the ref stays the source of truth for matching.
-  const [trail, setTrail] = useState<TimedCoordinates[]>([]);
+  // Every point actually passed since Start (DRIVEN_PATH_STEP_METERS
+  // apart), drawn in the alert sketches so the route driven stays in the
+  // picture. Same privacy model as the trail: in this tab only, never sent
+  // to the server, discarded on Stop.
+  const drivenPathRef = useRef<{ latitude: number; longitude: number }[]>([]);
+  const [drivenPath, setDrivenPath] = useState<{ latitude: number; longitude: number }[]>([]);
   // This account's real, already-qualified weighted points -- populated
   // by refreshRealWeightedPoints below. A ref, not state: nothing here
   // renders directly from it, it's only read inside the long-lived
@@ -534,7 +544,8 @@ export default function RoadAlerts() {
     // Discard the trail and any in-progress route match the moment
     // driving stops -- see docs/ROAD_ALERTS_DESIGN.md's privacy model.
     trailRef.current = [];
-    setTrail([]);
+    drivenPathRef.current = [];
+    setDrivenPath([]);
     setOnRouteIds(new Set());
 
     // A Stop-then-Start cycle should re-subscribe cleanly rather than
@@ -614,13 +625,13 @@ export default function RoadAlerts() {
               // looking at this tab -- otherwise the fresh list entry and
               // the speech about to play are already enough.
               if (document.hidden) {
-                // The notification picture: last ~minute of trail, where the
-                // driver is and which way they're heading, and the hazard
-                // (see public/alert-sketch.js). The trail stays in this
+                // The notification picture: the route driven since Start,
+                // where the driver is and which way they're heading, and the
+                // hazard (see public/alert-sketch.js). The path stays in this
                 // browser -- it's passed to this device's own service
                 // worker, never sent to the server.
                 showAlertNotification(`${SEVERITY_LABELS[signal.severity]} road alert`, signal.speech.brief, {
-                  trail: trailRef.current.map(({ latitude: lat, longitude: lon }) => ({ latitude: lat, longitude: lon })),
+                  trail: drivenPathRef.current,
                   position: { latitude, longitude },
                   headingDeg: heading,
                   hazard: { latitude: signal.latitude, longitude: signal.longitude },
@@ -681,6 +692,14 @@ export default function RoadAlerts() {
       setPosition({ latitude, longitude, heading: estimatedHeadingDeg });
       positionRef.current = { latitude, longitude };
 
+      const lastDriven = drivenPathRef.current[drivenPathRef.current.length - 1];
+      if (!lastDriven || haversineDistanceMeters(lastDriven, { latitude, longitude }) >= DRIVEN_PATH_STEP_METERS) {
+        let path = [...drivenPathRef.current, { latitude, longitude }];
+        if (path.length > DRIVEN_PATH_MAX_POINTS) path = path.filter((_, i) => i % 2 === 0 || i === path.length - 1);
+        drivenPathRef.current = path;
+        setDrivenPath(path);
+      }
+
       if (
         !hasDetectedMovementRef.current &&
         estimatedSpeedMps !== null &&
@@ -694,7 +713,6 @@ export default function RoadAlerts() {
       if (hasDetectedMovementRef.current && now - lastFetchAtRef.current >= POLL_MIN_INTERVAL_MS) {
         lastFetchAtRef.current = now;
         trailRef.current = [...trailRef.current, current].slice(-TRAIL_MAX_SAMPLES);
-        setTrail(trailRef.current);
         fetchSignals(latitude, longitude, estimatedHeadingDeg);
 
         // Only from real GPS-driven polling (never handleManualCheck's direct
@@ -819,7 +837,8 @@ export default function RoadAlerts() {
     setHasDetectedMovement(false);
     lastFixRef.current = null;
     trailRef.current = [];
-    setTrail([]);
+    drivenPathRef.current = [];
+    setDrivenPath([]);
     setOnRouteIds(new Set());
     setAlertedSignalId(null);
 
@@ -1703,7 +1722,7 @@ export default function RoadAlerts() {
               {position && typeof signal.latitude === 'number' && typeof signal.longitude === 'number' && (
                 <AlertSketch
                   input={{
-                    trail,
+                    trail: drivenPath,
                     position: { latitude: position.latitude, longitude: position.longitude },
                     headingDeg: position.heading,
                     hazard: { latitude: signal.latitude, longitude: signal.longitude },
