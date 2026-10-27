@@ -10,13 +10,14 @@ const { metersPerDegree } = require('./interpolate');
 // -- which rules out simply discounting the streets right next to each
 // point (that saves a few dozen meters, never enough to change a route).
 // Instead, alongside the ordinary shortest routes, routes are computed
-// THROUGH weighted points -- one per relevant point, plus one through all
-// of them in the order a driver heading from start to end would reach
-// them -- and candidates are ranked by how many weighted points they pass
-// (meeting as many of the driver's usual roads as possible comes first),
-// then by length x a weight-based discount, then by length. A route more
-// than MAX_LENGTH_RATIO x the shortest candidate never outranks a shorter
-// one, however many points it passes.
+// THROUGH weighted points -- one per relevant point, plus the best
+// combination and order of them, chosen from real driving distances
+// (one pgr_dijkstraCostMatrix query; see bestWeightedGroup) -- and
+// candidates are ranked by how many weighted points they pass (meeting as
+// many of the driver's usual roads as possible comes first), then by
+// length x a weight-based discount, then by length. A route more than
+// MAX_LENGTH_RATIO x the shortest candidate never outranks a shorter one,
+// however many points it passes.
 
 // A route counts as passing a weighted point if it comes within this of it.
 const PASS_RADIUS_METERS = 30;
@@ -38,9 +39,11 @@ const MIN_ENDPOINT_DISTANCE_METERS = 50;
 // outranks a shorter one, however many weighted points it passes --
 // matching the 1 / MIN_FACTOR discount break-even.
 const MAX_LENGTH_RATIO = 3;
-// At most this many points (nearest the start first) in the one route
-// through all of them.
-const MAX_POINTS_IN_ONE_ROUTE = 8;
+// At most this many weighted points (heaviest kept) are considered for the
+// combined route -- every subset and order is tried, so this bounds the
+// search (6 points, both directions of two-way streets: well under a
+// second of plain arithmetic).
+const MAX_POINTS_IN_ONE_ROUTE = 6;
 // How many weighted points (heaviest first) to try routing through.
 const MAX_VIA_CANDIDATES = 3;
 
@@ -102,59 +105,141 @@ function relevantWeightedPoints(points, start, end) {
     .slice(0, MAX_VIA_CANDIDATES);
 }
 
-/** Straight-line length of start -> ...points -> end. */
-function tourLength(start, points, end) {
-  let total = 0;
-  let previous = start;
-  for (const p of [...points, end]) {
-    total += flatDistanceMeters(previous, p);
-    previous = p;
-  }
-  return total;
-}
-
-/** Every ordering of `items` (fine for MAX_POINTS_IN_ONE_ROUTE = 8: 40,320). */
-function permutations(items) {
-  if (items.length <= 1) return [items];
-  return items.flatMap((item, i) => permutations([...items.slice(0, i), ...items.slice(i + 1)]).map((rest) => [item, ...rest]));
-}
-
 /**
- * Relevant points (see relevantWeightedPoints, but up to
- * MAX_POINTS_IN_ONE_ROUTE, heaviest kept) in the order that makes the
- * shortest straight-line path start -> points -> end. Ordering by how far
- * along the start -> end line each point projects looked simpler but
- * zig-zags: two points near the destination, one off to the side, made a
- * real Brunswick -> Freeport route go past Freeport and back (43 km for
- * a 21 km trip).
+ * Weighted points eligible for the combined route: relevant (roughly on
+ * the way, not at either end), heaviest MAX_POINTS_IN_ONE_ROUTE kept.
+ * Callers include these in the search area of their route queries.
  */
-function pointsInTravelOrder(points, start, end) {
+function groupCandidatePoints(points, start, end) {
   const direct = flatDistanceMeters(start, end);
-  const chosen = pointsAwayFromEnds(points, start, end)
+  return pointsAwayFromEnds(points, start, end)
     .filter((p) => flatDistanceMeters(start, p) + flatDistanceMeters(p, end) <= MAX_VIA_DETOUR_RATIO * direct)
     .sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0))
     .slice(0, MAX_POINTS_IN_ONE_ROUTE);
-  let best = chosen;
-  let bestLength = tourLength(start, chosen, end);
-  for (const order of permutations(chosen)) {
-    const length = tourLength(start, order, end);
-    if (length < bestLength) {
-      best = order;
-      bestLength = length;
-    }
-  }
-  return best;
 }
 
 /**
- * Which weighted points to route through, as candidate groups: each
- * relevant point on its own, plus (when there are 2+) all of them in
- * travel order -- the "meet as many usual roads as possible" route.
+ * Pure core of bestWeightedGroup: which weighted points to visit, in what
+ * order and direction, judged by real driving distances.
+ *
+ * segments: [{ point, factor, length, orientations: [[entry, exit], ...] }]
+ *   (a one-way street has one orientation, a two-way street both);
+ * cost(a, b): driving distance between two intersections (Infinity if
+ *   unreachable, 0 for a == b).
+ *
+ * Tries every subset and order (and orientation). Among combinations no
+ * longer than MAX_LENGTH_RATIO x the direct cost(startNode, endNode):
+ * most points first, then length x the best discount among them, then
+ * length. Returns { points, nodes, length } or null.
  */
-function weightedViaGroups(points, start, end) {
-  const singles = relevantWeightedPoints(points, start, end).map((p) => [p]);
-  const ordered = pointsInTravelOrder(points, start, end);
-  return ordered.length >= 2 ? [...singles, ordered] : singles;
+function chooseBestGroup({ segments, startNode, endNode, cost }) {
+  const direct = cost(startNode, endNode);
+  if (!Number.isFinite(direct)) return null;
+  const limit = MAX_LENGTH_RATIO * direct;
+  let best = null;
+  const better = (a, b) =>
+    !b ||
+    a.points.length > b.points.length ||
+    (a.points.length === b.points.length && (a.score < b.score || (a.score === b.score && a.length < b.length)));
+
+  function visit(current, used, length, points, nodes, factor) {
+    if (points.length > 0) {
+      const total = length + cost(current, endNode);
+      if (total <= limit) {
+        const candidate = { points, nodes, length: total, score: total * factor };
+        if (better(candidate, best)) best = candidate;
+      }
+    }
+    segments.forEach((segment, i) => {
+      if (used & (1 << i)) return;
+      for (const [entry, exit] of segment.orientations) {
+        const next = length + cost(current, entry) + segment.length;
+        if (!(next <= limit)) continue; // also skips Infinity / NaN
+        visit(exit, used | (1 << i), next, [...points, segment.point], [...nodes, entry, exit], Math.min(factor, segment.factor));
+      }
+    });
+  }
+  visit(startNode, 0, 0, [], [], 1);
+  return best && { points: best.points, nodes: best.nodes, length: best.length };
+}
+
+// A weighted point further than this from any street isn't on a road we
+// can route along (same idea as roadReroute.js's node-snap limit).
+const MAX_POINT_TO_STREET_METERS = 300;
+
+/**
+ * The street segment a weighted point is on (nearest usable one within
+ * MAX_POINT_TO_STREET_METERS), with the directions it may be driven:
+ * { source, target, length, forward, backward, sourceDist, targetDist }
+ * (distances from `from`), or null. `e.*` rather than naming reverse_cost:
+ * before one-way data existed the edges view had no reverse_cost column,
+ * and a missing one means two-way.
+ */
+async function segmentForPoint(db, point, from) {
+  const { rows } = await db.query(
+    `SELECT e.*,
+            ST_Distance(ST_StartPoint(e.geom)::geography, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography) AS source_dist,
+            ST_Distance(ST_EndPoint(e.geom)::geography, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography) AS target_dist
+     FROM streets_routing_edges e
+     WHERE ST_DWithin(e.geom::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $5)
+     ORDER BY e.geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)
+     LIMIT 5`,
+    [point.longitude, point.latitude, from.longitude, from.latitude, MAX_POINT_TO_STREET_METERS]
+  );
+  for (const row of rows) {
+    const forward = row.cost >= 0;
+    const backward = (row.reverse_cost ?? row.cost) >= 0;
+    if (!forward && !backward) continue; // closed both ways -- try the next nearest
+    return {
+      source: row.source,
+      target: row.target,
+      length: forward ? row.cost : (row.reverse_cost ?? row.cost),
+      forward,
+      backward,
+      sourceDist: row.source_dist,
+      targetDist: row.target_dist,
+    };
+  }
+  return null;
+}
+
+/**
+ * The best combination of weighted points to route through between
+ * startNode and endNode over `edgesSql` (which must cover
+ * groupCandidatePoints(points, start, end)), by real driving distance --
+ * see chooseBestGroup. One pgr_dijkstraCostMatrix query gives every
+ * pairwise distance between the start, end and each point's street ends
+ * (~0.2 s on real Maine data), so the network decides the order:
+ * straight-line ordering zig-zagged when a point sat on a one-way
+ * interstate carriageway only reachable from one side (a real Brunswick
+ * -> Freeport trip came out at 43 km for 21). Returns { points, nodes }
+ * (nodes = entry/exit pairs, in order) or null.
+ */
+async function bestWeightedGroup(db, edgesSql, points, start, end, startNode, endNode, directed) {
+  const candidates = groupCandidatePoints(points, start, end);
+  if (candidates.length === 0) return null;
+  const maxWeight = Math.max(0, ...points.map((p) => p.weight ?? 0));
+  const segments = [];
+  for (const point of candidates) {
+    const segment = await segmentForPoint(db, point, start);
+    if (!segment) continue;
+    const orientations = [];
+    if (segment.forward) orientations.push([segment.source, segment.target]);
+    if (segment.backward) orientations.push([segment.target, segment.source]);
+    segments.push({ point, factor: weightFactor(point.weight ?? 0, maxWeight), length: segment.length, orientations });
+  }
+  if (segments.length === 0) return null;
+
+  const nodeIds = [...new Set([startNode, endNode, ...segments.flatMap((s) => s.orientations.flat())].map(String))];
+  const { rows } = await db.query(
+    `SELECT start_vid, end_vid, agg_cost FROM pgr_dijkstraCostMatrix($1, $2::bigint[], directed => $3)`,
+    [edgesSql, nodeIds, directed]
+  );
+  const matrix = new Map(rows.map((r) => [`${r.start_vid}>${r.end_vid}`, r.agg_cost]));
+  const cost = (a, b) => (String(a) === String(b) ? 0 : (matrix.get(`${a}>${b}`) ?? Infinity));
+
+  const best = chooseBestGroup({ segments, startNode, endNode, cost });
+  return best && { points: best.points, nodes: best.nodes };
 }
 
 /**
@@ -195,10 +280,6 @@ function rankRoutes(routes, allPoints, limit, start, end) {
   return scored.slice(0, limit).map((entry) => entry.route);
 }
 
-// A weighted point further than this from any street isn't on a road we
-// can route along (same idea as roadReroute.js's node-snap limit).
-const MAX_POINT_TO_STREET_METERS = 300;
-
 /**
  * Via vertices that make a route actually drive the street segment a
  * weighted point is on: both of that segment's end intersections, in the
@@ -208,34 +289,15 @@ const MAX_POINT_TO_STREET_METERS = 300;
  * ever using that street.) A one-way segment is entered at its legal
  * start -- ordering by proximity alone forced long loops to drive a
  * one-way street, e.g. 13.6 km instead of 5 km for a short Portland trip.
- * A two-way segment is entered from the end nearer `from`. Segments closed
- * in both directions are skipped for the next nearest. Returns [] if no
- * usable street is within MAX_POINT_TO_STREET_METERS.
- *
- * `e.*` rather than naming reverse_cost: before one-way data existed the
- * edges view had no reverse_cost column, and a missing one means two-way.
+ * A two-way segment is entered from the end nearer `from`. Returns [] if
+ * no usable street is within MAX_POINT_TO_STREET_METERS.
  */
 async function viaNodesForPoint(db, point, from) {
-  const { rows } = await db.query(
-    `SELECT e.*,
-            ST_Distance(ST_StartPoint(e.geom)::geography, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography) AS source_dist,
-            ST_Distance(ST_EndPoint(e.geom)::geography, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography) AS target_dist
-     FROM streets_routing_edges e
-     WHERE ST_DWithin(e.geom::geography, ST_SetSRID(ST_MakePoint($1, $2), 4326)::geography, $5)
-     ORDER BY e.geom <-> ST_SetSRID(ST_MakePoint($1, $2), 4326)
-     LIMIT 5`,
-    [point.longitude, point.latitude, from.longitude, from.latitude, MAX_POINT_TO_STREET_METERS]
-  );
-  for (const row of rows) {
-    const forward = row.cost >= 0;
-    const backward = (row.reverse_cost ?? row.cost) >= 0;
-    if (forward && !backward) return [row.source, row.target];
-    if (backward && !forward) return [row.target, row.source];
-    if (forward && backward) {
-      return row.source_dist <= row.target_dist ? [row.source, row.target] : [row.target, row.source];
-    }
-  }
-  return [];
+  const segment = await segmentForPoint(db, point, from);
+  if (!segment) return [];
+  if (segment.forward && !segment.backward) return [segment.source, segment.target];
+  if (segment.backward && !segment.forward) return [segment.target, segment.source];
+  return segment.sourceDist <= segment.targetDist ? [segment.source, segment.target] : [segment.target, segment.source];
 }
 
 /**
@@ -262,8 +324,9 @@ async function viaRouteRows(db, edgesSql, nodeIds, directed) {
 module.exports = {
   rankRoutes,
   relevantWeightedPoints,
-  pointsInTravelOrder,
-  weightedViaGroups,
+  groupCandidatePoints,
+  chooseBestGroup,
+  bestWeightedGroup,
   weightFactor,
   distanceToPolylineMeters,
   viaRouteRows,

@@ -4,8 +4,8 @@ const assert = require('node:assert/strict');
 const {
   rankRoutes,
   relevantWeightedPoints,
-  pointsInTravelOrder,
-  weightedViaGroups,
+  groupCandidatePoints,
+  chooseBestGroup,
   weightFactor,
   distanceToPolylineMeters,
 } = require('../src/routePreference');
@@ -97,29 +97,56 @@ test('rankRoutes never lets a route over 3x the shortest win, however many point
   assert.equal(first.distanceMeters, 2000);
 });
 
-test('pointsInTravelOrder orders points by how far along the trip they are; weightedViaGroups adds the all-points route', () => {
-  const start = { latitude: 0, longitude: 0 };
-  const end = { latitude: 0, longitude: 3000 * M };
-  const late = { latitude: 100 * M, longitude: 2500 * M, weight: 9 };
-  const early = { latitude: -100 * M, longitude: 500 * M, weight: 1 };
-  const middle = { latitude: 100 * M, longitude: 1500 * M, weight: 4 };
-  assert.deepEqual(pointsInTravelOrder([late, early, middle], start, end), [early, middle, late]);
-  const groups = weightedViaGroups([late, early, middle], start, end);
-  assert.equal(groups.length, 4); // 3 singles (heaviest first) + all three together
-  assert.deepEqual(groups.at(-1), [early, middle, late]);
-  assert.deepEqual(weightedViaGroups([late], start, end), [[late]]);
+// chooseBestGroup works from real driving distances. Modelled on the
+// Brunswick -> Freeport trip: A is a one-way interstate carriageway
+// (only enterable at its north end, a1 -> a2), B a two-way street just
+// east of the destination. In straight-line terms B comes first, but by
+// road, doing B first means driving back north to reach A's entry.
+test('chooseBestGroup orders points by driving distance, honoring one-way direction', () => {
+  const legs = {
+    'S>a1': 18000, 'S>b1': 19000, 'S>b2': 19200, 'S>E': 21000,
+    'a2>b1': 1500, 'a2>b2': 1700, 'a2>E': 1600,
+    'b1>a1': 9000, 'b2>a1': 9200, 'b1>E': 600, 'b2>E': 400,
+  };
+  const cost = (x, y) => (x === y ? 0 : (legs[`${x}>${y}`] ?? Infinity));
+  const A = { name: 'A' };
+  const B = { name: 'B' };
+  const best = chooseBestGroup({
+    startNode: 'S',
+    endNode: 'E',
+    cost,
+    segments: [
+      { point: A, factor: 0.5, length: 1000, orientations: [['a1', 'a2']] },
+      { point: B, factor: 0.5, length: 200, orientations: [['b1', 'b2'], ['b2', 'b1']] },
+    ],
+  });
+  assert.deepEqual(best.points, [A, B]);
+  assert.deepEqual(best.nodes, ['a1', 'a2', 'b1', 'b2']);
+  assert.equal(best.length, 18000 + 1000 + 1500 + 200 + 400);
 });
 
-// From a real Brunswick -> Freeport trip: a point just east of the
-// destination projects onto the start -> end line before one north of it,
-// so projection order went past the destination and came back. The
-// shortest-path order visits the northern point first.
-test('pointsInTravelOrder visits points in the order of the shortest path, not by projection', () => {
+test('chooseBestGroup drops points that would push the route past 3x the direct distance', () => {
+  const legs = { 'S>E': 1000, 'S>p1': 500, 'p2>E': 500, 'S>q1': 4000, 'q2>E': 4000, 'p2>q1': 4000, 'q2>p1': 4000 };
+  const cost = (x, y) => (x === y ? 0 : (legs[`${x}>${y}`] ?? Infinity));
+  const near = { name: 'near' };
+  const far = { name: 'far' };
+  const best = chooseBestGroup({
+    startNode: 'S',
+    endNode: 'E',
+    cost,
+    segments: [
+      { point: near, factor: 0.5, length: 100, orientations: [['p1', 'p2']] },
+      { point: far, factor: 0.3, length: 100, orientations: [['q1', 'q2']] },
+    ],
+  });
+  assert.deepEqual(best.points, [near]); // with `far` it's > 3000 m
+});
+
+test('groupCandidatePoints keeps relevant points, heaviest first, at most 6', () => {
   const start = { latitude: 0, longitude: 0 };
-  const end = { latitude: 0, longitude: 10000 * M };
-  const east = { latitude: -500 * M, longitude: 9400 * M, weight: 3 }; // projects to 9400
-  const north = { latitude: 1500 * M, longitude: 9500 * M, weight: 5 }; // projects to 9500, far off to the north
-  const ordered = pointsInTravelOrder([east, north], start, end);
-  // start -> north -> east -> end is shorter than start -> east -> north -> end.
-  assert.deepEqual(ordered, [north, east]);
+  const end = { latitude: 0, longitude: 2000 * M };
+  const many = Array.from({ length: 8 }, (_, i) => ({ latitude: 100 * M, longitude: (200 + i * 200) * M, weight: i }));
+  const chosen = groupCandidatePoints(many, start, end);
+  assert.equal(chosen.length, 6);
+  assert.deepEqual(chosen.map((p) => p.weight), [7, 6, 5, 4, 3, 2]);
 });
