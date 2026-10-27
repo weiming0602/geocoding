@@ -77,3 +77,58 @@ export function positionAlongRoute(plan: DrivePlan, distanceMeters: number): Sim
 }
 
 export const METERS_PER_SECOND_PER_MPH = 0.44704;
+
+// Flat local-meters projection around `origin` -- fine at street scale.
+function toLocalMeters(origin: Coordinates, longitude: number, latitude: number): { x: number; y: number } {
+  const metersPerDegLat = 111320;
+  const metersPerDegLon = 111320 * Math.cos((origin.latitude * Math.PI) / 180);
+  return { x: (longitude - origin.longitude) * metersPerDegLon, y: (latitude - origin.latitude) * metersPerDegLat };
+}
+
+/**
+ * The part of a route ([lon, lat] pairs) still ahead of `position`: from
+ * the route point nearest the car onward, starting with the car itself --
+ * or null if the car is more than `maxOffRouteMeters` from the route.
+ * Used when the driver switches a simulated drive onto a detour that was
+ * computed a little while ago from where the car used to be: driving the
+ * detour from its own first point sent the car back there and into a
+ * U-turn. If the route passes the car more than once, the nearest pass
+ * wins (the earliest, on a tie).
+ */
+export function routeAheadOf(
+  position: Coordinates,
+  coordinates: [number, number][],
+  maxOffRouteMeters = 40
+): [number, number][] | null {
+  if (coordinates.length < 2) return null;
+  let best: { distance: number; index: number; point: [number, number] } | null = null;
+  for (let i = 0; i < coordinates.length - 1; i++) {
+    const a = toLocalMeters(position, ...coordinates[i]);
+    const b = toLocalMeters(position, ...coordinates[i + 1]);
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const lengthSquared = dx * dx + dy * dy;
+    const t = lengthSquared > 0 ? Math.min(1, Math.max(0, -(a.x * dx + a.y * dy) / lengthSquared)) : 0;
+    const distance = Math.hypot(a.x + t * dx, a.y + t * dy);
+    if (!best || distance < best.distance) {
+      const [lon1, lat1] = coordinates[i];
+      const [lon2, lat2] = coordinates[i + 1];
+      best = { distance, index: i, point: [lon1 + t * (lon2 - lon1), lat1 + t * (lat2 - lat1)] };
+    }
+  }
+  if (!best || best.distance > maxOffRouteMeters) return null;
+  return [[position.longitude, position.latitude], best.point, ...coordinates.slice(best.index + 1)];
+}
+
+/**
+ * Share (0-1) of route `a`'s points that lie within `withinMeters` of
+ * route `b` -- how closely `a` follows `b`. Both are [lon, lat] pairs.
+ */
+export function routeOverlap(a: [number, number][], b: [number, number][], withinMeters = 25): number {
+  if (a.length === 0 || b.length < 2) return 0;
+  const near = a.filter(([longitude, latitude]) => {
+    const ahead = routeAheadOf({ latitude, longitude }, b, withinMeters);
+    return ahead !== null;
+  });
+  return near.length / a.length;
+}

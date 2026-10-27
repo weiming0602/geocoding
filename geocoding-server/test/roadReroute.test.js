@@ -2,7 +2,13 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { OutOfRangeError, NotFoundError } = require('../src/errors');
-const { getRoadReroute, buildPathGeometry, alternativeRoutes, MAX_HAZARD_DISTANCE_METERS } = require('../src/roadReroute');
+const {
+  getRoadReroute,
+  buildPathGeometry,
+  alternativeRoutes,
+  startNodeAhead,
+  MAX_HAZARD_DISTANCE_METERS,
+} = require('../src/roadReroute');
 const { createTestDatabase } = require('./helpers');
 const { seedRoadRerouteFixture, setOneway, DRIVER, HAZARD, REJOIN, NODES } = require('./roadRerouteFixture');
 
@@ -318,4 +324,23 @@ test('getRoadReroute without a destination still ends at the estimated rejoin po
   });
   assert.equal(result.endsAtDestination, false);
   await db.close();
+});
+
+// The street node a route starts from: nearest AHEAD of the driver, not
+// the nearest overall (which can be behind, making the route begin with a
+// U-turn). Stub db: candidate nodes come back nearest first, as the real
+// query orders them.
+test('startNodeAhead picks the nearest node ahead of the heading, falling back to the nearest', async () => {
+  const M = 1 / 111320;
+  const nodes = [
+    { id: 'behind', latitude: 0, longitude: -50 * M }, // 50 m west
+    { id: 'ahead', latitude: 0, longitude: 120 * M }, // 120 m east
+  ];
+  const db = { query: async () => ({ rows: nodes }) };
+  assert.equal(await startNodeAhead(db, 0, 0, 90), 'ahead'); // heading east
+  assert.equal(await startNodeAhead(db, 0, 0, 270), 'behind'); // heading west: the west node is ahead
+  const onlyBehind = { query: async () => ({ rows: [nodes[0]] }) };
+  assert.equal(await startNodeAhead(onlyBehind, 0, 0, 90), 'behind'); // nothing ahead: nearest
+  const onIt = { query: async () => ({ rows: [{ id: 'here', latitude: 0, longitude: -3 * M }, nodes[1]] }) };
+  assert.equal(await startNodeAhead(onIt, 0, 0, 90), 'here'); // practically on a node: start there
 });

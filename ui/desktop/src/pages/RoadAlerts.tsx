@@ -39,7 +39,13 @@ import {
   shouldStronglyAlert,
   type WeightedPoint,
 } from '../../../shared/roadAlertsMatching';
-import { buildDrivePlan, positionAlongRoute, type DrivePlan } from '../../../shared/driveSimulation';
+import {
+  buildDrivePlan,
+  positionAlongRoute,
+  routeAheadOf,
+  routeOverlap,
+  type DrivePlan,
+} from '../../../shared/driveSimulation';
 import { buildGoogleMapsDirectionsUrl } from '../../../shared/googleMapsDirections';
 import { HAZARD_CATEGORY_ICONS, HAZARD_CATEGORY_LABELS } from '../../../shared/hazardCategories';
 import AlertSketch from '../components/AlertSketch';
@@ -1248,22 +1254,64 @@ export default function RoadAlerts() {
     return last ? { latitude: last.latitude, longitude: last.longitude } : undefined;
   };
 
-  // "Drive this route" on a detour, mid simulated drive: the car carries
-  // on from where it is now along that option instead (to the drive's
-  // target -- see simulationDestination). The trail so far is kept, and
-  // so is every alert already raised. Detours computed for the old route
-  // are dropped, since they started from where the car used to be.
+  // "Drive this route" on a detour, mid simulated drive: the route is
+  // recalculated from where the car is NOW to the drive's target (see
+  // simulationDestination), then driven. The detour was computed a little
+  // while ago from where the car used to be, so driving it from its own
+  // first point sent the car back there and into a U-turn. If the car is
+  // still on the chosen route, only the part ahead of it is driven;
+  // otherwise (it has passed where the detour turns off) fresh detours are
+  // fetched from here and the one closest to the chosen route is driven.
+  // The trail so far and alerts already raised are kept; detours computed
+  // for the old route are dropped.
+  const [switchingRoute, setSwitchingRoute] = useState(false);
   const handleDriveRerouteOption = useCallback(
-    (option: RerouteOption, index: number) => {
+    async (signal: RoadSignal, option: RerouteOption, index: number) => {
       const drive = simulatedDriveRef.current;
-      if (!drive || !simulatingRef.current || option.geometry.coordinates.length < 2) return;
-      const here = lastFixRef.current;
-      const coordinates: [number, number][] = here
-        ? [[here.longitude, here.latitude], ...option.geometry.coordinates]
-        : option.geometry.coordinates;
+      const current = accountRef.current;
+      if (!drive || !simulatingRef.current || !current) return;
+      const carNow = () => lastFixRef.current ?? positionRef.current;
+      const here = carNow();
+      if (!here) return;
+
+      let route = routeAheadOf(here, option.geometry.coordinates);
+      if (!route && typeof signal.latitude === 'number' && typeof signal.longitude === 'number') {
+        setSwitchingRoute(true);
+        try {
+          const fresh = await getRoadReroute({
+            driverLatitude: here.latitude,
+            driverLongitude: here.longitude,
+            driverHeading: position?.heading ?? undefined,
+            hazardLatitude: signal.latitude,
+            hazardLongitude: signal.longitude,
+            destination: simulationDestination(),
+            email: current.email,
+            serviceKey: current.serviceKey,
+          });
+          const closest = [...fresh.options].sort(
+            (a, b) =>
+              routeOverlap(b.geometry.coordinates, option.geometry.coordinates) -
+              routeOverlap(a.geometry.coordinates, option.geometry.coordinates)
+          )[0];
+          // The car kept moving while that was fetched.
+          const latest = carNow() ?? here;
+          if (closest) {
+            route =
+              routeAheadOf(latest, closest.geometry.coordinates) ?? [
+                [latest.longitude, latest.latitude],
+                ...closest.geometry.coordinates,
+              ];
+          }
+        } catch {
+          // Keep driving the current route -- nothing better to switch to.
+        } finally {
+          setSwitchingRoute(false);
+        }
+      }
+      if (!route || !simulatingRef.current) return;
       let plan: DrivePlan;
       try {
-        plan = buildDrivePlan(coordinates);
+        plan = buildDrivePlan(route);
       } catch {
         return;
       }
@@ -1273,7 +1321,7 @@ export default function RoadAlerts() {
       setExpandedRerouteSignalId(null);
       setHoveredRouteIndex(null);
     },
-    [runSimulatedDrive]
+    [runSimulatedDrive, position]
   );
 
   const handleToggleReroute = useCallback(
@@ -1850,9 +1898,10 @@ export default function RoadAlerts() {
                                         type="button"
                                         className="btn btn-primary"
                                         style={{ padding: '2px 10px', fontSize: 13 }}
-                                        onClick={() => handleDriveRerouteOption(option, index)}
+                                        onClick={() => handleDriveRerouteOption(signal, option, index)}
+                                        disabled={switchingRoute}
                                       >
-                                        Drive this route
+                                        {switchingRoute ? 'Recalculating…' : 'Drive this route'}
                                       </button>
                                     )}
                                     {position && (
