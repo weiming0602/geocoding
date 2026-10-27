@@ -549,9 +549,15 @@ export default function RoadAlerts() {
 
     // Discard the trail and any in-progress route match the moment
     // driving stops -- see docs/ROAD_ALERTS_DESIGN.md's privacy model.
+    // Except a simulated drive's driven path: it's a made-up drive, not
+    // where anyone really was, so it stays on the map and in the sketches
+    // until the next Start -- seeing the whole route taken is the point
+    // of the test.
     trailRef.current = [];
-    drivenPathRef.current = [];
-    setDrivenPath([]);
+    if (!wasSimulating) {
+      drivenPathRef.current = [];
+      setDrivenPath([]);
+    }
     setOnRouteIds(new Set());
 
     // A Stop-then-Start cycle should re-subscribe cleanly rather than
@@ -1383,6 +1389,12 @@ export default function RoadAlerts() {
     };
   }, []);
 
+  // The driven path as map coordinates (see drivenPath).
+  const drivenLine = useMemo<[number, number][]>(
+    () => drivenPath.map(({ latitude, longitude }) => [longitude, latitude]),
+    [drivenPath]
+  );
+
   const mapPoints = useMemo<SandboxPoint[]>(
     () =>
       signals
@@ -1692,6 +1704,7 @@ export default function RoadAlerts() {
                 focusPoint={focusPoint}
                 onPointClick={handleMarkerClick}
                 routeLine={simulatedRoute}
+                drivenLine={drivenLine}
                 followDriver={simulatedRoute !== null && followCar}
               />
             </div>
