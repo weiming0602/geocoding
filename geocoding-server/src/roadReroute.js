@@ -41,7 +41,7 @@ const REJOIN_MAX_ANGLE_DEG = 60;
 // the nearest one can be a dead end with no route to it.
 const REJOIN_CANDIDATE_COUNT = 3;
 // How far beyond the driver/hazard/rejoin bounding box the route search
-// may wander, in degrees (~3-5 km). pgr_ksp loads every edge its SQL
+// may wander, in degrees (~3-5 km). pgRouting loads every edge its SQL
 // returns on each call: the whole Maine/NH graph took ~8.6 s per detour.
 // A driver/rejoin point further than this from the nearest real topology
 // node isn't "near a mapped street" -- it's an unmapped area (a
@@ -50,13 +50,26 @@ const REJOIN_CANDIDATE_COUNT = 3;
 // whatever node happens to be nearest -- however far -- would silently
 // produce a nonsensical route rather than an honest "no data here yet".
 const MAX_NODE_SNAP_DISTANCE_METERS = 300;
-// How many distinct route options to ask pgr_ksp for -- the "couple of
-// choices" this feature exists to offer, same target_count ORS was
-// asked for previously.
+// How many distinct route options to offer -- the "couple of choices"
+// this feature exists to offer, same target_count ORS was asked for
+// previously.
 const ROUTE_OPTION_COUNT = 3;
-// Whether route searches honor one-way restrictions -- every query below
-// (pgr_ksp, and pgr_dijkstraVia for weighted-point routes) uses this, so
-// they always agree.
+// Alternatives come from the penalty method (see alternativeRoutes), not
+// pgr_ksp: in a city grid the k shortest paths are near-copies of each
+// other -- a real Portland detour's three options shared 95-99% of their
+// streets and differed by 2-30 m. Each search after the first makes the
+// streets already used this many times as expensive...
+const ALTERNATIVE_PENALTY = 3;
+// ...and a result only counts as a real alternative if at most this share
+// of its length is on streets an earlier option already uses,
+const MAX_SHARED_FRACTION = 0.6;
+// and it's at most this many times the shortest option.
+const MAX_ALTERNATIVE_RATIO = 2;
+// Searches to try (the first is the plain shortest route).
+const ALTERNATIVE_ATTEMPTS = 5;
+// Whether route searches honor one-way restrictions -- every route query
+// (alternativeRoutes, and viaRouteRows for weighted-point routes) uses
+// this, so they always agree.
 const ROUTE_DIRECTED = true;
 const BBOX_MARGIN_DEGREES = 0.05;
 
@@ -101,7 +114,7 @@ async function nearestTopologyNodeId(db, latitude, longitude) {
 }
 
 /**
- * pgr_ksp's first argument is a `text` SQL string it EXECUTEs itself, not
+ * pgr_dijkstra's first argument is a `text` SQL string it EXECUTEs itself, not
  * a normal bound-parameter slot -- hazardLatitude/hazardLongitude are
  * substituted directly into it. Safe here specifically because both
  * values already passed validateCoordinate (real numbers, range-checked)
@@ -160,10 +173,58 @@ async function rejoinCandidates(db, hazardLatitude, hazardLongitude, bearing, es
 }
 
 /**
- * Turns one pgr_ksp path's ordered (node, edge) rows into a single
+ * Up to `count` genuinely different routes from startNode to endNode over
+ * `edgesSql` (the penalty method): the shortest, then repeated searches
+ * with every street already used made ALTERNATIVE_PENALTY x as expensive,
+ * keeping a result only if it shares at most MAX_SHARED_FRACTION of its
+ * length with the options so far and is at most MAX_ALTERNATIVE_RATIO x
+ * the shortest. Returns [{ rows, distanceMeters }] (rows: node/edge in
+ * order, as buildPathGeometry expects; distances are real, unpenalized),
+ * shortest first -- [] if endNode is unreachable.
+ */
+async function alternativeRoutes(db, edgesSql, startNode, endNode, count, directed) {
+  const routes = [];
+  const used = new Set(); // edge ids on any route found so far
+  for (let attempt = 0; attempt < ALTERNATIVE_ATTEMPTS && routes.length < count; attempt += 1) {
+    const penalized = [...used].map((id) => String(BigInt(id))).join(', ');
+    // reverse_cost read via to_jsonb so this also works over edges SQL
+    // without that column (before one-way data existed), where a missing
+    // reverse_cost means two-way -- same convention as segmentForPoint.
+    const sql =
+      used.size === 0
+        ? edgesSql
+        : `SELECT id, source, target,
+                  CASE WHEN id IN (${penalized}) AND cost >= 0 THEN cost * ${ALTERNATIVE_PENALTY} ELSE cost END AS cost,
+                  CASE WHEN id IN (${penalized}) AND rc >= 0 THEN rc * ${ALTERNATIVE_PENALTY} ELSE rc END AS reverse_cost
+           FROM (SELECT e.*, COALESCE((to_jsonb(e) ->> 'reverse_cost')::float8, e.cost) AS rc FROM (${edgesSql}) AS e) AS e`;
+    const { rows } = await db.query(
+      `SELECT node, edge, cost FROM pgr_dijkstra($1, $2::bigint, $3::bigint, directed => $4) ORDER BY path_seq`,
+      [sql, startNode, endNode, directed]
+    );
+    if (rows.length === 0) break; // unreachable -- penalties never make it reachable
+    // Real (unpenalized) length of each edge used.
+    const lengths = rows
+      .filter((row) => row.edge >= 0)
+      .map((row) => ({ edge: row.edge, meters: used.has(row.edge) ? row.cost / ALTERNATIVE_PENALTY : row.cost }));
+    const distanceMeters = lengths.reduce((sum, { meters }) => sum + meters, 0);
+    const isAlternative =
+      routes.length === 0 ||
+      (distanceMeters <= MAX_ALTERNATIVE_RATIO * routes[0].distanceMeters &&
+        routes.every((route) => {
+          const shared = lengths.filter(({ edge }) => route.edges.has(edge)).reduce((sum, { meters }) => sum + meters, 0);
+          return shared <= MAX_SHARED_FRACTION * distanceMeters;
+        }));
+    if (isAlternative) routes.push({ rows, distanceMeters, edges: new Set(lengths.map(({ edge }) => edge)) });
+    for (const { edge } of lengths) used.add(edge);
+  }
+  return routes.map(({ rows, distanceMeters }) => ({ rows, distanceMeters }));
+}
+
+/**
+ * Turns one route's's ordered (node, edge) rows into a single
  * GeoJSON LineString coordinate list. Each streets_routing_edges row's
  * own geometry runs from its `source` node to its `target` node --
- * exactly the direction pgr_ksp traveled it only when the path departs
+ * exactly the direction the route traveled it only when the path departs
  * from that edge's `source`; when the path instead departs from its
  * `target` (the edge traveled backward relative to how it's stored),
  * that segment's coordinates must be reversed before appending. Adjacent
@@ -174,7 +235,7 @@ function buildPathGeometry(pathRows, edgesById) {
   for (const row of pathRows) {
     if (row.edge === -1) continue; // final row: no outgoing edge, nothing to append
     const edge = edgesById.get(row.edge);
-    if (!edge) continue; // shouldn't happen: every edge pgr_ksp used came from streets_routing_edges
+    if (!edge) continue; // shouldn't happen: every edge a route used came from streets_routing_edges
     const segment = edge.coordinates.slice();
     if (edge.source !== row.node) segment.reverse();
     for (const point of segment) {
@@ -187,10 +248,10 @@ function buildPathGeometry(pathRows, edgesById) {
 }
 
 /**
- * Finds 1-2 alternate driving routes from the driver's position to an
- * estimated point past the hazard, avoiding a buffer around the hazard
- * itself -- entirely from our own streets/topology data via pgRouting's
- * pgr_ksp, no external routing service. Throws OutOfRangeError if the
+ * Finds 1-3 genuinely different driving routes from the driver's
+ * position to a point past the hazard, avoiding a buffer around the
+ * hazard itself -- entirely from our own streets/topology data via
+ * pgRouting (alternativeRoutes), no external routing service. Throws OutOfRangeError if the
  * hazard is too far away to be a meaningful detour target, NotFoundError
  * if the driver/rejoin point isn't near any real routable street data
  * yet, or if no route around the hazard exists at all (a dead end/
@@ -238,7 +299,7 @@ async function getRoadReroute(
     throw new NotFoundError('no routable street data past this hazard to rejoin');
   }
 
-  let pathRows = [];
+  let paths = [];
   let rejoinPoint = null;
   let rejoinNode = null;
   for (const candidate of candidates) {
@@ -247,37 +308,23 @@ async function getRoadReroute(
       { latitude: hazardLatitude, longitude: hazardLongitude },
       candidate,
     ]);
-    // pgr_ksp is overloaded (bigint vs. anyarray node-id arguments, among
-    // others) -- pg sends $2/$3 without an explicit type OID, which
-    // Postgres can't resolve against that overload set on its own, hence
-    // the explicit ::bigint casts (confirmed necessary: omitting them
-    // throws "function pgr_ksp(...) is not unique").
-    ({ rows: pathRows } = await db.query(
-      `SELECT path_id, path_seq, node, edge, agg_cost
-       FROM pgr_ksp($1, $2::bigint, $3::bigint, ${ROUTE_OPTION_COUNT}, ${ROUTE_DIRECTED})
-       ORDER BY path_id, path_seq`,
-      [edgesSql, startNode, candidate.id]
-    ));
-    if (pathRows.length > 0) {
+    paths = await alternativeRoutes(db, edgesSql, startNode, candidate.id, ROUTE_OPTION_COUNT, ROUTE_DIRECTED);
+    if (paths.length > 0) {
       rejoinPoint = { latitude: candidate.latitude, longitude: candidate.longitude };
       rejoinNode = candidate;
       break;
     }
   }
 
-  const pathIds = [...new Set(pathRows.map((row) => row.path_id))];
-  if (pathIds.length === 0) {
+  if (paths.length === 0) {
     throw new NotFoundError('no route found around this hazard');
   }
 
-  // Candidate routes: pgr_ksp's shortest options, plus one through each
-  // weighted point (the driver's routine streets) that's roughly on the
-  // way -- then all ranked together by rankRoutes, which prefers a route
-  // passing a weighted point unless it's ~3x longer (see routePreference.js).
-  const paths = pathIds.map((pathId) => {
-    const rows = pathRows.filter((row) => row.path_id === pathId);
-    return { rows, distanceMeters: rows[rows.length - 1].agg_cost };
-  });
+  // Candidate routes: genuinely different plain options (alternativeRoutes),
+  // plus routes through the driver's weighted points (routine streets)
+  // roughly on the way -- then all ranked together by rankRoutes, which
+  // prefers passing weighted points unless a route is ~3x longer (see
+  // routePreference.js).
   const driver = { latitude: driverLatitude, longitude: driverLongitude };
   const hazard = { latitude: hazardLatitude, longitude: hazardLongitude };
   // Weighted-point routes are a preference on top of the plain routes
@@ -341,6 +388,7 @@ module.exports = {
   bearingDegreesFlat,
   destinationPointFlat,
   buildPathGeometry,
+  alternativeRoutes,
   REJOIN_DISTANCE_METERS,
   AVOID_RADIUS_METERS,
   MAX_HAZARD_DISTANCE_METERS,
