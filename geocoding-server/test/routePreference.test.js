@@ -109,3 +109,17 @@ test('pointsInTravelOrder orders points by how far along the trip they are; weig
   assert.deepEqual(groups.at(-1), [early, middle, late]);
   assert.deepEqual(weightedViaGroups([late], start, end), [[late]]);
 });
+
+// From a real Brunswick -> Freeport trip: a point just east of the
+// destination projects onto the start -> end line before one north of it,
+// so projection order went past the destination and came back. The
+// shortest-path order visits the northern point first.
+test('pointsInTravelOrder visits points in the order of the shortest path, not by projection', () => {
+  const start = { latitude: 0, longitude: 0 };
+  const end = { latitude: 0, longitude: 10000 * M };
+  const east = { latitude: -500 * M, longitude: 9400 * M, weight: 3 }; // projects to 9400
+  const north = { latitude: 1500 * M, longitude: 9500 * M, weight: 5 }; // projects to 9500, far off to the north
+  const ordered = pointsInTravelOrder([east, north], start, end);
+  // start -> north -> east -> end is shorter than start -> east -> north -> end.
+  assert.deepEqual(ordered, [north, east]);
+});
