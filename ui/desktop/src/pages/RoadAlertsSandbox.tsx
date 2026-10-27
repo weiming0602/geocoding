@@ -460,9 +460,10 @@ export default function RoadAlertsSandbox() {
           )}
         </div>
         <p className="text-muted" style={{ margin: 'var(--space-2) 0 0', fontSize: 12 }}>
-          Shortest path over our TIGER streets (every street treated as two-way, no speed data), except that a route
-          through your weighted points -- your usual roads, real or test (purple dots) -- is preferred unless it's
-          about 3x longer. A test route, not navigation. Road Alerts checks for hazards about every 15 real seconds, so at high fast-forward it
+          Shortest legal path over our TIGER streets, obeying one-way streets from OpenStreetMap (© OpenStreetMap
+          contributors; no speed data), except that a route through your weighted points -- your usual roads, real or
+          test (purple dots) -- is preferred unless it's about 3x longer. A test route, not navigation. Road Alerts
+          checks for hazards about every 15 real seconds, so at high fast-forward it
           covers more road between checks.
         </p>
       </div>

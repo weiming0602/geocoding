@@ -77,7 +77,8 @@ async function seedRoadRerouteFixture(pool) {
       geometry TEXT,
       geom geometry(Geometry, 4326),
       tnidf TEXT,
-      tnidt TEXT
+      tnidt TEXT,
+      mtfcc TEXT
     )
   `);
 
@@ -109,16 +110,46 @@ async function seedRoadRerouteFixture(pool) {
     SELECT tnidt, ST_EndPoint(geom) FROM streets
     ON CONFLICT (tnid) DO NOTHING
   `);
+  // Same shape as geocoding/schema.py's view: one-way restrictions come
+  // from street_oneway (empty unless a test adds rows -- see
+  // setOneway below), everything else is two-way.
+  await pool.query(`
+    CREATE TABLE street_oneway (
+      tlid TEXT PRIMARY KEY,
+      direction SMALLINT NOT NULL CHECK (direction IN (1, 0, -1)),
+      osm_id BIGINT NOT NULL,
+      overlap REAL NOT NULL
+    )
+  `);
   await pool.query(`
     CREATE OR REPLACE VIEW streets_routing_edges AS
     SELECT s.id AS id, nf.id AS source, nt.id AS target,
-           ST_Length(s.geom::geography) AS cost, s.geom AS geom
+           CASE WHEN o.direction = -1 OR (o.tlid IS NULL AND s.mtfcc IN ('S1100', 'S1630')) THEN -1
+                ELSE ST_Length(s.geom::geography) END AS cost,
+           CASE WHEN o.direction = 1 OR (o.tlid IS NULL AND s.mtfcc IN ('S1100', 'S1630')) THEN -1
+                ELSE ST_Length(s.geom::geography) END AS reverse_cost,
+           s.geom AS geom
     FROM streets s
     JOIN streets_topology_nodes nf ON nf.tnid = s.tnidf
     JOIN streets_topology_nodes nt ON nt.tnid = s.tnidt
+    LEFT JOIN street_oneway o ON o.tlid = s.tlid
   `);
 
   return edgeIds;
 }
 
-module.exports = { seedRoadRerouteFixture, DRIVER, HAZARD, REJOIN, NODES, EDGES };
+/**
+ * Marks fixture edges one-way, like osm_oneway.py would: `direction` 1 =
+ * only in the edge's drawn from -> to order (see EDGES), -1 = only
+ * against it.
+ */
+async function setOneway(pool, oneways) {
+  for (const [tlid, direction] of Object.entries(oneways)) {
+    await pool.query(`INSERT INTO street_oneway (tlid, direction, osm_id, overlap) VALUES ($1, $2, 0, 1)`, [
+      tlid,
+      direction,
+    ]);
+  }
+}
+
+module.exports = { seedRoadRerouteFixture, setOneway, DRIVER, HAZARD, REJOIN, NODES, EDGES };

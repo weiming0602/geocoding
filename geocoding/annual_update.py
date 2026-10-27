@@ -15,15 +15,20 @@ from datetime import date
 from pathlib import Path
 
 from .ingest_address_points import ingest_address_points
+from .osm_oneway import update_osm_oneway
 from .routing_topology import refresh_routing_topology
 from .states import STATES
 from .update_state import update_state
 
 
-def annual_update(dsn: str, year: int, data_dir: Path, *, states=None, skip_address_points=False) -> bool:
+def annual_update(
+    dsn: str, year: int, data_dir: Path, *, states=None, skip_address_points=False, skip_osm_oneway=False
+) -> bool:
     """Runs update_state for each of `states` (default: everything in
-    STATES), refreshes the pgRouting topology from the result, and unless
-    skipped, refreshes Maine's E911 address points. Returns True if every
+    STATES), refreshes the pgRouting topology from the result, then
+    (unless skipped) re-matches OpenStreetMap one-way restrictions onto
+    the refreshed streets (osm_oneway.py) and refreshes Maine's E911
+    address points. Returns True if every
     step succeeded; logs and continues past a failed step instead of
     aborting the whole run, so one state's network hiccup (or a routing
     refresh failure) doesn't block the others."""
@@ -48,6 +53,18 @@ def annual_update(dsn: str, year: int, data_dir: Path, *, states=None, skip_addr
     except Exception as exc:  # noqa: BLE001
         print(f"[{date.today()}] FAILED refreshing routing topology: {exc}", file=sys.stderr)
         ok = False
+
+    # After the topology refresh: matching only considers routable
+    # segments (resolved tnidf/tnidt), and the edges view reads the
+    # result live, so nothing needs rebuilding afterward. A failure here
+    # (e.g. Geofabrik unreachable) leaves last run's street_oneway intact.
+    if not skip_osm_oneway:
+        print(f"[{date.today()}] refreshing OpenStreetMap one-way restrictions...")
+        try:
+            update_osm_oneway(dsn, states, data_dir / "osm")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[{date.today()}] FAILED refreshing OSM one-way restrictions: {exc}", file=sys.stderr)
+            ok = False
 
     if not skip_address_points and "ME" in states:
         print(f"[{date.today()}] refreshing Maine E911 address points...")
@@ -80,10 +97,18 @@ def main() -> None:
     parser.add_argument(
         "--skip-address-points", action="store_true", help="Skip the Maine E911 address-point refresh"
     )
+    parser.add_argument(
+        "--skip-osm-oneway", action="store_true", help="Skip the OpenStreetMap one-way restriction refresh"
+    )
     args = parser.parse_args()
 
     ok = annual_update(
-        args.dsn, args.year, args.data_dir, states=args.states, skip_address_points=args.skip_address_points
+        args.dsn,
+        args.year,
+        args.data_dir,
+        states=args.states,
+        skip_address_points=args.skip_address_points,
+        skip_osm_oneway=args.skip_osm_oneway,
     )
     sys.exit(0 if ok else 1)
 

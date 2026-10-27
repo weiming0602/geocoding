@@ -72,7 +72,7 @@ const ALTERNATIVE_ATTEMPTS = 5;
 // Whether route searches honor one-way restrictions -- every route query
 // (alternativeRoutes, and viaRouteRows for weighted-point routes) uses
 // this, so they always agree.
-const ROUTE_DIRECTED = false;
+const ROUTE_DIRECTED = true;
 const BBOX_MARGIN_DEGREES = 0.05;
 
 /**
@@ -171,7 +171,7 @@ function buildAvoidHazardEdgesSql(hazardLatitude, hazardLongitude, boundsPoints 
       `${Math.max(...lons)}, ${Math.max(...lats)}, 4326), ${BBOX_MARGIN_DEGREES})`;
   }
   return (
-    'SELECT id, source, target, cost FROM streets_routing_edges ' +
+    'SELECT id, source, target, cost, reverse_cost FROM streets_routing_edges ' +
     'WHERE NOT ST_DWithin(geom::geography, ' +
     `ST_SetSRID(ST_MakePoint(${hazardLongitude}, ${hazardLatitude}), 4326)::geography, ${AVOID_RADIUS_METERS})` +
     boundsClause
@@ -298,11 +298,13 @@ function buildPathGeometry(pathRows, edgesById) {
  * an estimated rejoin point; the response's rejoinPoint is then the
  * destination's street node and endsAtDestination is true.
  *
- * TIGER carries no one-way/direction data at all (confirmed against
- * Census's own field documentation, not an ingest gap) and no speed
- * data -- every edge is treated as two-way (`directed: false`)
- * and durationSeconds is always null rather than a fabricated estimate.
- * Both limitations are surfaced to the driver in the UI, not hidden here.
+ * Directed: one-way streets are only traveled their legal way.
+ * TIGER itself has no one-way data, so direction comes from
+ * OpenStreetMap via streets_routing_edges' cost/reverse_cost (see
+ * geocoding/osm_oneway.py); a street OSM couldn't be matched to stays
+ * two-way. TIGER has no speed data either, so durationSeconds is always
+ * null rather than a fabricated estimate. Both limitations are surfaced
+ * to the driver in the UI, not hidden here.
  */
 async function getRoadReroute(
   db,

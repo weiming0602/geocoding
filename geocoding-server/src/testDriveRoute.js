@@ -14,8 +14,9 @@ const {
 // GPS fixes (see ui/shared/driveSimulation.ts and the Road Alerts sandbox),
 // so Road Alerts can be exercised from a desk -- same reasoning as
 // testRoadSignals.js's fake hazards. Gated behind ALLOW_TEST_ROAD_SIGNALS
-// in server.js. Never offered as real navigation: same TIGER caveats as
-// roadReroute.js (no one-way data, no speeds -- every street is two-way).
+// in server.js. Never offered as real navigation: same caveats as
+// roadReroute.js -- directed by OSM one-way data where matched (else
+// two-way), and no speed data.
 
 // Straight-line cap on a simulated trip -- comfortably covers any drive
 // worth sitting through at a desk, and keeps the bounding box below small.
@@ -28,7 +29,7 @@ const MAX_DRIVE_DISTANCE_METERS = 150000;
 const BBOX_MARGIN_DEGREES = 0.1;
 // Same role as roadReroute.js's ROUTE_DIRECTED: every route query here
 // (pgr_dijkstra, and pgr_dijkstraVia for weighted-point routes) uses it.
-const ROUTE_DIRECTED = false;
+const ROUTE_DIRECTED = true;
 
 /**
  * pgr_dijkstra's first argument is SQL text it EXECUTEs itself, so the
@@ -43,9 +44,47 @@ function buildBoundedEdgesSql(start, end, extraPoints = []) {
   const maxLon = Math.max(...points.map((p) => p.longitude));
   const maxLat = Math.max(...points.map((p) => p.latitude));
   return (
-    'SELECT id, source, target, cost FROM streets_routing_edges ' +
+    'SELECT id, source, target, cost, reverse_cost FROM streets_routing_edges ' +
     `WHERE geom && ST_Expand(ST_MakeEnvelope(${minLon}, ${minLat}, ${maxLon}, ${maxLat}, 4326), ${BBOX_MARGIN_DEGREES})`
   );
+}
+
+// How far a simulated drive's start/end may snap to reach an intersection.
+const MAX_ENDPOINT_SNAP_METERS = 300;
+
+/**
+ * Nearest intersection to (latitude, longitude) for a simulated drive's
+ * start or end, preferring one that touches an ordinary street over one
+ * only on a limited-access highway or ramp (MTFCC S1100/S1630): a typed
+ * address or a clicked spot is essentially never ON an interstate, but
+ * one beside it would otherwise snap onto its one-way carriageway -- e.g.
+ * a Portland start 25 m from I-295 began the drive on the interstate
+ * (13.3 km for a 4 km trip) instead of on Olympia St 98 m away. Falls
+ * back to the nearest intersection of any kind. (Real detours don't use
+ * this: a real driver CAN be on the interstate.)
+ */
+async function nearestLocalStreetNodeId(db, latitude, longitude) {
+  const { rows } = await db.query(
+    `WITH pt AS (SELECT ST_SetSRID(ST_MakePoint($1, $2), 4326) AS geom),
+     -- Nearest-first via the GiST index, THEN the distance limit: a
+     -- geography distance filter inside this CTE can't use the index.
+     nearby AS (
+       SELECT n.id, n.geom FROM streets_topology_nodes n, pt
+       ORDER BY n.geom <-> pt.geom
+       LIMIT 25
+     )
+     SELECT nearby.id FROM nearby, pt
+     WHERE ST_DWithin(nearby.geom::geography, pt.geom::geography, $3)
+       AND EXISTS (
+         SELECT 1 FROM streets s
+         WHERE s.geom && nearby.geom AND ST_Intersects(s.geom, nearby.geom)
+           AND coalesce(s.mtfcc, '') NOT IN ('S1100', 'S1630')
+       )
+     ORDER BY nearby.geom <-> pt.geom
+     LIMIT 1`,
+    [longitude, latitude, MAX_ENDPOINT_SNAP_METERS]
+  );
+  return rows.length > 0 ? rows[0].id : nearestTopologyNodeId(db, latitude, longitude);
 }
 
 /**
@@ -70,8 +109,8 @@ async function getDriveRoute(db, { startLatitude, startLongitude, endLatitude, e
   }
 
   const [startNode, endNode] = await Promise.all([
-    nearestTopologyNodeId(db, startLatitude, startLongitude),
-    nearestTopologyNodeId(db, endLatitude, endLongitude),
+    nearestLocalStreetNodeId(db, startLatitude, startLongitude),
+    nearestLocalStreetNodeId(db, endLatitude, endLongitude),
   ]);
   if (startNode === null || endNode === null) {
     throw new NotFoundError('no routable street data near the start or end point');
@@ -141,4 +180,4 @@ async function getDriveRoute(db, { startLatitude, startLongitude, endLatitude, e
   return best;
 }
 
-module.exports = { getDriveRoute, buildBoundedEdgesSql, MAX_DRIVE_DISTANCE_METERS, BBOX_MARGIN_DEGREES };
+module.exports = { getDriveRoute, nearestLocalStreetNodeId, buildBoundedEdgesSql, MAX_DRIVE_DISTANCE_METERS, BBOX_MARGIN_DEGREES };

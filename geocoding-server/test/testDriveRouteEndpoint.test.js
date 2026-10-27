@@ -2,7 +2,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const { withTestServer } = require('./helpers');
-const { seedRoadRerouteFixture, NODES } = require('./roadRerouteFixture');
+const { seedRoadRerouteFixture, setOneway, NODES } = require('./roadRerouteFixture');
 
 const TEST_EMAIL = 'alice@example.com';
 
@@ -111,6 +111,46 @@ test('GET /road-alerts/test/drive-route rejects a missing coordinate with 400 an
       assert.equal(wrongKey.status, 401);
     }),
     FIXTURE_OPTIONS
+  ));
+
+// One-way streets (geocoding/osm_oneway.py's street_oneway): E2 is the
+// direct row's second half, drawn N2 -> N3. Marked one-way against its
+// drawn direction (only N3 -> N2), the direct N1 -> N3 path is illegal,
+// so the route must take a detour row instead.
+test('GET /road-alerts/test/drive-route never travels a one-way street the wrong way', () =>
+  withTestServer(
+    withFlagEnabled(async ({ port, usersDb }) => {
+      const serviceKey = await registerTestAccount(usersDb);
+      const response = await fetch(driveRouteUrl(port, { ...BASE_PARAMS, serviceKey }));
+      assert.equal(response.status, 200);
+      const body = await response.json();
+      // Detours run ~200m north/south of the direct row (see roadRerouteFixture.js).
+      assert.ok(body.geometry.coordinates.some(([, lat]) => Math.abs(lat) > 0.001), 'expected a detour row');
+      assert.ok(body.distanceMeters > 2000, `expected a longer detour, got ${body.distanceMeters}m`);
+    }),
+    {
+      ...FIXTURE_OPTIONS,
+      geoSeed: async (pool) => {
+        await seedRoadRerouteFixture(pool);
+        await setOneway(pool, { E2: -1 });
+      },
+    }
+  ));
+
+test('GET /road-alerts/test/drive-route still uses a one-way street in its legal direction', () =>
+  withTestServer(
+    withFlagEnabled(async ({ port, usersDb }) => {
+      const serviceKey = await registerTestAccount(usersDb);
+      const body = await (await fetch(driveRouteUrl(port, { ...BASE_PARAMS, serviceKey }))).json();
+      assert.ok(Math.abs(body.distanceMeters - 2000) < 5, `expected the direct ~2000m row, got ${body.distanceMeters}`);
+    }),
+    {
+      ...FIXTURE_OPTIONS,
+      geoSeed: async (pool) => {
+        await seedRoadRerouteFixture(pool);
+        await setOneway(pool, { E1: 1, E2: 1 });
+      },
+    }
   ));
 
 // Weighted points (routine streets): a test weighted point on the north

@@ -8,6 +8,7 @@ module docstring) in addition to `postgis`.
 
 import psycopg
 
+from .osm_oneway import CREATE_STREET_ONEWAY_SQL
 from .schema import (
     CREATE_ROUTING_EDGES_VIEW_SQL,
     CREATE_ROUTING_TOPOLOGY_NODES_INDEXES_SQL,
@@ -44,5 +45,9 @@ def refresh_routing_topology(dsn: str) -> None:
         conn.execute(CREATE_ROUTING_TOPOLOGY_NODES_TABLE_SQL)
         conn.execute(CREATE_ROUTING_TOPOLOGY_NODES_INDEXES_SQL)
         conn.execute(POPULATE_TOPOLOGY_NODES_SQL)
+        # The edges view reads one-way restrictions from street_oneway
+        # (filled by osm_oneway.py) -- it must exist, even empty (every
+        # street two-way), before the view can be created.
+        conn.execute(CREATE_STREET_ONEWAY_SQL)
         conn.execute(CREATE_ROUTING_EDGES_VIEW_SQL)
         conn.commit()
