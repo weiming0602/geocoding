@@ -56,6 +56,24 @@ export type GeocodeResult =
       offsetSide: 'left' | 'right';
       offsetFeet: number;
       coordinates: Coordinates;
+    }
+  | {
+      // The street couldn't be found as written; an LLM picked which real
+      // street was meant (geocoding-server/src/llmAssist.js) and the
+      // result is interpolated along that one. Signed-in single geocodes
+      // and paid batch runs only.
+      input?: GeocodeInput;
+      match: StreetMatch;
+      source: 'llm_assisted';
+      rangeSide: 'left' | 'right';
+      offsetSide: 'left' | 'right';
+      offsetFeet: number;
+      coordinates: Coordinates;
+      originalInput: string;
+      // e.g. "Front St (ZIP 03833, NH)"
+      correctedAddress: string;
+      // Just the street name, e.g. "Front St"
+      correctedStreet?: string;
     };
 
 // POST /reverse-geocode -- NOT the same shape as GeocodeResult: the side

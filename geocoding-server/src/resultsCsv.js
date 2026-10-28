@@ -24,8 +24,8 @@ function resultsToCsv(results, ids) {
   const idsMatch = Array.isArray(ids) && ids.length === results.length;
   const successRows = [
     idsMatch
-      ? ['id', 'address', 'latitude', 'longitude', 'source', 'matchFullname']
-      : ['address', 'latitude', 'longitude', 'source', 'matchFullname'],
+      ? ['id', 'address', 'latitude', 'longitude', 'source', 'matchFullname', 'correctedStreet']
+      : ['address', 'latitude', 'longitude', 'source', 'matchFullname', 'correctedStreet'],
   ];
   const errorRows = [idsMatch ? ['id', 'address', 'error'] : ['address', 'error']];
 
@@ -39,6 +39,9 @@ function resultsToCsv(results, ids) {
         result.coordinates.longitude,
         result.source,
         result.match.fullname,
+        // Set only when source is llm_assisted: the street name the LLM
+        // read the input as (see llmAssist.js) -- empty otherwise.
+        result.correctedStreet ?? '',
       ]);
     } else {
       errorRows.push([...idCell, result.address, result.error]);

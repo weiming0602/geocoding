@@ -84,6 +84,9 @@ function readAddressContent(content) {
   return addresses;
 }
 
+// How many LLM-assisted retries a batch run makes at once (pass 2 below).
+const BATCH_LLM_CONCURRENCY = 4;
+
 /**
  * Geocodes each address independently, one at a time. A failure on one
  * line doesn't stop the batch; each result reports its own
@@ -95,21 +98,45 @@ function readAddressContent(content) {
  * connections instead of just taking longer.
  */
 async function geocodeAddressList(db, addresses, options = {}) {
+  // LLM-assisted retries are allowed only with a batch context (see
+  // llmAssist.js's batchLlmAssist: batch's own daily cap plus a per-run
+  // budget) -- never the single-geocode context, whose caps don't bound a
+  // file of thousands of addresses. Anything else is stripped, so a
+  // caller can't accidentally run a whole file through the single path.
+  const { llmAssist, ...plainOptions } = options;
+  const batchLlm = llmAssist && llmAssist.context === 'batch' && llmAssist.runBudget ? llmAssist : null;
+
+  // Pass 1: every row, plain geocoding, one at a time (see above).
   const results = [];
-  // Batch geocoding must never trigger the LLM-assisted retry (cost-
-  // scaling risk across a file of thousands of addresses -- see
-  // llmAssist.js's own doc comment). No caller currently passes
-  // `llmAssist` in `options`, but stripping it here makes that a
-  // structural guarantee rather than one resting on every future caller
-  // remembering not to.
-  const { llmAssist: _ignoredLlmAssist, ...safeOptions } = options;
-  for (const address of addresses) {
+  const retryable = [];
+  for (const [index, address] of addresses.entries()) {
     try {
-      const result = await geocode(db, address, safeOptions);
+      const result = await geocode(db, address, plainOptions);
       results.push({ address, success: true, ...result });
     } catch (err) {
       results.push({ address, success: false, error: err.message });
+      if (err instanceof NotFoundError) retryable.push(index);
     }
+  }
+
+  // Pass 2: rows that weren't found get one LLM-assisted retry (a
+  // misspelled street, a wrong ZIP...), BATCH_LLM_CONCURRENCY at a time --
+  // each retry waits ~1 s on the LLM, so strictly one at a time would add
+  // minutes to a messy file. Small enough to stay well under the pg pool.
+  if (batchLlm && retryable.length > 0) {
+    let next = 0;
+    const worker = async () => {
+      while (next < retryable.length && batchLlm.runBudget.remaining > 0) {
+        const index = retryable[next++];
+        try {
+          const result = await geocode(db, addresses[index], { ...plainOptions, llmAssist: batchLlm });
+          results[index] = { address: addresses[index], success: true, ...result };
+        } catch {
+          // Still not found -- keep the original pass-1 error.
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(BATCH_LLM_CONCURRENCY, retryable.length) }, worker));
   }
   return results;
 }
