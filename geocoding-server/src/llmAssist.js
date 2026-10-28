@@ -11,6 +11,52 @@ const { logLlmGeocodeAssist } = require('./llmGeocodeAssists');
 // on the failure path, so today's quota charges nothing about how many
 // times it fires -- this cap is the only thing that does.
 const MAX_ASSISTS_PER_ACCOUNT_PER_DAY = 50;
+// Batch runs have their own, larger allowance -- a messy customer file is
+// exactly where this earns its keep -- counted separately from single
+// geocodes (llm_geocode_assists.context). At roughly $0.001-0.002 per
+// attempt (Claude Haiku), the daily cap bounds a single account's worst
+// case at a dollar or two a day.
+const MAX_BATCH_ASSISTS_PER_ACCOUNT_PER_DAY = 1000;
+// ...and at most this many attempts in any one batch run.
+const MAX_ASSISTS_PER_BATCH_RUN = 200;
+
+// A rescued result farther than this from the town the address names is
+// rejected -- see correctionFitsNamedTown.
+const MAX_DISTANCE_FROM_NAMED_TOWN_METERS = 5000;
+
+/**
+ * Whether a corrected result is plausibly in the town the address names.
+ * Candidates come only from the address's own ZIP, so when that ZIP is
+ * wrong too, the "correction" can be a similar-sounding street in another
+ * town: a real batch row "16 Sammer St, Augusta, ME 04074" (04074 is
+ * Scarborough) came back as Sawyer St in Scarborough, 90 km away. A
+ * failed row is visible; a confidently wrong one isn't. Checked against
+ * Maine E911 address points' towns -- a town with none (all of NH, or a
+ * misspelled town name) can't be checked, so it's let through.
+ */
+async function correctionFitsNamedTown(db, town, coordinates) {
+  if (!town || !coordinates) return true;
+  const { rows } = await db.query(
+    `SELECT
+       EXISTS (SELECT 1 FROM address_points WHERE upper(town) = upper($1)) AS town_known,
+       EXISTS (
+         SELECT 1 FROM address_points
+         WHERE upper(town) = upper($1)
+           AND geom && ST_Expand(ST_SetSRID(ST_MakePoint($2, $3), 4326), 0.07)
+           AND ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, $4)
+       ) AS near`,
+    [town.trim(), coordinates.longitude, coordinates.latitude, MAX_DISTANCE_FROM_NAMED_TOWN_METERS]
+  );
+  return !rows[0].town_known || rows[0].near;
+}
+
+/**
+ * The llmAssist context for one authenticated batch run: batch's own
+ * daily cap, plus a per-run budget shared by every row of the run.
+ */
+function batchLlmAssist(usersDb, email) {
+  return { usersDb, email, context: 'batch', runBudget: { remaining: MAX_ASSISTS_PER_BATCH_RUN } };
+}
 
 /**
  * Tries to rescue a failed geocode() attempt via an LLM-assisted retry.
@@ -43,7 +89,13 @@ async function attemptLlmAssist(db, ctx, parsed, originalInput, offsetFeet) {
  * zero-candidate, or over-the-cap cases never reach the LLM at all, so
  * there's nothing about this feature's own activity to log for them.
  */
-async function attemptLlmAssistInner(db, { usersDb, email }, parsed, originalInput, offsetFeet) {
+async function attemptLlmAssistInner(
+  db,
+  { usersDb, email, context = 'single', runBudget = null },
+  parsed,
+  originalInput,
+  offsetFeet
+) {
   if (!isLlmAssistConfigured()) return null;
 
   const inCoverage = await isPlausiblyInCoverageArea(db, parsed);
@@ -55,11 +107,16 @@ async function attemptLlmAssistInner(db, { usersDb, email }, parsed, originalInp
   });
   if (candidates.length === 0) return null;
 
+  if (runBudget && runBudget.remaining <= 0) return null;
+  const dailyCap = context === 'batch' ? MAX_BATCH_ASSISTS_PER_ACCOUNT_PER_DAY : MAX_ASSISTS_PER_ACCOUNT_PER_DAY;
   const { rows: usageRows } = await usersDb.query(
-    `SELECT count(*)::int AS n FROM llm_geocode_assists WHERE email = $1 AND created_at > now() - interval '1 day'`,
-    [email]
+    `SELECT count(*)::int AS n FROM llm_geocode_assists
+     WHERE email = $1 AND context = $2 AND created_at > now() - interval '1 day'`,
+    [email, context]
   );
-  if (usageRows[0].n >= MAX_ASSISTS_PER_ACCOUNT_PER_DAY) return null;
+  if (usageRows[0].n >= dailyCap) return null;
+  // Spent the moment the LLM is actually called, whatever it answers.
+  if (runBudget) runBudget.remaining -= 1;
 
   const { picked, failureReason } = await pickCandidateWithLlm(originalInput, candidates);
 
@@ -71,6 +128,7 @@ async function attemptLlmAssistInner(db, { usersDb, email }, parsed, originalInp
       picked: null,
       succeeded: false,
       failureReason,
+      context,
     });
     return null;
   }
@@ -97,6 +155,19 @@ async function attemptLlmAssistInner(db, { usersDb, email }, parsed, originalInp
       // Try the next ZIP; if none works, the failure is logged just below.
     }
   }
+  if (result && !(await correctionFitsNamedTown(db, parsed.town, result.coordinates))) {
+    await logLlmGeocodeAssist(usersDb, {
+      email,
+      originalInput,
+      candidates,
+      picked: correctedAddress,
+      succeeded: false,
+      failureReason: 'town_mismatch',
+      context,
+    });
+    return null;
+  }
+
   if (!result) {
     // The picked candidate's STREET NAME is real, but that doesn't
     // guarantee its address ranges cover this house number
@@ -113,6 +184,7 @@ async function attemptLlmAssistInner(db, { usersDb, email }, parsed, originalInp
       picked: correctedAddress,
       succeeded: false,
       failureReason: 'rematch_failed',
+      context,
     });
     return null;
   }
@@ -124,6 +196,7 @@ async function attemptLlmAssistInner(db, { usersDb, email }, parsed, originalInp
     picked: correctedAddress,
     succeeded: true,
     failureReason: null,
+    context,
   });
 
   return {
@@ -131,7 +204,16 @@ async function attemptLlmAssistInner(db, { usersDb, email }, parsed, originalInp
     source: 'llm_assisted',
     originalInput,
     correctedAddress,
+    // Just the street name the LLM picked (correctedAddress also carries
+    // its ZIP/state), for showing "read as ..." next to a result.
+    correctedStreet: picked.fullname,
   };
 }
 
-module.exports = { attemptLlmAssist };
+module.exports = {
+  attemptLlmAssist,
+  batchLlmAssist,
+  MAX_ASSISTS_PER_ACCOUNT_PER_DAY,
+  MAX_BATCH_ASSISTS_PER_ACCOUNT_PER_DAY,
+  MAX_ASSISTS_PER_BATCH_RUN,
+};

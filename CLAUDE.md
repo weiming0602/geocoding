@@ -332,7 +332,9 @@ read-write).
   (404); a hazard beyond `MAX_HAZARD_DISTANCE_METERS` throws
   `OutOfRangeError` (422), same convention as `/road-signals/cross-street`.
 - **LLM-assisted geocoding** (`geocoding-server/src/llmAssist.js`, wired
-  into `POST /geocode` when the request is authenticated) retries a
+  into `POST /geocode` when the request is authenticated, and into all
+  three batch endpoints for a real, paid run -- never the
+  `ALLOW_TEST_EMPTY_SERVICE_KEY` smoke-test path) retries a
   failed geocode by asking Claude Haiku 4.5 to pick the real street
   Meridian's own data already has that the caller most likely meant
   (never free-text generation -- forced tool-use constrains it to
@@ -345,10 +347,18 @@ read-write).
   not an error, per `llmAssist.js`'s own outer error handling). Every
   attempt that reaches the LLM step is logged to a new
   `llm_geocode_assists` table in `geocoding_users` (reviewed manually
-  via `psql`, same convention as `feedback`'s table) and capped at 50
-  attempts/account/day, independent of the account's normal quota
-  (quota is only ever charged on a successful geocode, but this feature
-  exists exclusively on the failure path).
+  via `psql`, same convention as `feedback`'s table; its `context`
+  column says `single` or `batch`). Caps, independent of the account's
+  normal quota: 50 attempts/account/day for single geocodes; for batch,
+  1,000/account/day plus 200 per run (`batchLlmAssist`). Batch runs
+  every row plainly first, then gives each not-found row one LLM retry,
+  4 at a time (`batchGeocode.js`'s pass 2); a rescued row has `source:
+  'llm_assisted'` and `correctedStreet` (also a `correctedStreet` column
+  in the ZIP's results.csv), and the owner's batch-run email counts
+  them. Batch already charges quota for every row, found or not, so a
+  rescue costs the customer nothing extra. Batch responses can take
+  longer with this -- `ops/nginx-api.conf.example` sets
+  `proxy_read_timeout 300s` for that.
 - `FEEDBACK_NOTIFY_EMAIL` (optional -- unset = stub) is where `POST
   /feedback` emails you when a comment/question comes in; uses the same
   SES credentials above. The comment is saved in `geocoding_users`'

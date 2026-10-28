@@ -36,6 +36,11 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        # Batch requests are answered only when the whole file is done --
+        # one row at a time, plus up to ~1 minute of LLM-assisted retries
+        # on a messy file (see batchGeocode.js). nginx's 60 s default would
+        # cut a big run off with a 504 while it's still working.
+        proxy_read_timeout 300s;
     }
 
     # listen 443 ssl; ssl_certificate ...;  <- managed by certbot on the box

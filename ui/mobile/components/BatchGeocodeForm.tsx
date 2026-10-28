@@ -211,7 +211,7 @@ export default function BatchGeocodeForm({
       return;
     }
 
-    const header = '#,ID,Address,Success,Latitude,Longitude,Side,Error';
+    const header = '#,ID,Address,Success,Latitude,Longitude,Side,Error,Corrected street';
     const rows = results.map((result, index) => {
       const id = forwardedIds![index];
       if (result.success) {
@@ -224,11 +224,12 @@ export default function BatchGeocodeForm({
           String(result.coordinates.longitude),
           result.source === 'interpolation' ? result.rangeSide : '',
           '',
+          result.source === 'llm_assisted' ? (result.correctedStreet ?? result.correctedAddress) : '',
         ]
           .map(csvField)
           .join(',');
       }
-      return [String(index + 1), id, result.address, 'false', '', '', '', result.error].map(csvField).join(',');
+      return [String(index + 1), id, result.address, 'false', '', '', '', result.error, ''].map(csvField).join(',');
     });
     const csv = [header, ...rows].join('\n');
 
@@ -433,6 +434,9 @@ export default function BatchGeocodeForm({
                   <Text style={styles.cardMeta} selectable>
                     {result.coordinates.latitude.toFixed(6)}, {result.coordinates.longitude.toFixed(6)}
                     {result.source === 'interpolation' ? ` (${result.rangeSide} side)` : ''}
+                    {result.source === 'llm_assisted'
+                      ? ` · AI-corrected: ${result.correctedStreet ?? result.correctedAddress}`
+                      : ''}
                   </Text>
                 ) : (
                   <Text style={styles.errorText}>{result.error}</Text>

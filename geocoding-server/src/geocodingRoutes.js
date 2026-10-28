@@ -1,5 +1,6 @@
 const { geocode } = require('./geocode');
 const { geocodeAddressList, readAddressLines, readAddressContent } = require('./batchGeocode');
+const { batchLlmAssist } = require('./llmAssist');
 const { resultsToCsv } = require('./resultsCsv');
 const { buildZip } = require('./zip');
 const { reverseGeocode } = require('./reverseGeocode');
@@ -122,7 +123,9 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
       const usersDb = await usersDbPromise;
       await checkQuota(usersDb, email, serviceKey, addresses.length);
 
-      const results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
+      // A real, paid run: rows that aren't found get an LLM-assisted retry
+      // (see batchGeocode.js). The smoke-test branch above never does.
+      const results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET, llmAssist: batchLlmAssist(usersDb, email) });
       await useQuota(usersDb, email, addresses.length);
 
       // Only reached once a real account's quota has actually been spent
@@ -132,6 +135,7 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
         email,
         addressCount: addresses.length,
         successCount: results.filter((r) => r.success).length,
+        llmCorrectedCount: results.filter((r) => r.source === 'llm_assisted').length,
         source: 'batch',
       });
 
@@ -172,12 +176,13 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
       if (emailProvided) {
         const usersDb = await usersDbPromise;
         user = await checkQuota(usersDb, email, serviceKey, addresses.length);
-        results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
+        results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET, llmAssist: batchLlmAssist(usersDb, email) });
         await useQuota(usersDb, email, addresses.length);
         await sendBatchRunNotification({
           email,
           addressCount: addresses.length,
           successCount: results.filter((r) => r.success).length,
+        llmCorrectedCount: results.filter((r) => r.source === 'llm_assisted').length,
           source: 'batch/download',
         });
       } else {
@@ -228,7 +233,7 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
       const usersDb = await usersDbPromise;
       const user = await checkQuota(usersDb, email, serviceKey, addresses.length);
 
-      const results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
+      const results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET, llmAssist: batchLlmAssist(usersDb, email) });
       const { successCsv, errorCsv } = resultsToCsv(results);
       const zipBuffer = buildZip([
         { name: 'results.csv', content: successCsv },
@@ -240,6 +245,7 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
         email,
         addressCount: addresses.length,
         successCount: results.filter((r) => r.success).length,
+        llmCorrectedCount: results.filter((r) => r.source === 'llm_assisted').length,
         source: 'batch/email',
       });
       const delivery = await sendResultsEmail(email, zipBuffer, { addressCount: addresses.length });

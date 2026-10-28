@@ -513,6 +513,17 @@ export default function Batch() {
                                   <span className="tag tag-accent">{result.rangeSide} side</span>
                                 </>
                               )}
+                              {result.source === 'llm_assisted' && (
+                                <>
+                                  {' · '}
+                                  <span
+                                    className="tag tag-accent"
+                                    title={`Not found as written; AI read it as ${result.correctedAddress}`}
+                                  >
+                                    AI-corrected: {result.correctedStreet ?? result.correctedAddress}
+                                  </span>
+                                </>
+                              )}
                             </span>
                           ) : (
                             <span style={{ color: '#a4402a' }}>{result.error}</span>

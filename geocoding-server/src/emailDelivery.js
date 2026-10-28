@@ -261,17 +261,20 @@ async function sendTransactionsDigestEmail(transactions) {
  * succeeded by the time this is called, so a failed send here is only
  * logged, never surfaced to the caller.
  */
-async function sendBatchRunNotification({ email, addressCount, successCount, source }) {
+async function sendBatchRunNotification({ email, addressCount, successCount, source, llmCorrectedCount = 0 }) {
   const failedCount = addressCount - successCount;
   const text =
     `${email} ran a batch geocode (${source}): ${addressCount.toLocaleString()} address${addressCount === 1 ? '' : 'es'}, ` +
-    `${successCount.toLocaleString()} succeeded${failedCount > 0 ? `, ${failedCount.toLocaleString()} failed` : ''}.\n`;
+    `${successCount.toLocaleString()} succeeded` +
+    (llmCorrectedCount > 0 ? ` (${llmCorrectedCount.toLocaleString()} of them corrected by the LLM)` : '') +
+    `${failedCount > 0 ? `, ${failedCount.toLocaleString()} failed` : ''}.\n`;
 
   if (!isEmailConfigured() || !process.env.TRANSACTIONS_NOTIFY_EMAIL) {
     console.log('[emailDelivery stub] would notify owner of a batch geocode run', {
       email,
       addressCount,
       successCount,
+      llmCorrectedCount,
       source,
     });
     return { delivered: false, stubbed: true };

@@ -124,7 +124,7 @@ test('POST /geocode: an authenticated request still gets today\'s plain 404 when
   }
 });
 
-test('Batch geocoding never triggers the LLM, even with a deliberately misspelled, otherwise-assistable address', async () => {
+test('Batch geocoding without a batch LLM context never triggers the LLM, even with a misspelled, otherwise-assistable address', async () => {
   const savedFetch = global.fetch;
   global.fetch = () => {
     throw new Error('fetch should not have been called during a batch run');
@@ -135,6 +135,13 @@ test('Batch geocoding never triggers the LLM, even with a deliberately misspelle
       try {
         const results = await geocodeAddressList(db, ['997 Peqwket Trl, 04091'], { offsetFeet: 20 });
         assert.equal(results.length, 1);
+        // A single-geocode context (no batch run budget) is stripped too --
+        // its 50/day cap was never meant to bound a whole file.
+        const withSingleContext = await geocodeAddressList(db, ['997 Peqwket Trl, 04091'], {
+          offsetFeet: 20,
+          llmAssist: { usersDb: null, email: 'demo@example.com' },
+        });
+        assert.equal(withSingleContext[0].success, false);
         assert.equal(results[0].success, false);
         assert.match(results[0].error, /no street found matching/);
       } finally {
