@@ -5,7 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "dev:alerts": "vite --mode road-alerts --port 5174",
     "build": "tsc -b && vite build",
+    "build:alerts": "tsc -b && vite build --mode road-alerts",
     "preview": "vite preview",
     "test": "vitest run"
   },

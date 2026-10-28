@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { NavLink } from 'react-router';
 
 import { getRoadAlertsTestTools } from '../../../shared/api/client';
+import { SITE } from '../siteConfig';
 import { Icon } from './icons';
 
 // Road Alerts, Hazards in the Neighborhood, and Weighted Point Test all live under
@@ -11,7 +12,8 @@ import { Icon } from './icons';
 // strip at the top to stay one click apart regardless of which one you
 // landed on.
 const TABS = [
-  { to: '/road-alerts', label: 'Road Alerts', icon: 'roadAlerts' as const },
+  // On the Road Alerts site, Road Alerts itself is the home page.
+  { to: SITE === 'road-alerts' ? '/' : '/road-alerts', label: 'Road Alerts', icon: 'roadAlerts' as const, end: true },
   { to: '/road-alerts-home-board', label: 'Hazards in the Neighborhood', icon: 'neighborhood' as const },
   { to: '/road-alert-test', label: 'Weighted Point Test', icon: 'weightedPoints' as const },
   { to: '/road-alerts-alarm-test', label: 'Raising Alarm', icon: 'roadAlerts' as const },
@@ -52,7 +54,7 @@ export default function RoadAlertsTabs() {
   return (
     <nav className="page-tabs page-tabs-compact" aria-label="Road Alerts tools">
       {tabs.map((tab) => (
-        <NavLink key={tab.to} to={tab.to} className={({ isActive }) => `page-tab${isActive ? ' active' : ''}`}>
+        <NavLink key={tab.to} to={tab.to} end={'end' in tab ? tab.end : undefined} className={({ isActive }) => `page-tab${isActive ? ' active' : ''}`}>
           <Icon name={tab.icon} size={12} />
           {tab.label}
         </NavLink>
