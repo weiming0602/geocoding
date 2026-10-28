@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { isPushCapable, showAlertNotification } from './roadAlertNotifications';
+import { CHIME_DURATION_MS, CHIME_RINGS, isPushCapable, playAlertChime, showAlertNotification } from './roadAlertNotifications';
 
 describe('isPushCapable', () => {
   it('is false when serviceWorker or PushManager is unavailable', () => {
@@ -91,5 +91,57 @@ describe('showAlertNotification', () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(worker.postMessage).not.toHaveBeenCalled();
     expect(NotificationMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('playAlertChime', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  // A fake Web Audio context that records when each tone starts and stops.
+  function stubAudio() {
+    const starts: number[] = [];
+    const stops: number[] = [];
+    let closed = 0;
+    const param = { setValueAtTime: () => {}, exponentialRampToValueAtTime: () => {}, value: 0 };
+    class FakeAudioContext {
+      currentTime = 0;
+      destination = {};
+      createOscillator() {
+        return {
+          type: 'sine',
+          frequency: { value: 0 },
+          connect: () => {},
+          start: (t: number) => starts.push(t),
+          stop: (t: number) => stops.push(t),
+        };
+      }
+      createGain() {
+        return { gain: param, connect: () => {} };
+      }
+      close() {
+        closed += 1;
+        return Promise.resolve();
+      }
+    }
+    vi.stubGlobal('AudioContext', FakeAudioContext);
+    return { starts, stops, closed: () => closed };
+  }
+
+  it('rings the two-tone chime exactly 3 times, then stops', () => {
+    vi.useFakeTimers();
+    const audio = stubAudio();
+    playAlertChime();
+    expect(CHIME_RINGS).toBe(3);
+    expect(audio.starts).toHaveLength(6); // 3 rings x 2 tones
+    const ringStarts = audio.starts.filter((_, i) => i % 2 === 0);
+    expect(ringStarts[1] - ringStarts[0]).toBeCloseTo(ringStarts[2] - ringStarts[1]);
+    // Every tone has finished by the time callers start speaking.
+    expect(Math.max(...audio.stops) * 1000).toBeLessThanOrEqual(CHIME_DURATION_MS);
+    expect(audio.closed()).toBe(0);
+    vi.advanceTimersByTime(CHIME_DURATION_MS + 500);
+    expect(audio.closed()).toBe(1);
   });
 });

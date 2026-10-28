@@ -13,13 +13,26 @@ function getAudioContextConstructor(): typeof AudioContext | null {
   return g.AudioContext ?? g.webkitAudioContext ?? null;
 }
 
+// One alert = the two-tone chime rung this many times, then silence:
+// enough to be noticed, not so many it becomes annoying while driving.
+// Callers ring once per check however many hazards it raised (see
+// RoadAlerts.tsx's fetchSignals), so this is also the most an alert ever
+// rings.
+export const CHIME_RINGS = 3;
+// From the start of one ring to the start of the next.
+const RING_INTERVAL_SECONDS = 0.55;
+// How long all CHIME_RINGS rings take -- callers hold the spoken alert
+// until then, so it isn't talked over.
+export const CHIME_DURATION_MS = Math.round(((CHIME_RINGS - 1) * RING_INTERVAL_SECONDS + 0.32) * 1000);
+
 /**
- * A short, distinct two-tone chime -- synthesized via the Web Audio API
- * rather than an external audio file, so there's no asset to load or
- * license. Meant to be noticed (and make someone glance over) before the
- * spoken alert itself is even understood. Best-effort: a failure here
- * (no AudioContext, a browser autoplay restriction, etc.) never throws,
- * since the chime is a bonus on top of speech, not a replacement for it.
+ * A short, distinct two-tone chime, rung CHIME_RINGS times --
+ * synthesized via the Web Audio API rather than an external audio file,
+ * so there's no asset to load or license. Meant to be noticed (and make
+ * someone glance over) before the spoken alert itself is even
+ * understood. Best-effort: a failure here (no AudioContext, a browser
+ * autoplay restriction, etc.) never throws, since the chime is a bonus on
+ * top of speech, not a replacement for it.
  */
 export function playAlertChime(): void {
   const Ctor = getAudioContextConstructor();
@@ -27,10 +40,10 @@ export function playAlertChime(): void {
   try {
     const context = new Ctor();
     const now = context.currentTime;
-    const tones = [
-      { frequency: 660, start: 0 },
-      { frequency: 880, start: 0.16 },
-    ];
+    const tones = Array.from({ length: CHIME_RINGS }, (_, ring) => [
+      { frequency: 660, start: ring * RING_INTERVAL_SECONDS },
+      { frequency: 880, start: ring * RING_INTERVAL_SECONDS + 0.16 },
+    ]).flat();
     for (const { frequency, start } of tones) {
       const oscillator = context.createOscillator();
       const gain = context.createGain();
@@ -47,11 +60,11 @@ export function playAlertChime(): void {
       oscillator.stop(now + start + 0.16);
     }
     // Browsers cap how many AudioContexts can exist at once -- close this
-    // one once both tones have finished playing so repeated alerts don't
+    // one once every ring has finished playing so repeated alerts don't
     // leak them.
     setTimeout(() => {
       context.close().catch(() => {});
-    }, 400);
+    }, (CHIME_RINGS - 1) * RING_INTERVAL_SECONDS * 1000 + 400);
   } catch {
     // Best-effort -- see the module comment above.
   }
