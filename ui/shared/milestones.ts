@@ -210,6 +210,35 @@ export const MILESTONES: Milestone[] = [
       'Ways around a hazard now appear in rural areas and for any hazard you are alerted about, not just nearby ones, in a fraction of a second instead of several, and explain why when no detour is possible.',
   },
   {
+    date: 'Oct 26, 2026',
+    title: 'Detours that follow one-way streets',
+    description:
+      'Ways around a hazard now respect one-way streets, using OpenStreetMap data, so a suggested route never sends you the wrong way down a street or ramp.',
+  },
+  {
+    date: 'Oct 26, 2026',
+    title: 'Detours along the roads you usually drive',
+    description:
+      'Up to three genuinely different ways around a hazard, with the one along your usual roads offered first.',
+  },
+  {
+    date: 'Oct 27, 2026',
+    title: 'Your routine stays private',
+    description:
+      'Road Alerts no longer keeps points near where your drives start and end, and forgets the rest after 21 days.',
+  },
+  {
+    date: 'Oct 27, 2026',
+    title: 'Typos fixed in batch files too',
+    description:
+      'In a paid batch run, rows with a misspelled street are now matched to the real street you meant and marked as corrected -- never moved to a different town.',
+  },
+  {
+    date: 'Oct 27, 2026',
+    title: 'Alerts that get your attention, not your nerves',
+    description: 'A serious alert now rings three times, then speaks -- once, however many hazards arrive together.',
+  },
+  {
     date: 'Coming soon',
     title: 'New Hampshire accuracy upgrade',
     description: 'The same real per-house location data, for New Hampshire.',
