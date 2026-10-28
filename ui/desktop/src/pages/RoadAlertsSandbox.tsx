@@ -274,13 +274,17 @@ export default function RoadAlertsSandbox() {
 
   if (!account) {
     return (
-      <div style={{ maxWidth: 520, margin: '0 auto' }}>
+      // Left-aligned like the other Road Alerts tabs (not centered): only
+      // the registration card itself is kept narrow.
+      <div>
         <PageHeader icon="roadAlerts">Road Alerts sandbox</PageHeader>
         <RoadAlertsTabs />
         <p className="text-muted" style={{ marginBottom: 'var(--space-4)' }}>
           Sign in with a Road Alerts account to use the sandbox.
         </p>
-        <RoadAlertsRegistration onRegistered={setAccount} />
+        <div style={{ maxWidth: 480 }}>
+          <RoadAlertsRegistration onRegistered={setAccount} />
+        </div>
       </div>
     );
   }
