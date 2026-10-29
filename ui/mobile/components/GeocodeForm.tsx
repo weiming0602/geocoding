@@ -41,7 +41,11 @@ export default function GeocodeForm() {
       setCoordinates(result.coordinates);
       if (result.source === 'interpolation') {
         setMatchedStreet(`${result.match.fullname} (${result.rangeSide} side)`);
-        setMatchDetail(`Street ID: ${result.match.id}`);
+        setMatchDetail(
+          result.approximate
+            ? `Street ID: ${result.match.id} · approximate: placed between the two nearest address ranges`
+            : `Street ID: ${result.match.id}`
+        );
       } else if (result.source === 'llm_assisted') {
         setMatchedStreet(`${result.match.fullname} (${result.rangeSide} side)`);
         setMatchDetail(`AI-corrected: not found as written, read as ${result.correctedAddress}`);

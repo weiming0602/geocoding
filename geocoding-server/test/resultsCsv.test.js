@@ -31,10 +31,10 @@ test('resultsToCsv splits successes and failures into separate CSVs', () => {
   const { successCsv, errorCsv } = resultsToCsv(results);
 
   const successLines = successCsv.trim().split('\r\n');
-  assert.equal(successLines[0], 'address,latitude,longitude,source,matchFullname,correctedStreet');
+  assert.equal(successLines[0], 'address,latitude,longitude,source,matchFullname,correctedStreet,approximate');
   assert.equal(
     successLines[1],
-    '"997 Pequawket Trl, Standish, ME 04091",43.834391,-70.778549,interpolation,Pequawket Trl,'
+    '"997 Pequawket Trl, Standish, ME 04091",43.834391,-70.778549,interpolation,Pequawket Trl,,'
   );
 
   const errorLines = errorCsv.trim().split('\r\n');
@@ -59,7 +59,7 @@ test('resultsToCsv handles an all-success or all-failure batch', () => {
   assert.equal(allSuccess.errorCsv.trim(), 'address,error');
 
   const allFailure = resultsToCsv([{ address: 'B', success: false, error: 'nope' }]);
-  assert.equal(allFailure.successCsv.trim(), 'address,latitude,longitude,source,matchFullname,correctedStreet');
+  assert.equal(allFailure.successCsv.trim(), 'address,latitude,longitude,source,matchFullname,correctedStreet,approximate');
 });
 
 test('resultsToCsv includes a leading id column when ids matches results 1:1', () => {
@@ -81,10 +81,10 @@ test('resultsToCsv includes a leading id column when ids matches results 1:1', (
   const { successCsv, errorCsv } = resultsToCsv(results, ['CUST-1', 'CUST-2']);
 
   const successLines = successCsv.trim().split('\r\n');
-  assert.equal(successLines[0], 'id,address,latitude,longitude,source,matchFullname,correctedStreet');
+  assert.equal(successLines[0], 'id,address,latitude,longitude,source,matchFullname,correctedStreet,approximate');
   assert.equal(
     successLines[1],
-    'CUST-1,"997 Pequawket Trl, Standish, ME 04091",43.834391,-70.778549,address_point,Pequawket Trl,'
+    'CUST-1,"997 Pequawket Trl, Standish, ME 04091",43.834391,-70.778549,address_point,Pequawket Trl,,'
   );
 
   const errorLines = errorCsv.trim().split('\r\n');
@@ -106,11 +106,11 @@ test('resultsToCsv omits the id column when ids is missing, too short, or too lo
     },
   ];
 
-  assert.equal(resultsToCsv(results, undefined).successCsv.split('\r\n')[0], 'address,latitude,longitude,source,matchFullname,correctedStreet');
-  assert.equal(resultsToCsv(results, []).successCsv.split('\r\n')[0], 'address,latitude,longitude,source,matchFullname,correctedStreet');
+  assert.equal(resultsToCsv(results, undefined).successCsv.split('\r\n')[0], 'address,latitude,longitude,source,matchFullname,correctedStreet,approximate');
+  assert.equal(resultsToCsv(results, []).successCsv.split('\r\n')[0], 'address,latitude,longitude,source,matchFullname,correctedStreet,approximate');
   assert.equal(
     resultsToCsv(results, ['one', 'two']).successCsv.split('\r\n')[0],
-    'address,latitude,longitude,source,matchFullname,correctedStreet'
+    'address,latitude,longitude,source,matchFullname,correctedStreet,approximate'
   );
 });
 
@@ -127,5 +127,20 @@ test('resultsToCsv includes the corrected street for an LLM-assisted row', () =>
       coordinates: { latitude: 42.98, longitude: -70.94 },
     },
   ]);
-  assert.equal(successCsv.trim().split('\r\n')[1], '"9 Frunt St, Exeter, NH 03833",42.98,-70.94,llm_assisted,Front St,Front St');
+  assert.equal(successCsv.trim().split('\r\n')[1], '"9 Frunt St, Exeter, NH 03833",42.98,-70.94,llm_assisted,Front St,Front St,');
+});
+
+test('resultsToCsv marks a row placed in a gap between address ranges as approximate', () => {
+  const { successCsv } = resultsToCsv([
+    {
+      address: '35 High St, Exeter, NH 03833',
+      success: true,
+      source: 'interpolation',
+      approximate: true,
+      rangeSide: 'left',
+      match: { id: 1, fullname: 'High St' },
+      coordinates: { latitude: 42.98, longitude: -70.94 },
+    },
+  ]);
+  assert.equal(successCsv.trim().split('\r\n')[1], '"35 High St, Exeter, NH 03833",42.98,-70.94,interpolation,High St,,true');
 });

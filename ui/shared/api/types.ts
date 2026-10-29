@@ -56,6 +56,10 @@ export type GeocodeResult =
       offsetSide: 'left' | 'right';
       offsetFeet: number;
       coordinates: Coordinates;
+      // True when no segment's address range includes the number and it
+      // was placed in the gap between the two nearest ranges on the same
+      // street (geocoding-server/src/geocodeMatching.js's rangeGapFallback).
+      approximate?: boolean;
     }
   | {
       // The street couldn't be found as written; an LLM picked which real

@@ -1,4 +1,4 @@
-const { parseLinestring, interpolateAlongLine } = require('./interpolate');
+const { parseLinestring, interpolateAlongLine, metersPerDegree } = require('./interpolate');
 const { expandStreetSuffix, abbreviateStreetSuffix } = require('./streetSuffixes');
 const { NotFoundError, OutOfRangeError } = require('./errors');
 
@@ -147,6 +147,19 @@ const SIDES = {
   right: { fromCol: 'rfromadd', toCol: 'rtoadd', zipCol: 'zipr' },
 };
 
+/** The `match` part of a result, for a matched streets row. */
+function describeMatch(row, state) {
+  const match = { id: row.id, tlid: row.tlid, fullname: row.fullname, zipl: row.zipl, zipr: row.zipr };
+  if (state) {
+    if (state.length === 2) {
+      match.state_abbr = row.state_abbr;
+    } else {
+      match.state = row.state;
+    }
+  }
+  return match;
+}
+
 /**
  * If `row`'s `side` can hold house `number` in ZIP `zip`, returns the
  * interpolation fraction along that side's range; otherwise null. A side
@@ -168,6 +181,72 @@ function sideFraction(row, side, number, zip) {
   const sideIsMixedParity = fromNum % 2 !== toNum % 2;
   if (!sideIsMixedParity && fromNum % 2 !== number % 2) return null;
   return fromNum === toNum ? 0 : (number - fromNum) / (toNum - fromNum);
+}
+
+// A house number no segment's range covers, but which sits in a small hole
+// between two ranges on the same street (see rangeGapFallback): at most
+// this many house numbers wide...
+const MAX_RANGE_GAP_NUMBERS = 50;
+// ...and with the two ranges' facing ends physically this close, so it's
+// a hole in the numbering, not two unrelated stretches of the street.
+const MAX_RANGE_GAP_METERS = 150;
+
+/** The numbered range on `row`'s `side` usable for `number` in `zip`, or null. */
+function sideRange(row, side, number, zip) {
+  const { fromCol, toCol, zipCol } = SIDES[side];
+  if (row[zipCol] !== zip) return null;
+  const from = parseInt(row[fromCol], 10);
+  const to = parseInt(row[toCol], 10);
+  if (Number.isNaN(from) || Number.isNaN(to)) return null;
+  const mixedParity = from % 2 !== to % 2;
+  if (!mixedParity && from % 2 !== number % 2) return null;
+  return { row, side, from, to, low: Math.min(from, to), high: Math.max(from, to) };
+}
+
+/** Where `value` (one of the range's two ends) lies on the street, offset to its side. */
+function rangeEndPoint(range, value, offsetFeet) {
+  const fraction = range.from === range.to ? 0 : (value - range.from) / (range.to - range.from);
+  return interpolateAlongLine(parseLinestring(range.row.geometry), fraction, offsetFeet, range.side);
+}
+
+/**
+ * For a house number in a gap between two segments' ranges -- TIGER often
+ * leaves small holes: Exeter NH's High St runs odd 29-31 on one segment
+ * and 37-53 on the next, so 33 and 35 matched nothing -- places it
+ * between the facing ends of the nearest range below and the nearest
+ * above, on the same street, ZIP and side numbering. Only for a real
+ * hole: both neighbours must exist (a number past the street's last
+ * address still fails), the gap must be small, and the two ends close
+ * together. Returns { range, coordinates } (range: the nearer neighbour)
+ * or null.
+ */
+function rangeGapFallback(candidates, number, zip, offsetFeet) {
+  let below = null;
+  let above = null;
+  for (const row of candidates) {
+    for (const side of ['left', 'right']) {
+      const range = sideRange(row, side, number, zip);
+      if (!range) continue;
+      if (range.high < number && (!below || range.high > below.high)) below = range;
+      if (range.low > number && (!above || range.low < above.low)) above = range;
+    }
+  }
+  if (!below || !above || above.low - below.high > MAX_RANGE_GAP_NUMBERS) return null;
+  // Each end is offset by its own segment's side: left/right follow the
+  // direction each segment happens to be digitized in, so the same side
+  // of the road can be "left" on one segment and "right" on the next --
+  // both ends still land on the side holding this number's parity.
+
+  const [lon1, lat1] = rangeEndPoint(below, below.high, offsetFeet);
+  const [lon2, lat2] = rangeEndPoint(above, above.low, offsetFeet);
+  const [mPerDegLon, mPerDegLat] = metersPerDegree((lat1 + lat2) / 2);
+  if (Math.hypot((lon2 - lon1) * mPerDegLon, (lat2 - lat1) * mPerDegLat) > MAX_RANGE_GAP_METERS) return null;
+
+  const t = (number - below.high) / (above.low - below.high);
+  return {
+    range: number - below.high <= above.low - number ? below : above,
+    coordinates: { latitude: lat1 + (lat2 - lat1) * t, longitude: lon1 + (lon2 - lon1) * t },
+  };
 }
 
 /**
@@ -206,6 +285,20 @@ async function matchByStreetAndZip(db, number, streetName, zip, state, offsetFee
   }
 
   if (!matchedRow) {
+    const gap = rangeGapFallback(candidates, number, zip, offsetFeet);
+    if (gap) {
+      return {
+        match: describeMatch(gap.range.row, state),
+        source: 'interpolation',
+        rangeSide: gap.range.side,
+        offsetSide: gap.range.side,
+        offsetFeet,
+        coordinates: gap.coordinates,
+        // No segment's range holds this number; it was placed in the gap
+        // between the two nearest ranges (see rangeGapFallback).
+        approximate: true,
+      };
+    }
     const parity = number % 2 === 1 ? 'odd' : 'even';
     throw new OutOfRangeError(
       `no "${streetName}" segment in ZIP ${zip} has a range of ${parity} numbers containing ${number} ` +
@@ -219,23 +312,8 @@ async function matchByStreetAndZip(db, number, streetName, zip, state, offsetFee
   const points = parseLinestring(matchedRow.geometry);
   const [longitude, latitude] = interpolateAlongLine(points, fraction, offsetFeet, offsetSide);
 
-  const match = {
-    id: matchedRow.id,
-    tlid: matchedRow.tlid,
-    fullname: matchedRow.fullname,
-    zipl: matchedRow.zipl,
-    zipr: matchedRow.zipr,
-  };
-  if (state) {
-    if (state.length === 2) {
-      match.state_abbr = matchedRow.state_abbr;
-    } else {
-      match.state = matchedRow.state;
-    }
-  }
-
   return {
-    match,
+    match: describeMatch(matchedRow, state),
     source: 'interpolation',
     rangeSide,
     offsetSide,

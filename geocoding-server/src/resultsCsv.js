@@ -24,8 +24,8 @@ function resultsToCsv(results, ids) {
   const idsMatch = Array.isArray(ids) && ids.length === results.length;
   const successRows = [
     idsMatch
-      ? ['id', 'address', 'latitude', 'longitude', 'source', 'matchFullname', 'correctedStreet']
-      : ['address', 'latitude', 'longitude', 'source', 'matchFullname', 'correctedStreet'],
+      ? ['id', 'address', 'latitude', 'longitude', 'source', 'matchFullname', 'correctedStreet', 'approximate']
+      : ['address', 'latitude', 'longitude', 'source', 'matchFullname', 'correctedStreet', 'approximate'],
   ];
   const errorRows = [idsMatch ? ['id', 'address', 'error'] : ['address', 'error']];
 
@@ -42,6 +42,9 @@ function resultsToCsv(results, ids) {
         // Set only when source is llm_assisted: the street name the LLM
         // read the input as (see llmAssist.js) -- empty otherwise.
         result.correctedStreet ?? '',
+        // "true" when placed in a gap between two segments' address
+        // ranges (geocodeMatching.js's rangeGapFallback), else empty.
+        result.approximate ? 'true' : '',
       ]);
     } else {
       errorRows.push([...idCell, result.address, result.error]);

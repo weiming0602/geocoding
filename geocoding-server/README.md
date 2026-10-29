@@ -14,13 +14,29 @@ Express API that resolves a free-text address to coordinates using the
    exact then substring fallback) and `zipl` equals the parsed ZIP.
    A named street is usually split into many address-range segments,
    so all candidates are checked.
-3. **Odd** house numbers are interpolated against the segment's
-   **left** range (`lfromadd`/`ltoadd`) and offset to the **left** of
-   the centerline; **even** numbers use the **right** range
-   (`rfromadd`/`rtoadd`) and offset **right**. The offset distance
-   defaults to 20 feet (`OFFSET_FEET` env var).
+3. Each segment's two sides are checked: a side is used when its own
+   ZIP matches and its range (`lfromadd`/`ltoadd` or
+   `rfromadd`/`rtoadd`) holds numbers of the same parity and contains
+   the house number. **Which side carries odd numbers isn't fixed** --
+   TIGER's left/right follow the direction each segment happens to be
+   digitized in (about 57% of Maine/NH segments have odd numbers on the
+   right) -- so "odd -> left" is only the tie-breaker for the few
+   segments with the same parity on both sides (`sideFraction()` in
+   `src/geocodeMatching.js`). The point is interpolated along that range
+   and offset to that side of the centerline, 20 feet by default
+   (`OFFSET_FEET` env var).
 4. The first candidate segment whose range actually contains the
    number is used for interpolation.
+5. If none does, but the number sits in a small hole between two ranges
+   on the same street, ZIP and side numbering -- TIGER often skips a
+   few numbers between segments (Exeter NH's High St: odd 29-31, then
+   37-53, so 33 and 35 match nothing) -- it's placed between the two
+   ranges' facing ends and marked `"approximate": true`. Only when both
+   neighbours exist (never past the street's first or last address),
+   the gap is at most 50 numbers, and the two ends are within 150 m
+   (`rangeGapFallback()`). Checked against Maine E911 points: median
+   86 m from the real location, vs 54 m for ordinary interpolation.
+   Anything else is a `422`.
 
 Before any of the above, Maine addresses are checked against a real,
 surveyed E911 address point (`address_points`, keyed on street name +
