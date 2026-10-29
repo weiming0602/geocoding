@@ -6,7 +6,9 @@ two-way -- and could advise a detour the wrong way down a one-way street.
 OSM does carry it (`oneway`, roundabouts, motorways), so this:
 
   1. downloads Geofabrik's per-state OSM extracts (.osm.pbf),
-  2. loads every drivable OSM way into `osm_ways` (load_osm_ways),
+  2. loads every drivable OSM way into `osm_ways` (load_osm_ways) -- one
+     state at a time, emptied again once that state is matched: it's only
+     matching input, nearly as big as `streets`, and routing never reads it,
   3. matches each routable TIGER segment to the OSM way that overlaps it
      most, and records the OSM way's direction -- relative to the TIGER
      segment's own tnidf -> tnidt orientation -- in `street_oneway`
@@ -246,7 +248,10 @@ MATCH_SQL = f"""
 CREATE TEMP TABLE tiger_m ON COMMIT DROP AS
 SELECT tlid, fullname, mtfcc, ST_Transform(geom, {MATCH_SRID}) AS g
 FROM streets
-WHERE tnidf IS NOT NULL AND tnidt IS NOT NULL AND GeometryType(geom) = 'LINESTRING';
+WHERE tnidf IS NOT NULL AND tnidt IS NOT NULL AND GeometryType(geom) = 'LINESTRING'
+  -- Only TIGER segments inside the loaded OSM area (one state at a time
+  -- in update_osm_oneway) -- not the whole country's streets each time.
+  AND geom && (SELECT ST_SetSRID(ST_Expand(ST_Extent(geom), 0.01)::geometry, 4326) FROM osm_ways);
 CREATE INDEX ON tiger_m (tlid);
 
 CREATE TEMP TABLE tiger_keys ON COMMIT DROP AS
@@ -258,31 +263,62 @@ SELECT DISTINCT tlid, key FROM (
 ) k WHERE key <> '';
 CREATE INDEX ON tiger_keys (tlid, key);
 
-CREATE TEMP TABLE pairs ON COMMIT DROP AS
+-- Pairs from this batch are kept (osm_match_pairs) until every batch has
+-- run; grouping and picking happen once, over all of them, in
+-- APPLY_MATCHES_SQL. A road crossing a state line is in both states'
+-- extracts, so a (segment, way) pair already kept is skipped, not
+-- counted twice.
+INSERT INTO osm_match_pairs
 SELECT t.tlid, ST_Length(t.g) AS len, t.mtfcc, o.osm_id, o.highway,
     ST_Length(ST_Intersection(t.g, o.buffer)) AS covered,
     ST_Distance(ST_LineInterpolatePoint(t.g, 0.5), o.g) AS mid_dist,
     o.oneway * CASE WHEN ST_LineLocatePoint(o.g, ST_StartPoint(t.g)) < ST_LineLocatePoint(o.g, ST_EndPoint(t.g))
                     THEN 1 ELSE -1 END AS direction,
-    coalesce(pg_temp.norm_street_name(o.name), '') AS osm_name_key,
-    ARRAY(SELECT pg_temp.norm_street_name(r) FROM unnest(string_to_array(coalesce(o.ref, ''), ';')) AS r
-          WHERE pg_temp.norm_street_name(r) <> '') AS osm_ref_keys,
     COALESCE(NULLIF(pg_temp.norm_street_name(o.name), ''),
-             pg_temp.norm_street_name(split_part(coalesce(o.ref, ''), ';', 1))) AS road_key
+             pg_temp.norm_street_name(split_part(coalesce(o.ref, ''), ';', 1))) AS road_key,
+    EXISTS (SELECT 1 FROM tiger_keys k
+            WHERE k.tlid = t.tlid
+              AND (k.key = coalesce(pg_temp.norm_street_name(o.name), '')
+                   OR k.key = ANY (ARRAY(SELECT pg_temp.norm_street_name(r)
+                                         FROM unnest(string_to_array(coalesce(o.ref, ''), ';')) AS r
+                                         WHERE pg_temp.norm_street_name(r) <> '')))) AS names_agree,
+    EXISTS (SELECT 1 FROM tiger_keys k WHERE k.tlid = t.tlid) AS tiger_named
 FROM tiger_m t
-JOIN osm_ways o ON ST_DWithin(t.g, o.g, {MATCH_DISTANCE_M});
+JOIN osm_ways o ON ST_DWithin(t.g, o.g, {MATCH_DISTANCE_M})
+ON CONFLICT (tlid, osm_id) DO NOTHING;
+"""
 
+# A plain working table, emptied after every run -- only street_oneway is
+# kept. One row per (TIGER segment, OSM way) within the corridor; see the
+# matching steps above.
+CREATE_MATCH_PAIRS_SQL = """
+CREATE UNLOGGED TABLE IF NOT EXISTS osm_match_pairs (
+    tlid TEXT NOT NULL,
+    len DOUBLE PRECISION NOT NULL,
+    mtfcc TEXT,
+    osm_id BIGINT NOT NULL,
+    highway TEXT NOT NULL,
+    covered DOUBLE PRECISION,
+    mid_dist DOUBLE PRECISION,
+    direction INTEGER NOT NULL,
+    road_key TEXT,
+    names_agree BOOLEAN NOT NULL,
+    tiger_named BOOLEAN NOT NULL,
+    PRIMARY KEY (tlid, osm_id)
+);
+"""
+
+APPLY_MATCHES_SQL = f"""
 CREATE TEMP TABLE groups ON COMMIT DROP AS
 SELECT p.tlid, p.len, p.mtfcc, p.road_key, p.direction,
     LEAST(sum(p.covered) / NULLIF(p.len, 0), 1.0) AS overlap,
     min(p.mid_dist) AS dist,
     (array_agg(p.osm_id ORDER BY p.mid_dist, p.osm_id))[1] AS osm_id,
-    bool_or(EXISTS (SELECT 1 FROM tiger_keys k
-                    WHERE k.tlid = p.tlid AND (k.key = p.osm_name_key OR k.key = ANY (p.osm_ref_keys)))) AS names_agree,
-    EXISTS (SELECT 1 FROM tiger_keys k WHERE k.tlid = p.tlid) AS tiger_named,
+    bool_or(p.names_agree) AS names_agree,
+    bool_or(p.tiger_named) AS tiger_named,
     bool_and(p.road_key = '') AS osm_unnamed,
     bool_or(p.highway LIKE '%%_link' OR p.highway = 'motorway') AS osm_ramp_or_motorway
-FROM pairs p
+FROM osm_match_pairs p
 GROUP BY p.tlid, p.len, p.mtfcc, p.road_key, p.direction;
 
 CREATE TEMP TABLE best_match ON COMMIT DROP AS
@@ -309,29 +345,74 @@ WHERE (
 """
 
 
+def _collect_pairs(conn) -> None:
+    """Matches the currently loaded osm_ways against TIGER, adding every
+    (segment, way) pair to osm_match_pairs."""
+    conn.execute(CREATE_MATCH_PAIRS_SQL)
+    conn.execute(NORMALIZE_NAME_FUNCTION_SQL)
+    conn.execute(MATCH_SQL)
+
+
+def _apply_matches(conn) -> int:
+    """Replaces street_oneway from osm_match_pairs (every batch so far)
+    and empties it. Returns how many segments are one-way."""
+    conn.execute(CREATE_STREET_ONEWAY_SQL)
+    conn.execute(APPLY_MATCHES_SQL)
+    conn.execute("TRUNCATE osm_match_pairs")
+    return conn.execute("SELECT count(*) FROM street_oneway WHERE direction <> 0").fetchone()[0]
+
+
 def refresh_street_oneway(dsn: str) -> int:
-    """Re-matches every routable TIGER segment against osm_ways and
-    replaces street_oneway in one transaction (a failure leaves the
-    previous table intact). Returns how many segments are one-way."""
+    """Re-matches every routable TIGER segment against whatever is loaded
+    in osm_ways and replaces street_oneway in one transaction (a failure
+    leaves the previous table intact). Returns how many segments are
+    one-way."""
     with psycopg.connect(dsn) as conn:
-        conn.execute(CREATE_STREET_ONEWAY_SQL)
-        conn.execute(NORMALIZE_NAME_FUNCTION_SQL)
-        conn.execute(MATCH_SQL)
-        count = conn.execute("SELECT count(*) FROM street_oneway WHERE direction <> 0").fetchone()[0]
+        conn.execute(CREATE_MATCH_PAIRS_SQL)
+        conn.execute("TRUNCATE osm_match_pairs")
+        _collect_pairs(conn)
+        count = _apply_matches(conn)
         conn.commit()
     return count
 
 
+def clear_osm_ways(dsn: str) -> None:
+    """Empties osm_ways. It's only matching input -- routing reads
+    street_oneway, never osm_ways -- and it's about as big as streets
+    itself (674 MB vs 738 MB for Maine + NH), so it isn't kept between
+    runs."""
+    with psycopg.connect(dsn) as conn:
+        conn.execute(CREATE_OSM_WAYS_SQL)
+        conn.execute("TRUNCATE osm_ways")
+        conn.commit()
+
+
 def update_osm_oneway(dsn: str, states, data_dir: Path) -> int:
-    """Download -> load -> match, for the given states. Returns the one-way segment count."""
-    paths = []
-    for state_abbr in states:
-        print(f"[{date.today()}] downloading OSM extract for {state_abbr} ({extract_url(state_abbr)})...")
-        paths.append(download_extract(state_abbr, data_dir))
-    ways = load_osm_ways(dsn, paths)
-    print(f"[{date.today()}] loaded {ways} drivable OSM ways")
-    count = refresh_street_oneway(dsn)
-    print(f"[{date.today()}] {count} TIGER segments marked one-way from OSM")
+    """Download -> load -> match, one state at a time, then replace
+    street_oneway. Only one state's raw OSM roads are ever in the database
+    at once, and none are left afterwards; street_oneway is only replaced
+    once every state has matched, so a failure partway leaves the previous
+    one-way data in place. Returns the one-way segment count."""
+    with psycopg.connect(dsn) as conn:
+        conn.execute(CREATE_MATCH_PAIRS_SQL)
+        conn.execute("TRUNCATE osm_match_pairs")
+        conn.commit()
+    try:
+        for state_abbr in states:
+            print(f"[{date.today()}] downloading OSM extract for {state_abbr} ({extract_url(state_abbr)})...", flush=True)
+            path = download_extract(state_abbr, data_dir)
+            ways = load_osm_ways(dsn, [path])
+            print(f"[{date.today()}] {state_abbr}: loaded {ways} drivable OSM ways, matching...", flush=True)
+            with psycopg.connect(dsn) as conn:
+                _collect_pairs(conn)
+                conn.commit()
+            clear_osm_ways(dsn)
+        with psycopg.connect(dsn) as conn:
+            count = _apply_matches(conn)
+            conn.commit()
+    finally:
+        clear_osm_ways(dsn)
+    print(f"[{date.today()}] {count} TIGER segments marked one-way from OSM", flush=True)
     return count
 
 

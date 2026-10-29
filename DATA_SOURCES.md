@@ -85,14 +85,21 @@ geocoding request. Current as of August 2026.
     the public means offering that derived data under the ODbL on request
     (it's a `tlid -> direction` table; TIGER itself is public domain, so
     this gives away nothing proprietary).
-  - **Kept out of geocoding** — the OSM-derived data lives only in
-    `osm_ways`/`street_oneway` and is read only by routing
+  - **Kept out of geocoding** — the only OSM-derived data kept is
+    `street_oneway` (~29 MB for Maine + NH), read only by routing
     (`roadReroute.js`, `testDriveRoute.js`). Geocoding (`geocode.js`,
     `reverseGeocode.js`, `interpolate.py`, batch) never touches it, so
     geocoding results stay TIGER + E911 only, free of ODbL terms.
   This is a reading of the ODbL, not legal advice.
 - **Coverage today:** Maine and New Hampshire, refreshed by
   `annual_update.py` (or `python -m geocoding.osm_oneway`).
+- **Storage:** the raw OSM roads (`osm_ways`, ~670 MB for Maine + NH,
+  nearly the size of `streets` itself) are only matching input. The
+  import loads, matches and empties them one state at a time, so they
+  never stay in the database; per-pair matches wait in
+  `osm_match_pairs` (also emptied) until every state is done, and
+  `street_oneway` is replaced only then. A road crossing a state line is
+  in both states' extracts and counts once.
 
 ## How the data gets in (and stays current)
 

@@ -30,7 +30,9 @@ read-write).
   Also refreshes OpenStreetMap one-way restrictions for routing (downloads
   Geofabrik's ~90MB/state extracts to `data/osm/`; `--skip-osm-oneway` to
   skip). On its own: `python -m geocoding.osm_oneway "dbname=geocoding"
-  --states ME NH` (~6 min for ME+NH, mostly the download).
+  --states ME NH` (~6 min for ME+NH, mostly the download). It processes
+  one state at a time and keeps only `street_oneway`: `osm_ways` (raw OSM
+  roads, nearly the size of `streets`) is emptied after each state.
 - Python tests: `.venv\Scripts\python -m pytest` (71 tests in `tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)
