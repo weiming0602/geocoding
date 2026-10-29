@@ -511,6 +511,14 @@ export default function Batch() {
                                 <>
                                   {' · '}
                                   <span className="tag tag-accent">{result.rangeSide} side</span>
+                                  {result.approximate && (
+                                    <>
+                                      {' · '}
+                                      <span className="tag" title="No street segment's address range includes this number; placed between the two nearest ones.">
+                                        approximate
+                                      </span>
+                                    </>
+                                  )}
                                 </>
                               )}
                               {result.source === 'llm_assisted' && (

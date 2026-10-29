@@ -433,7 +433,9 @@ export default function BatchGeocodeForm({
                 {result.success ? (
                   <Text style={styles.cardMeta} selectable>
                     {result.coordinates.latitude.toFixed(6)}, {result.coordinates.longitude.toFixed(6)}
-                    {result.source === 'interpolation' ? ` (${result.rangeSide} side)` : ''}
+                    {result.source === 'interpolation'
+                      ? ` (${result.rangeSide} side${result.approximate ? ', approximate' : ''})`
+                      : ''}
                     {result.source === 'llm_assisted'
                       ? ` · AI-corrected: ${result.correctedStreet ?? result.correctedAddress}`
                       : ''}

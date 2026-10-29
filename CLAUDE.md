@@ -144,7 +144,12 @@ read-write).
   (`reverseGeocode.js`'s `roundToRangeParity`) rounds to the matched
   side's own range parity. `geocoding/interpolate.py` takes the side as an
   explicit argument and has no rule of its own. Never reintroduce a
-  parity -> side mapping.
+  parity -> side mapping. A number no range covers but that falls in a
+  small hole between two ranges on the same street/ZIP/side numbering
+  is placed between their facing ends and flagged `approximate: true`
+  (`geocodeMatching.js`'s `rangeGapFallback`: gap <= 50 numbers, ends
+  <= 150 m apart, never past the street's first/last address).
+  `interpolate.py` has no such fallback.
 - `geocode.js` queries `UPPER(fullname)`; there's a matching expression
   index in `schema.py`. Don't drop or rename either without checking the
   other — without the index, batch geocoding is ~10x slower.

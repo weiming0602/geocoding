@@ -9,6 +9,9 @@ export type RecentLookup = {
   // describes an *estimated* position along a street segment, which
   // doesn't apply when the point itself is already known exactly.
   rangeSide?: 'left' | 'right';
+  // Placed in a gap between two street segments' address ranges -- see
+  // GeocodeResult's `approximate`.
+  approximate?: boolean;
 };
 
 const STORAGE_KEY = 'meridian.recentLookups';

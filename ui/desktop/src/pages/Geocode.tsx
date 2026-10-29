@@ -29,6 +29,7 @@ export default function Geocode() {
         latitude: response.coordinates.latitude,
         longitude: response.coordinates.longitude,
         rangeSide: response.source === 'interpolation' ? response.rangeSide : undefined,
+        approximate: response.source === 'interpolation' && response.approximate === true ? true : undefined,
       };
       setResult(lookup);
       addLookup(lookup);
@@ -127,6 +128,14 @@ export default function Geocode() {
                     <>
                       {' · '}
                       <span className="tag tag-accent">{result.rangeSide} side</span>
+                    </>
+                  )}
+                  {result.approximate && (
+                    <>
+                      {' · '}
+                      <span className="tag" title="No street segment's address range includes this number; placed between the two nearest ones.">
+                        approximate
+                      </span>
                     </>
                   )}
                 </div>
