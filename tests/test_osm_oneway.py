@@ -271,3 +271,124 @@ def test_routing_edges_view_closes_highways_and_ramps_of_unknown_direction(dsn):
     assert rows["ramp-unknown"] == (False, False)
     assert rows["hwy-two-way"] == (True, True)
     assert rows["street-unknown"] == (True, True)
+
+
+# ------------------------------------------------- state-by-state update
+
+
+def _write_osm(path, ways):
+    """Writes (osm_id, highway, name, ref, oneway, wkt) ways as an .osm XML file."""
+    nodes, way_xml, node_id = [], [], 1000
+    for osm_id, highway, name, ref, oneway, wkt in ways:
+        coords = [c.split() for c in wkt[wkt.index("(") + 1 : wkt.index(")")].split(",")]
+        refs = []
+        for lon, lat in coords:
+            node_id += 1
+            nodes.append(f'<node id="{node_id}" lat="{lat}" lon="{lon}" version="1"/>')
+            refs.append(f'<nd ref="{node_id}"/>')
+        tags = [f'<tag k="highway" v="{highway}"/>']
+        if name:
+            tags.append(f'<tag k="name" v="{name}"/>')
+        if ref:
+            tags.append(f'<tag k="ref" v="{ref}"/>')
+        tags.append(f'<tag k="oneway" v="{ {1: "yes", -1: "-1", 0: "no"}[oneway] }"/>')
+        way_xml.append(f'<way id="{osm_id}" version="1">{"".join(refs)}{"".join(tags)}</way>')
+    path.write_text('<?xml version="1.0" encoding="UTF-8"?>\n<osm version="0.6">' + "".join(nodes + way_xml) + "</osm>\n")
+    return path
+
+
+def _fake_downloads(monkeypatch, files):
+    """Makes update_osm_oneway read local files instead of Geofabrik: {state: path or exception}."""
+    import geocoding.osm_oneway as osm_oneway
+
+    def download(state_abbr, data_dir):
+        result = files[state_abbr]
+        if isinstance(result, Exception):
+            raise result
+        return result
+
+    monkeypatch.setattr(osm_oneway, "download_extract", download)
+
+
+def _table_count(conn, table):
+    return conn.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+
+
+def test_update_osm_oneway_matches_state_by_state_and_keeps_no_raw_osm_roads(dsn, tmp_path, monkeypatch):
+    from geocoding.osm_oneway import update_osm_oneway
+
+    with psycopg.connect(dsn) as conn:
+        _setup(conn, STREETS, [])
+    # The same ways as the single-load tests above, split across two "states".
+    _fake_downloads(monkeypatch, {
+        "ME": _write_osm(tmp_path / "me.osm", [w for w in OSM_WAYS if w[0] <= 4]),
+        "NH": _write_osm(tmp_path / "nh.osm", [w for w in OSM_WAYS if w[0] > 4]),
+    })
+    assert update_osm_oneway(dsn, ["ME", "NH"], tmp_path) == 4
+    with psycopg.connect(dsn) as conn:
+        # Same answers as matching everything at once...
+        assert _directions(conn) == {"grove": -1, "main": 1, "ramp-long": 1, "i295": -1}
+        # ...and only street_oneway is kept: no raw OSM roads, no leftovers.
+        assert _table_count(conn, "osm_ways") == 0
+        assert _table_count(conn, "osm_match_pairs") == 0
+
+
+def test_update_osm_oneway_picks_the_best_match_across_states(dsn, tmp_path, monkeypatch):
+    # A segment near a state line, seen by both states' OSM data: a short
+    # one-way piece in one (too little coverage to trust) and the full,
+    # two-way street in the other. The better match wins whichever state
+    # comes first.
+    from geocoding.osm_oneway import update_osm_oneway
+
+    border = [("border", "Line Rd", line(-70.18, LAT0, LAT0 + 0.001))]
+    partial_oneway = (20, "residential", "Line Road", None, 1, line(-70.18, LAT0 - 0.0001, LAT0 + 0.0004))
+    full_twoway = (21, "residential", "Line Road", None, 0, line(-70.18, LAT0 - 0.0001, LAT0 + 0.0011))
+    with psycopg.connect(dsn) as conn:
+        _setup(conn, border, [])
+    for order in (["ME", "NH"], ["NH", "ME"]):
+        _fake_downloads(monkeypatch, {
+            "ME": _write_osm(tmp_path / "me.osm", [partial_oneway]),
+            "NH": _write_osm(tmp_path / "nh.osm", [full_twoway]),
+        })
+        update_osm_oneway(dsn, order, tmp_path)
+        with psycopg.connect(dsn) as conn:
+            assert conn.execute("SELECT direction, osm_id FROM street_oneway WHERE tlid = 'border'").fetchone() == (0, 21)
+
+
+def test_update_osm_oneway_failing_partway_keeps_the_previous_one_way_data(dsn, tmp_path, monkeypatch):
+    from geocoding.osm_oneway import update_osm_oneway
+
+    with psycopg.connect(dsn) as conn:
+        _setup(conn, STREETS, [])
+    _fake_downloads(monkeypatch, {"ME": _write_osm(tmp_path / "me.osm", OSM_WAYS)})
+    update_osm_oneway(dsn, ["ME"], tmp_path)
+
+    _fake_downloads(monkeypatch, {
+        "ME": _write_osm(tmp_path / "me2.osm", []),  # would wipe every restriction...
+        "NH": RuntimeError("download failed"),  # ...but the run fails before applying
+    })
+    with pytest.raises(RuntimeError):
+        update_osm_oneway(dsn, ["ME", "NH"], tmp_path)
+    with psycopg.connect(dsn) as conn:
+        assert _directions(conn) == {"grove": -1, "main": 1, "ramp-long": 1, "i295": -1}
+        assert _table_count(conn, "osm_ways") == 0
+
+
+def test_a_road_in_both_states_extracts_is_not_counted_twice(dsn, tmp_path, monkeypatch):
+    # Geofabrik puts a road that crosses a state line in BOTH states'
+    # extracts. Loading both used to double its coverage of a TIGER
+    # segment: half a segment's length looked like all of it, so a one-way
+    # restriction got recorded from too little evidence (59 Maine/NH
+    # border segments). Each (segment, way) pair now counts once.
+    from geocoding.osm_oneway import update_osm_oneway
+
+    half_way = (30, "residential", "Border Rd", None, 1, line(-70.19, LAT0 - 0.0001, LAT0 + 0.0005))
+    with psycopg.connect(dsn) as conn:
+        _setup(conn, [("border2", "Border Rd", line(-70.19, LAT0, LAT0 + 0.001))], [])
+    _fake_downloads(monkeypatch, {
+        "ME": _write_osm(tmp_path / "me.osm", [half_way]),
+        "NH": _write_osm(tmp_path / "nh.osm", [half_way]),
+    })
+    update_osm_oneway(dsn, ["ME", "NH"], tmp_path)
+    with psycopg.connect(dsn) as conn:
+        assert conn.execute("SELECT count(*) FROM street_oneway WHERE tlid = 'border2'").fetchone()[0] == 0
