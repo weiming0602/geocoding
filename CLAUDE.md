@@ -31,7 +31,7 @@ read-write).
   Geofabrik's ~90MB/state extracts to `data/osm/`; `--skip-osm-oneway` to
   skip). On its own: `python -m geocoding.osm_oneway "dbname=geocoding"
   --states ME NH` (~6 min for ME+NH, mostly the download).
-- Python tests: `.venv\Scripts\python -m pytest` (71 tests in `tests/`) —
+- Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)
 - Server: `cd geocoding-server && node src/server.js` -- for anything
@@ -150,6 +150,17 @@ read-write).
   (`geocodeMatching.js`'s `rangeGapFallback`: gap <= 50 numbers, ends
   <= 150 m apart, never past the street's first/last address).
   `interpolate.py` has no such fallback.
+- **The town an address names beats its ZIP.** `geocode.js` tries
+  `matchByStreetAndTown` (street inside the named town's boundary, from
+  the `towns` table -- TIGER county subdivisions, `geocoding/
+  ingest_towns.py`, refreshed by `annual_update.py`) before the ZIP
+  path, and returns `matchedBy: 'town'` plus `correctedZip` when the
+  given ZIP was another area's. The ZIP path runs only when the town is
+  unknown/ambiguous or lacks the street/number. A missing `towns` table
+  degrades to ZIP-only matching (`queryTowns` swallows "relation does
+  not exist"), so deploying the server before loading towns is safe --
+  load them with `.venv\Scripts\python -m geocoding.ingest_towns
+  "dbname=geocoding" --states ME NH` (~7 s).
 - `geocode.js` queries `UPPER(fullname)`; there's a matching expression
   index in `schema.py`. Don't drop or rename either without checking the
   other — without the index, batch geocoding is ~10x slower.

@@ -57,6 +57,32 @@ alongside `originalInput`/`correctedAddress` fields in that case), so
 callers can tell a real point, a direct range match, and an
 LLM-corrected guess apart.
 
+**The named town comes before the ZIP.** After the address-point check
+and before step 2, an address that names a town has its street looked
+up *inside that town's boundary* (`towns`, Census county subdivisions --
+see `geocoding/ingest_towns.py`), via `matchByStreetAndTown()` in
+`src/geocodeMatching.js`. A segment counts as in the town when its
+midpoint is (a neighbouring town's street that merely ends on the
+boundary doesn't). Exact name only (no substring fallback -- with no ZIP
+to narrow it, that would scan every street name). Within the town,
+segments in the address's own ZIP are tried first, then any, and steps
+3-5 run on those segments. If the town places it, that's the answer even
+when the ZIP disagrees: `"10 Forest Ave, Lebanon, NH 03301"` (03301 is
+Concord, which has no Forest Ave) matches Lebanon's Forest Ave, and
+`"38 Franklin St, Derry, NH 03301"` matches Derry's Franklin St, not
+Concord's. The response then carries `"matchedBy": "town"`,
+`match.town`, and -- when the matched side's ZIP isn't the one given --
+`"correctedZip"` (also a `correctedZip` column in batch `results.csv`).
+Only when the town is unknown (not in `towns`, e.g. a village or postal
+name like "West Lebanon"; or no `towns` table loaded yet), doesn't have
+the street, or is ambiguous (same-named towns in ME and NH both having
+it, with no state/ZIP to pick) does the ZIP path above run, unchanged.
+If the town has the street but no range holds the number, and the ZIP
+path finds no such street either, the town's `422` is returned. The
+LLM-assisted retry also offers the named town's similarly spelled
+streets ahead of the ZIP's, re-matches a town pick by town, and rejects
+a ZIP-based pick more than 5 km outside the named town.
+
 ## Worked examples
 
 **Odd → left.** Chestnut Rd's segment here covers the left-side range

@@ -1,5 +1,12 @@
 const { isPlausiblyInCoverageArea } = require('./geocodeCoverage');
-const { candidateStreetNames, matchByStreetAndZip } = require('./geocodeMatching');
+const {
+  candidateStreetNames,
+  candidateStreetNamesInTown,
+  matchByStreetAndZip,
+  matchByStreetAndTown,
+  queryTowns,
+  MAX_CANDIDATES,
+} = require('./geocodeMatching');
 const { isLlmAssistConfigured, pickCandidateWithLlm, describeCandidate } = require('./anthropicClient');
 const { logLlmGeocodeAssist } = require('./llmGeocodeAssists');
 
@@ -26,16 +33,27 @@ const MAX_DISTANCE_FROM_NAMED_TOWN_METERS = 5000;
 
 /**
  * Whether a corrected result is plausibly in the town the address names.
- * Candidates come only from the address's own ZIP, so when that ZIP is
- * wrong too, the "correction" can be a similar-sounding street in another
- * town: a real batch row "16 Sammer St, Augusta, ME 04074" (04074 is
- * Scarborough) came back as Sawyer St in Scarborough, 90 km away. A
- * failed row is visible; a confidently wrong one isn't. Checked against
- * Maine E911 address points' towns -- a town with none (all of NH, or a
- * misspelled town name) can't be checked, so it's let through.
+ * Candidates from the address's own ZIP can be wrong when that ZIP is
+ * wrong too -- a similar-sounding street in another town: a real batch row
+ * "16 Sammer St, Augusta, ME 04074" (04074 is Scarborough) came back as
+ * Sawyer St in Scarborough, 90 km away. A failed row is visible; a
+ * confidently wrong one isn't. Checked against the town's boundary
+ * (towns) and Maine E911 address points' towns -- a town in neither (a
+ * misspelled town name, or no towns table yet) can't be checked, so it's
+ * let through.
  */
 async function correctionFitsNamedTown(db, town, coordinates) {
   if (!town || !coordinates) return true;
+  const townRows = await queryTowns(
+    db,
+    `SELECT bool_or(ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, $4)) AS near
+     FROM towns WHERE UPPER(name) = UPPER($1)`,
+    [town.trim(), coordinates.longitude, coordinates.latitude, MAX_DISTANCE_FROM_NAMED_TOWN_METERS]
+  );
+  // bool_or over no rows is NULL: no such town in the table.
+  const townNear = townRows ? townRows[0].near : null;
+  if (townNear !== null) return townNear;
+
   const { rows } = await db.query(
     `SELECT
        EXISTS (SELECT 1 FROM address_points WHERE upper(town) = upper($1)) AS town_known,
@@ -101,10 +119,24 @@ async function attemptLlmAssistInner(
   const inCoverage = await isPlausiblyInCoverageArea(db, parsed);
   if (!inCoverage) return null;
 
-  const candidates = await candidateStreetNames(db, parsed.streetName, {
+  // The named town's own similar streets first (they're what the town-
+  // first match in geocode.js would have used), then the ZIP's.
+  const townCandidates = parsed.town
+    ? await candidateStreetNamesInTown(db, parsed.streetName, parsed.town, parsed.state)
+    : [];
+  const zipCandidates = await candidateStreetNames(db, parsed.streetName, {
     zip: parsed.zip,
     state: parsed.state,
   });
+  const seen = new Set();
+  const candidates = [...townCandidates, ...zipCandidates]
+    .filter((c) => {
+      const key = `${c.fullname}|${c.zipl}|${c.zipr}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, MAX_CANDIDATES);
   if (candidates.length === 0) return null;
 
   if (runBudget && runBudget.remaining <= 0) return null;
@@ -153,7 +185,20 @@ async function attemptLlmAssistInner(
   const correctedAddress = describeCandidate(picked);
 
   let result = null;
-  for (const zip of zipsToTry) {
+  if (picked.inNamedTown) {
+    // Found inside the named town, so re-match it there (the address's
+    // ZIP may be the very thing that's wrong).
+    ({ result } = await matchByStreetAndTown(
+      db,
+      parsed.number,
+      picked.fullname,
+      parsed.town,
+      parsed.state,
+      parsed.zip,
+      offsetFeet
+    ));
+  }
+  for (const zip of result ? [] : zipsToTry) {
     try {
       result = await matchByStreetAndZip(db, parsed.number, picked.fullname, zip, parsed.state, offsetFeet);
       break;

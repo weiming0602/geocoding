@@ -163,7 +163,8 @@ function describeMatch(row, state) {
 /**
  * If `row`'s `side` can hold house `number` in ZIP `zip`, returns the
  * interpolation fraction along that side's range; otherwise null. A side
- * qualifies when its own ZIP is `zip`, its range contains `number`, and
+ * qualifies when its own ZIP is `zip` (any ZIP when `zip` is null -- a
+ * match by town, see matchByStreetAndTown), its range contains `number`, and
  * the range holds numbers of the same parity -- which side carries odd
  * vs. even numbers is NOT fixed in TIGER (left/right just follow the
  * direction each line happens to be digitized in; about 57% of Maine/NH
@@ -173,7 +174,7 @@ function describeMatch(row, state) {
  */
 function sideFraction(row, side, number, zip) {
   const { fromCol, toCol, zipCol } = SIDES[side];
-  if (row[zipCol] !== zip) return null;
+  if (zip !== null && row[zipCol] !== zip) return null;
   const fromNum = parseInt(row[fromCol], 10);
   const toNum = parseInt(row[toCol], 10);
   if (Number.isNaN(fromNum) || Number.isNaN(toNum)) return null;
@@ -191,10 +192,10 @@ const MAX_RANGE_GAP_NUMBERS = 50;
 // a hole in the numbering, not two unrelated stretches of the street.
 const MAX_RANGE_GAP_METERS = 150;
 
-/** The numbered range on `row`'s `side` usable for `number` in `zip`, or null. */
+/** The numbered range on `row`'s `side` usable for `number` in `zip` (any ZIP if null), or null. */
 function sideRange(row, side, number, zip) {
   const { fromCol, toCol, zipCol } = SIDES[side];
-  if (row[zipCol] !== zip) return null;
+  if (zip !== null && row[zipCol] !== zip) return null;
   const from = parseInt(row[fromCol], 10);
   const to = parseInt(row[toCol], 10);
   if (Number.isNaN(from) || Number.isNaN(to)) return null;
@@ -263,7 +264,16 @@ async function matchByStreetAndZip(db, number, streetName, zip, state, offsetFee
     const stateSuffix = state ? ` (state ${state})` : '';
     throw new NotFoundError(`no street found matching "${streetName}" in ZIP ${zip}${stateSuffix}`);
   }
+  return matchAmongCandidates(candidates, number, streetName, zip, state, offsetFeet);
+}
 
+/**
+ * Picks the segment among `candidates` (all one street) whose range holds
+ * `number`, and interpolates the point. `zip` restricts which sides count
+ * (null: any side's ZIP, for a match by town). Throws OutOfRangeError when
+ * no range holds the number and no small gap between ranges does either.
+ */
+function matchAmongCandidates(candidates, number, streetName, zip, state, offsetFeet) {
   // The side a number's parity "usually" lands on is only a tie-breaker,
   // for the rare segment (~315 in Maine/NH) whose two sides carry the
   // same parity -- see sideFraction for why it can't be the rule itself.
@@ -300,9 +310,10 @@ async function matchByStreetAndZip(db, number, streetName, zip, state, offsetFee
       };
     }
     const parity = number % 2 === 1 ? 'odd' : 'even';
+    const where = zip !== null ? `in ZIP ${zip}` : `in ${candidates[0].town_name ?? 'that town'}`;
     throw new OutOfRangeError(
-      `no "${streetName}" segment in ZIP ${zip} has a range of ${parity} numbers containing ${number} ` +
-        `(${candidates.length} segment(s) found for this street/ZIP, none cover that number)`
+      `no "${streetName}" segment ${where} has a range of ${parity} numbers containing ${number} ` +
+        `(${candidates.length} segment(s) found for this street there, none cover that number)`
     );
   }
   // The point goes on the same side of the centerline as the range that
@@ -319,6 +330,113 @@ async function matchByStreetAndZip(db, number, streetName, zip, state, offsetFee
     offsetSide,
     offsetFeet,
     coordinates: { latitude, longitude },
+  };
+}
+
+// Postgres's "relation does not exist": a geocoding database whose towns
+// table hasn't been loaded yet (see geocoding/ingest_towns.py). Town
+// lookups then behave as if the town were unknown -- today's ZIP-only
+// matching -- rather than failing every geocode that names a town.
+const UNDEFINED_TABLE = '42P01';
+
+async function queryTowns(db, sql, params) {
+  try {
+    const { rows } = await db.query(sql, params);
+    return rows;
+  } catch (err) {
+    if (err.code === UNDEFINED_TABLE) return null;
+    throw err;
+  }
+}
+
+/** SQL restricting `towns` to `state` (2-letter or full name) as parameter $n, or '' with no state. */
+function townStateClause(state, n) {
+  if (!state) return '';
+  return state.length === 2 ? `AND UPPER(towns.state_abbr) = UPPER($${n})` : `AND UPPER(towns.state) = UPPER($${n})`;
+}
+
+/**
+ * Every streets row named `streetName` (exactly, or with its suffix
+ * abbreviated -- no LIKE fallback, unlike candidateStreets: without a ZIP
+ * to narrow it, a substring match would scan every street name in the
+ * database, and the ZIP path that runs after this still has one) that
+ * lies in a town called `town` -- by the segment's midpoint, so a
+ * neighbouring town's segment merely touching the boundary (Westbrook's
+ * Main St ends on Portland's line) doesn't count -- tagged with that town's geoid/name. Empty
+ * when the town is unknown or has no such street; null when the towns
+ * table doesn't exist.
+ */
+async function candidateStreetsInTown(db, streetName, town, state) {
+  return queryTowns(
+    db,
+    `SELECT DISTINCT ON (streets.id, towns.geoid) streets.*, towns.geoid AS town_geoid, towns.name AS town_name
+     FROM towns
+     JOIN street_names ON UPPER(street_names.fullname) IN (UPPER($1), UPPER($2))
+     JOIN streets ON streets.tlid = street_names.tlid
+     WHERE UPPER(towns.name) = UPPER($3) ${townStateClause(state, 4)}
+       AND towns.geom && streets.geom AND ST_Intersects(towns.geom, ST_LineInterpolatePoint(ST_GeometryN(streets.geom, 1), 0.5))`,
+    [streetName, abbreviateStreetSuffix(streetName), town.trim(), ...(state ? [state] : [])]
+  );
+}
+
+/**
+ * Looks `streetName` up inside the town the address names, ignoring the
+ * address's ZIP unless it helps: a wrong ZIP ("10 Forest Ave, Lebanon, NH
+ * 03301" -- 03301 is Concord) otherwise sends the search to another town's
+ * streets, either finding nothing or a same-named street 60 km away. Tried
+ * before the ZIP (geocode.js); the ZIP is the fallback when the town is
+ * unknown or doesn't have this street/number.
+ *
+ * Within a town, segments in the address's own ZIP are tried first (a town
+ * can span several ZIPs), then any. Returns { result, error }: result is a
+ * matchByStreetAndZip-shaped result plus matchedBy: 'town', match.town and
+ * -- when the matched side's ZIP isn't the one given -- correctedZip; null
+ * when the town can't place it. error is the OutOfRangeError when the
+ * town has this street but no range holds the number, else null. Same-
+ * named towns in more than one state (Lebanon ME / NH) with the street in
+ * both and nothing to pick between them give no result.
+ */
+async function matchByStreetAndTown(db, number, streetName, town, state, zip, offsetFeet) {
+  const candidates = await candidateStreetsInTown(db, streetName, town, state);
+  if (!candidates || candidates.length === 0) return { result: null, error: null };
+
+  const byTown = new Map();
+  for (const row of candidates) {
+    if (!byTown.has(row.town_geoid)) byTown.set(row.town_geoid, []);
+    byTown.get(row.town_geoid).push(row);
+  }
+
+  const found = [];
+  let error = null;
+  for (const rows of byTown.values()) {
+    for (const zipToTry of zip ? [zip, null] : [null]) {
+      try {
+        found.push({ rows, result: matchAmongCandidates(rows, number, streetName, zipToTry, state, offsetFeet) });
+        break;
+      } catch (err) {
+        if (!(err instanceof OutOfRangeError)) throw err;
+        error = err;
+      }
+    }
+  }
+
+  const withMatchedZip = found.map(({ rows, result }) => {
+    const row = rows.find((r) => String(r.id) === String(result.match.id));
+    return { rows, result, matchedZip: row[SIDES[result.rangeSide].zipCol] || null };
+  });
+  const sameZip = withMatchedZip.filter((f) => zip && f.matchedZip === zip);
+  const chosen = withMatchedZip.length === 1 ? withMatchedZip[0] : sameZip.length === 1 ? sameZip[0] : null;
+  if (!chosen) return { result: null, error: found.length > 0 ? null : error };
+
+  const { rows, result, matchedZip } = chosen;
+  return {
+    result: {
+      ...result,
+      match: { ...result.match, town: rows[0].town_name },
+      matchedBy: 'town',
+      ...(zip && matchedZip && matchedZip !== zip ? { correctedZip: matchedZip } : {}),
+    },
+    error: null,
   };
 }
 
@@ -379,4 +497,38 @@ async function candidateStreetNames(db, streetName, { zip, state } = {}) {
   return rows;
 }
 
-module.exports = { candidateStreets, matchAddressPoint, matchByStreetAndZip, candidateStreetNames };
+/**
+ * candidateStreetNames, but scoped to the streets inside a named town
+ * instead of a ZIP -- so a misspelled street with a wrong ZIP ("Furest
+ * Ave, Lebanon, NH 03301") still gets the town's real "Forest Ave" as a
+ * candidate. Rows are tagged inNamedTown so llmAssist re-matches a pick
+ * by town, not by the (wrong) ZIP. Empty when the town is unknown or the
+ * towns table doesn't exist.
+ */
+async function candidateStreetNamesInTown(db, streetName, town, state) {
+  const rows = await queryTowns(
+    db,
+    `SELECT DISTINCT street_names.fullname, streets.zipl, streets.zipr, towns.state_abbr,
+            similarity(UPPER(street_names.fullname), UPPER($1)) AS sim
+     FROM towns
+     JOIN streets ON towns.geom && streets.geom AND ST_Intersects(towns.geom, ST_LineInterpolatePoint(ST_GeometryN(streets.geom, 1), 0.5))
+     JOIN street_names ON street_names.tlid = streets.tlid
+     WHERE UPPER(towns.name) = UPPER($3) ${townStateClause(state, 4)}
+       AND similarity(UPPER(street_names.fullname), UPPER($1)) > $2
+     ORDER BY sim DESC
+     LIMIT ${MAX_CANDIDATES}`,
+    [streetName, CANDIDATE_SIMILARITY_THRESHOLD, town.trim(), ...(state ? [state] : [])]
+  );
+  return (rows ?? []).map((row) => ({ ...row, inNamedTown: true }));
+}
+
+module.exports = {
+  candidateStreets,
+  matchAddressPoint,
+  matchByStreetAndZip,
+  matchByStreetAndTown,
+  candidateStreetNames,
+  candidateStreetNamesInTown,
+  queryTowns,
+  MAX_CANDIDATES,
+};
