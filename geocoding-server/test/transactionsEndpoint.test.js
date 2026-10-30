@@ -1,7 +1,7 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
-const { withTestServer } = require('./helpers');
+const { withTestServer, stubPurchase } = require('./helpers');
 
 // withTestServer deletes ADMIN_PASSCODE before every test (see helpers.js),
 // so GET /admin/transactions is unauthorized by default -- each test here
@@ -35,16 +35,8 @@ test('GET /admin/transactions returns transactions newest-first given the correc
     async ({ port }) => {
       process.env.ADMIN_PASSCODE = 'correct-horse';
       try {
-        await fetch(`http://127.0.0.1:${port}/billing/purchase`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: 'alice@example.com', addressCount: 1000, orderId: 'ORDER-1' }),
-        });
-        await fetch(`http://127.0.0.1:${port}/billing/purchase`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ email: 'bob@example.com', addressCount: 500, orderId: 'ORDER-2' }),
-        });
+        await stubPurchase(port, { email: 'alice@example.com', addressCount: 1000 });
+        const bob = await stubPurchase(port, { email: 'bob@example.com', addressCount: 500 });
 
         const response = await fetch(
           `http://127.0.0.1:${port}/admin/transactions?passcode=correct-horse`
@@ -53,7 +45,7 @@ test('GET /admin/transactions returns transactions newest-first given the correc
         const body = await response.json();
         assert.equal(body.transactions.length, 2);
         assert.equal(body.transactions[0].email, 'bob@example.com');
-        assert.equal(body.transactions[0].orderId, 'ORDER-2');
+        assert.equal(body.transactions[0].orderId, bob.session.sessionId);
         assert.equal(body.transactions[0].addressCount, 500);
         assert.equal(body.transactions[0].priceCents, 900);
         assert.equal(body.transactions[1].email, 'alice@example.com');
@@ -64,20 +56,19 @@ test('GET /admin/transactions returns transactions newest-first given the correc
     { seedStreets: false }
   ));
 
-test('POST /billing/purchase records a transaction row', () =>
+test('a completed purchase records a transaction row', () =>
   withTestServer(
     async ({ port, usersDb }) => {
-      const response = await fetch(`http://127.0.0.1:${port}/billing/purchase`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: 'alice@example.com', addressCount: 1000, orderId: 'ORDER-1' }),
+      const { session, response } = await stubPurchase(port, {
+        email: 'alice@example.com',
+        addressCount: 1000,
       });
       assert.equal(response.status, 200);
 
       const { rows } = await usersDb.query('SELECT * FROM transactions');
       assert.equal(rows.length, 1);
       assert.equal(rows[0].email, 'alice@example.com');
-      assert.equal(rows[0].order_id, 'ORDER-1');
+      assert.equal(rows[0].order_id, session.sessionId);
       assert.equal(rows[0].address_count, 1000);
       assert.equal(rows[0].price_cents, 1500);
       assert.equal(rows[0].tier, 1000);

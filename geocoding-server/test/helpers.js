@@ -352,19 +352,19 @@ async function withTestServer(
   const httpServer = server.app.listen(0);
   const usersDb = await server.usersDbPromise;
 
-  // billing.js's captureOrder() should always exercise the deliberate
-  // stub in tests, never a real PayPal API call -- but dotenv (loaded by
-  // server.js, just above) picks up whatever real .env a developer
-  // happens to have locally. billing.js reads these at call time, not at
-  // require time, so clearing them *after* requiring server.js (dotenv
-  // has already run) still forces the stub for every request handled
-  // during this test. Restored afterward.
-  const savedPaypalClientId = process.env.PAYPAL_CLIENT_ID;
-  const savedPaypalClientSecret = process.env.PAYPAL_CLIENT_SECRET;
-  delete process.env.PAYPAL_CLIENT_ID;
-  delete process.env.PAYPAL_CLIENT_SECRET;
+  // billing.js should always exercise the deliberate stub in tests, never
+  // a real Stripe API call -- but dotenv (loaded by server.js, just above)
+  // picks up whatever real .env a developer happens to have locally.
+  // billing.js reads these at call time, not at require time, so clearing
+  // them *after* requiring server.js (dotenv has already run) still forces
+  // the stub for every request handled during this test (and the webhook
+  // route's "disabled by default" 404). Restored afterward.
+  const savedStripeSecretKey = process.env.STRIPE_SECRET_KEY;
+  const savedStripeWebhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+  delete process.env.STRIPE_SECRET_KEY;
+  delete process.env.STRIPE_WEBHOOK_SECRET;
 
-  // Same rationale as the PayPal vars just above, for
+  // Same rationale as the Stripe vars just above, for
   // emailDelivery.js's sendServiceKeyEmail -- a real .env's Resend
   // credentials should never cause a test to attempt a real send.
   const savedResendApiKey = process.env.RESEND_API_KEY;
@@ -406,8 +406,8 @@ async function withTestServer(
     await users.drop();
     delete process.env.GEOCODING_DSN;
     delete process.env.USERS_DSN;
-    if (savedPaypalClientId !== undefined) process.env.PAYPAL_CLIENT_ID = savedPaypalClientId;
-    if (savedPaypalClientSecret !== undefined) process.env.PAYPAL_CLIENT_SECRET = savedPaypalClientSecret;
+    if (savedStripeSecretKey !== undefined) process.env.STRIPE_SECRET_KEY = savedStripeSecretKey;
+    if (savedStripeWebhookSecret !== undefined) process.env.STRIPE_WEBHOOK_SECRET = savedStripeWebhookSecret;
     if (savedResendApiKey !== undefined) process.env.RESEND_API_KEY = savedResendApiKey;
     if (savedResendFromEmail !== undefined) process.env.RESEND_FROM_EMAIL = savedResendFromEmail;
     if (savedAllowTestEmptyServiceKey !== undefined)
@@ -419,8 +419,31 @@ async function withTestServer(
   }
 }
 
+/**
+ * Runs a whole (stubbed -- withTestServer clears STRIPE_SECRET_KEY)
+ * purchase through the server: POST /billing/checkout-session, then POST
+ * /billing/complete with the session id the stub put in its redirect URL,
+ * the way the checkout page does after Stripe sends the browser back.
+ * Returns the session response and the completion response.
+ */
+async function stubPurchase(port, { email, addressCount }) {
+  const sessionResponse = await fetch(`http://127.0.0.1:${port}/billing/checkout-session`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, addressCount, returnUrl: 'http://localhost:5173/#/checkout' }),
+  });
+  const session = await sessionResponse.json();
+  const response = await fetch(`http://127.0.0.1:${port}/billing/complete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ sessionId: session.sessionId }),
+  });
+  return { session, response };
+}
+
 module.exports = {
   makeDb,
+  stubPurchase,
   makeFixtureDsn,
   makeUsersDb,
   withTestServer,

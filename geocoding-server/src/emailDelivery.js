@@ -54,9 +54,9 @@ async function sendResultsEmail(email, zipBuffer, meta = {}) {
 /**
  * Emails a newly-issued/topped-up service key after a purchase, via
  * Resend -- falls back to a stub (logs and returns) when RESEND_API_KEY/
- * RESEND_FROM_EMAIL aren't set, same pattern as billing.js's
- * captureOrder. The purchase itself has already succeeded by the time
- * this is called (money captured, quota already granted), so a failure
+ * RESEND_FROM_EMAIL aren't set, same pattern as billing.js's Stripe
+ * calls. The purchase itself has already succeeded by the time this is
+ * called (payment confirmed, quota already granted), so a failure
  * here is caught and reported back rather than thrown -- losing the
  * email shouldn't undo a real purchase.
  */

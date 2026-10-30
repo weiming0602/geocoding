@@ -5,9 +5,9 @@ const { resultsToCsv } = require('./resultsCsv');
 const { buildZip } = require('./zip');
 const { reverseGeocode } = require('./reverseGeocode');
 const { searchPlaces } = require('./placesSearch');
-const { getUser, ensureCurrentPeriod, addToTier } = require('./users');
+const { getUser, ensureCurrentPeriod } = require('./users');
 const { submitFeedback } = require('./feedback');
-const { recordTransaction, listTransactions, markTransactionsNotified } = require('./transactions');
+const { fulfillPurchase, listTransactions, markTransactionsNotified } = require('./transactions');
 const { checkQuota, useQuota } = require('./quota');
 const { checkRateLimit } = require('./geocodeRateLimit');
 const {
@@ -18,7 +18,13 @@ const {
   sendBatchRunNotification,
 } = require('./emailDelivery');
 const { findTier } = require('./pricing');
-const { captureOrder } = require('./billing');
+const {
+  isWebhookConfigured,
+  createCheckoutSession,
+  retrievePaidPurchase,
+  paidPurchaseFromSession,
+  verifyWebhookEvent,
+} = require('./billing');
 const {
   ValidationError,
   NotFoundError,
@@ -29,7 +35,7 @@ const {
   UpstreamError,
   RateLimitError,
 } = require('./errors');
-const { EMAIL_PATTERN, allowsTestEmptyServiceKey } = require('./serverSetup');
+const { EMAIL_PATTERN, STRIPE_WEBHOOK_PATH, allowsTestEmptyServiceKey } = require('./serverSetup');
 
 // The paid geocoding product's routes: single/batch/reverse geocoding,
 // quota, billing, Find Places, feedback, and the owner dashboard. Served
@@ -294,54 +300,26 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
     });
   });
 
-  // Completes a bulk-geocoding purchase: the client already ran PayPal's
-  // approval flow and created the order, but deliberately never calls
-  // `actions.order.capture()` itself -- captureOrder() (billing.js) does
-  // the actual capture here, server-side, with the account's Client
-  // Secret. That's what actually confirms the money moved; trusting a
-  // client-reported "success" would let a tampered client claim a
-  // purchase happened without paying. Falls back to a no-op stub when
-  // PAYPAL_CLIENT_ID/PAYPAL_CLIENT_SECRET aren't configured. Price/
-  // addressCount are looked up server-side from pricing.js, never taken
-  // from the request body, so a client can't just claim a cheaper price
-  // for a bigger tier.
-  app.post('/billing/purchase', async (req, res) => {
-    const { email, addressCount, orderId } = req.body || {};
+  // Grants a confirmed-paid purchase (see billing.js) and sends its
+  // emails, at most once per Stripe session -- the webhook and the
+  // returning browser both land here for the same payment, and only the
+  // first one to commit (fulfillPurchase) grants quota, records the
+  // transaction, and sends the emails. Either way, returns the account's
+  // current state for the checkout page to show.
+  async function completePurchase(purchase) {
+    const { sessionId, email, tier } = purchase;
+    const usersDb = await usersDbPromise;
+    const { user, transaction } = await fulfillPurchase(usersDb, {
+      email,
+      orderId: sessionId,
+      addressCount: tier.addressCount,
+      priceCents: tier.priceCents,
+    });
 
-    try {
-      if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
-        throw new ValidationError('email must be a valid email address');
-      }
-      if (typeof orderId !== 'string' || !orderId.trim()) {
-        throw new ValidationError('orderId must be a non-empty string');
-      }
-
-      const tier = findTier(addressCount);
-      if (!tier) {
-        throw new ValidationError(`no pricing tier for ${addressCount} addresses`);
-      }
-
-      const capture = await captureOrder(orderId, {
-        email,
-        addressCount: tier.addressCount,
-        priceCents: tier.priceCents,
-      });
-
-      const usersDb = await usersDbPromise;
-      const user = await addToTier(usersDb, email, tier.addressCount);
-
-      // Same "already succeeded, don't undo it" reasoning as the email
-      // send just below -- a real financial record of this purchase
-      // matters more than any downstream step failing, so it's recorded
-      // right after the quota grant, before the (best-effort) email send.
-      const transactionRow = await recordTransaction(usersDb, {
-        email: user.email,
-        orderId,
-        addressCount: tier.addressCount,
-        priceCents: tier.priceCents,
-        tier: user.tier,
-      });
-
+    // null = this call didn't fulfill the payment (an earlier one did, and
+    // already sent the service key email) -- not known either way here.
+    let serviceKeyEmailed = null;
+    if (transaction) {
       // Notifies the owner immediately, same pattern as
       // sendFeedbackNotification -- not just the periodic
       // scripts/transactions-digest.js run. Reuses that same send function
@@ -352,12 +330,12 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
       // script's own getUnnotifiedTransactions query normally has nothing
       // left to do here; it's still the safety net for a transaction whose
       // immediate send genuinely failed (Resend down, etc.).
-      const ownerNotifyResult = await sendTransactionsDigestEmail([transactionRow]);
+      const ownerNotifyResult = await sendTransactionsDigestEmail([transaction]);
       if (ownerNotifyResult.delivered || ownerNotifyResult.stubbed) {
-        await markTransactionsNotified(usersDb, [transactionRow.id]);
+        await markTransactionsNotified(usersDb, [transaction.id]);
       }
 
-      // The purchase itself has already succeeded (money captured, quota
+      // The purchase itself has already succeeded (money taken, quota
       // granted) by this point -- an email hiccup shouldn't undo that or
       // fail the request, so its outcome is only reported, never thrown.
       const emailResult = await sendServiceKeyEmail(email, {
@@ -366,23 +344,110 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
         purchased: tier.addressCount,
         priceCents: tier.priceCents,
       });
+      serviceKeyEmailed = emailResult.delivered;
+    }
 
-      res.json({
-        email: user.email,
-        tier: user.tier,
-        usedThisPeriod: user.used_this_period,
-        remaining: user.tier - user.used_this_period,
-        periodStart: user.period_start,
-        purchased: tier.addressCount,
-        priceCents: tier.priceCents,
-        stubbed: capture.stubbed,
-        serviceKey: user.service_key,
-        serviceKeyEmailed: emailResult.delivered,
-      });
+    return {
+      email: user.email,
+      tier: user.tier,
+      usedThisPeriod: user.used_this_period,
+      remaining: user.tier - user.used_this_period,
+      periodStart: user.period_start,
+      purchased: tier.addressCount,
+      priceCents: tier.priceCents,
+      stubbed: purchase.stubbed,
+      serviceKey: user.service_key,
+      serviceKeyEmailed,
+    };
+  }
+
+  // Step 1 of a bulk-geocoding purchase: creates a Stripe Checkout Session
+  // for the requested tier and returns its hosted-page URL for the client
+  // to redirect to. The price comes from pricing.js, never the request
+  // body, so a client can't name a cheaper price for a bigger tier.
+  // `returnUrl` is where Stripe sends the browser back to (the checkout
+  // page itself), with `session_id` or `canceled=1` appended.
+  app.post('/billing/checkout-session', async (req, res) => {
+    const { email, addressCount, returnUrl } = req.body || {};
+    try {
+      if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
+        throw new ValidationError('email must be a valid email address');
+      }
+      let parsedReturnUrl;
+      try {
+        parsedReturnUrl = new URL(returnUrl);
+      } catch {
+        throw new ValidationError('returnUrl must be an absolute http(s) URL');
+      }
+      if (!['http:', 'https:'].includes(parsedReturnUrl.protocol)) {
+        throw new ValidationError('returnUrl must be an absolute http(s) URL');
+      }
+      const tier = findTier(addressCount);
+      if (!tier) {
+        throw new ValidationError(`no pricing tier for ${addressCount} addresses`);
+      }
+
+      res.json(await createCheckoutSession({ email, tier, returnUrl }));
     } catch (err) {
       if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
       if (err instanceof PaymentError) return res.status(402).json({ error: err.message });
       console.error(err);
+      res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // Step 2, from the browser Stripe just sent back: confirms the session
+  // was paid (asking Stripe directly, never trusting the redirect itself)
+  // and fulfills it if the webhook hasn't already. Returns the service key
+  // to whoever holds the session id -- an unguessable id Stripe only ever
+  // hands to the browser that paid, same trust model as the purchase
+  // response that used to carry the key under PayPal.
+  app.post('/billing/complete', async (req, res) => {
+    const { sessionId } = req.body || {};
+    try {
+      if (typeof sessionId !== 'string' || !sessionId.trim()) {
+        throw new ValidationError('sessionId must be a non-empty string');
+      }
+      res.json(await completePurchase(await retrievePaidPurchase(sessionId)));
+    } catch (err) {
+      if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
+      if (err instanceof PaymentError) return res.status(402).json({ error: err.message });
+      console.error(err);
+      res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // Step 2, from Stripe itself: fulfills a paid session even if the buyer
+  // closed the tab before Stripe redirected them back. 404s unless
+  // STRIPE_WEBHOOK_SECRET is set (same "unset = disabled" convention as
+  // HERE_API_KEY). Needs the raw request body to check the signature --
+  // serverSetup.js's express.json keeps it as req.rawBody for this path.
+  // A non-2xx makes Stripe retry, so only a bad signature (never a
+  // retryable failure) gets a 400.
+  app.post(STRIPE_WEBHOOK_PATH, async (req, res) => {
+    if (!isWebhookConfigured()) return res.status(404).json({ error: 'not found' });
+    let event;
+    try {
+      event = verifyWebhookEvent(req.rawBody || Buffer.alloc(0), req.get('stripe-signature'));
+    } catch (err) {
+      return res.status(400).json({ error: err.message });
+    }
+    try {
+      if (event.type === 'checkout.session.completed' || event.type === 'checkout.session.async_payment_succeeded') {
+        // A completed session can still be unpaid (a delayed payment
+        // method) -- async_payment_succeeded follows once it clears.
+        if (event.data.object.payment_status === 'paid') {
+          await completePurchase(paidPurchaseFromSession(event.data.object));
+        }
+      }
+      res.json({ received: true });
+    } catch (err) {
+      console.error(err);
+      // A session this server can't fulfill (not paid for a known tier,
+      // e.g. some other product on the same Stripe account) will never
+      // become fulfillable, so acknowledge it rather than have Stripe
+      // retry it for days -- only a real failure (DB down) asks for a retry.
+      if (err instanceof PaymentError) return res.json({ received: true, ignored: err.message });
       res.status(500).json({ error: 'internal error' });
     }
   });
