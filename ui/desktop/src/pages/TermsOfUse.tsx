@@ -40,7 +40,7 @@ export default function TermsOfUse() {
       <h2>5. Payments</h2>
       <p>
         Batch geocoding quota is sold in one-time packs at the prices shown on the <a href="#/pricing">Pricing</a>{' '}
-        page at the time of purchase, processed by PayPal. Purchases are generally final; if you believe you were
+        page at the time of purchase, processed by Stripe. Purchases are generally final; if you believe you were
         charged in error, contact us and we'll look into it.
       </p>
 
