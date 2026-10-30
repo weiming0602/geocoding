@@ -107,7 +107,7 @@ test('POST /geocode/batch with no email at all and a filePath outside the allowe
       // With no email/serviceKey at all and the flag set, this request
       // reaches resolveAddresses() with zero authentication -- this is
       // the exact shape of the arbitrary-file-read this repo's own
-      // .env (PayPal/AWS credentials) was reachable through before
+      // .env (payment/email credentials) was reachable through before
       // readAddressLines started restricting filePath to the OS temp dir.
       const response = await fetch(`http://127.0.0.1:${port}/geocode/batch`, {
         method: 'POST',

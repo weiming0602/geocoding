@@ -199,10 +199,13 @@ read-write).
 - Server env vars (all optional): `GEOCODING_DSN` (default
   `postgresql://my_ai@%2Fvar%2Frun%2Fpostgresql/geocoding`), `USERS_DSN`
   (default `.../geocoding_users`), `PORT` (default 3001), `OFFSET_FEET`
-  (default 20), `PAYPAL_CLIENT_ID`/`PAYPAL_CLIENT_SECRET` (unset =
-  `billing.js`'s stub), `PAYPAL_API_BASE` (default
-  `https://api-m.sandbox.paypal.com` -- set to `https://api-m.paypal.com`
-  to go live), `HERE_API_KEY` (unset = the HERE Traffic API provider is
+  (default 20), `STRIPE_SECRET_KEY` (unset = `billing.js`'s stub, which
+  grants quota for any stub session -- never leave it unset on a box
+  taking real customers; `sk_test_...` = Stripe test mode, `sk_live_...` =
+  real charges), `STRIPE_WEBHOOK_SECRET` (unset = `POST
+  /billing/stripe-webhook` 404s and a purchase is only fulfilled when the
+  buyer's browser returns from Stripe -- see "Stripe checkout" below),
+  `HERE_API_KEY` (unset = the HERE Traffic API provider is
   silently disabled, New England 511 continues to work as before),
   `HERE_BASE_URL` (default
   `https://data.traffic.hereapi.com/v7/incidents` -- override point for
@@ -216,18 +219,33 @@ read-write).
   geocoding is silently disabled -- an authenticated `/geocode` request
   that fails to match just gets today's plain 404, same convention as
   `HERE_API_KEY`; see `geocoding-server/src/llmAssist.js`).
-- Frontend PayPal env vars, both optional and both default to sandbox:
-  `VITE_PAYPAL_CLIENT_ID` (`ui/desktop`, e.g. via a gitignored
-  `ui/desktop/.env.local`) / `EXPO_PUBLIC_PAYPAL_CLIENT_ID` (`ui/mobile`)
-  set the Client ID the checkout page embeds; `VITE_PAYPAL_ENV` /
-  `EXPO_PUBLIC_PAYPAL_ENV` set to `live` swaps the checkout page's
-  sandbox-disclaimer copy for real-charge copy. These only change what
-  the page *says* and which PayPal app it talks to -- keep them in sync
-  with the server's own `PAYPAL_CLIENT_ID`/`PAYPAL_API_BASE`, which is
-  what actually decides sandbox vs. live.
+- **Stripe checkout** (`geocoding-server/src/billing.js`, plain `fetch`
+  -- no Stripe SDK; `ui/desktop`'s `Checkout.tsx`, `ui/mobile`'s
+  `CheckoutSection.web.tsx`). Replaced PayPal (older `transactions` rows
+  still hold PayPal order ids). Three routes: `POST
+  /billing/checkout-session` (server prices the tier from `pricing.js`,
+  creates a Stripe Checkout Session with the tier in its `metadata`,
+  returns Stripe's hosted-page URL to redirect to); `POST
+  /billing/complete` (the browser back from Stripe with `session_id` --
+  the server asks Stripe whether it's paid, never trusting the redirect);
+  `POST /billing/stripe-webhook` (`checkout.session.completed` /
+  `async_payment_succeeded`, signature checked against the raw body, which
+  `serverSetup.js`'s `express.json` keeps as `req.rawBody` for that one
+  path). Both fulfillment paths race for the same session all the time --
+  `transactions.js`'s `fulfillPurchase` grants quota + inserts the
+  transaction row in one DB transaction, and the unique index on
+  `transactions.order_id` (the session id) makes the loser roll back, so
+  quota is granted and emails sent exactly once. The webhook is what
+  covers a buyer who closes the tab before the redirect, and delayed
+  payment methods (bank debits) that only clear days later. The frontends
+  need no Stripe key; `VITE_STRIPE_ENV` / `EXPO_PUBLIC_STRIPE_ENV` = `live`
+  only swaps the test-mode copy for real-charge copy -- keep it in sync
+  with the server's key. Native `ui/mobile` has no checkout (would need a
+  deep-link return URL); its web build returns to
+  `?checkout_tier=...&session_id=...` (`ui/mobile/checkoutReturn.ts`).
 - `RESEND_API_KEY`/`RESEND_FROM_EMAIL` (both optional -- unset =
-  `emailDelivery.js`'s stub) email the service key after
-  `/billing/purchase`, via Resend (`https://api.resend.com/emails`, a
+  `emailDelivery.js`'s stub) email the service key after a completed
+  purchase, via Resend (`https://api.resend.com/emails`, a
   plain authenticated `fetch` call -- no SDK dependency). Not AWS SES:
   SES's manual "request production access" review kept getting denied
   for reasons that were never made clear, so this uses a provider that
@@ -394,8 +412,9 @@ read-write).
 - `TRANSACTIONS_NOTIFY_EMAIL` (optional -- unset = stub) is where the
   owner is told about account activity -- two separate things share this
   one recipient:
-  1. **Purchases/registrations**: `POST /billing/purchase` now emails
-     this address immediately, right after `addToTier` grants the quota
+  1. **Purchases/registrations**: a completed purchase (`/billing/complete`
+     or the Stripe webhook, whichever fulfills it first) emails this
+     address immediately, right after `fulfillPurchase` grants the quota
      and the purchase is saved in `geocoding_users`' `transactions`
      table (see `transactions.js`) -- these rows are financial records,
      never deleted. It's marked `notified_at` right then (reusing
@@ -408,7 +427,7 @@ read-write).
      for exactly that case -- it emails a summary of anything still
      pending (`notified_at IS NULL`) since the last run, which in normal
      operation is nothing, since the immediate send above already
-     handled it. Only a purchase that actually captured via PayPal and
+     handled it. Only a purchase that Stripe confirmed paid and that
      granted quota is ever recorded; a failed/abandoned checkout attempt
      never appears here.
   2. **Batch geocode runs**: all three batch endpoints
@@ -496,10 +515,10 @@ read-write).
   real via Resend, falling back to the same stub pattern when its env
   vars aren't set.
 - No signup/login flow — `users.js`'s `upsertUser()` is a manual admin
-  operation, and account creation itself (via `/billing/purchase` or
+  operation, and account creation itself (via a Stripe purchase or
   `upsertUser`/`addToTier`) isn't authenticated. Batch geocoding itself
   *is* now gated: every account gets an opaque `service_key` (generated
-  once, returned by `/billing/purchase`), and all three batch endpoints
+  once, returned by `/billing/complete`), and all three batch endpoints
   require it alongside the email (see `quota.js`'s `checkQuota`) — email
   alone is no longer enough to spend an account's quota. The read-only
   `GET /quota` status check still only takes an email, by design (it

@@ -14,7 +14,7 @@ const app = createBaseApp({ logRequests: require.main === module });
 registerGeocodingRoutes(app, { db, usersDbPromise });
 
 if (require.main === module) {
-  startServer(app, { name: 'geocoding-server (geocoding routes only)', port: Number(process.env.PORT) || 3001 });
+  startServer(app, { name: 'geocoding-server (geocoding routes only)', port: Number(process.env.PORT) || 3001, servesBilling: true });
 }
 
 module.exports = { app, db, usersDbPromise };
