@@ -30,6 +30,7 @@ export default function Geocode() {
         longitude: response.coordinates.longitude,
         rangeSide: response.source === 'interpolation' ? response.rangeSide : undefined,
         approximate: response.source === 'interpolation' && response.approximate === true ? true : undefined,
+        correctedZip: response.source !== 'address_point' ? response.correctedZip : undefined,
       };
       setResult(lookup);
       addLookup(lookup);
@@ -135,6 +136,14 @@ export default function Geocode() {
                       {' · '}
                       <span className="tag" title="No street segment's address range includes this number; placed between the two nearest ones.">
                         approximate
+                      </span>
+                    </>
+                  )}
+                  {result.correctedZip && (
+                    <>
+                      {' · '}
+                      <span className="tag" title="Found in the town you named; the ZIP you gave belongs to a different area.">
+                        ZIP corrected: {result.correctedZip}
                       </span>
                     </>
                   )}

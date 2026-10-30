@@ -39,16 +39,20 @@ export default function GeocodeForm() {
     try {
       const result = await geocode(trimmedAddress);
       setCoordinates(result.coordinates);
+      const zipNote =
+        result.source !== 'address_point' && result.correctedZip
+          ? ` · ZIP corrected: ${result.correctedZip} (found in ${result.match.town ?? 'the named town'})`
+          : '';
       if (result.source === 'interpolation') {
         setMatchedStreet(`${result.match.fullname} (${result.rangeSide} side)`);
         setMatchDetail(
-          result.approximate
+          (result.approximate
             ? `Street ID: ${result.match.id} · approximate: placed between the two nearest address ranges`
-            : `Street ID: ${result.match.id}`
+            : `Street ID: ${result.match.id}`) + zipNote
         );
       } else if (result.source === 'llm_assisted') {
         setMatchedStreet(`${result.match.fullname} (${result.rangeSide} side)`);
-        setMatchDetail(`AI-corrected: not found as written, read as ${result.correctedAddress}`);
+        setMatchDetail(`AI-corrected: not found as written, read as ${result.correctedAddress}${zipNote}`);
       } else {
         setMatchedStreet(result.match.fullname);
         setMatchDetail(`Exact match (Maine E911) · ${result.match.town}, ${result.match.state_abbr}`);
