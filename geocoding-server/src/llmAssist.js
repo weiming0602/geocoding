@@ -116,7 +116,13 @@ async function attemptLlmAssistInner(
   );
   if (usageRows[0].n >= dailyCap) return null;
   // Spent the moment the LLM is actually called, whatever it answers.
-  if (runBudget) runBudget.remaining -= 1;
+  // Re-checked here, with no await between check and spend: batch runs
+  // several rows at once, and they'd all pass the check above while
+  // waiting on the query, then overspend the run's budget together.
+  if (runBudget) {
+    if (runBudget.remaining <= 0) return null;
+    runBudget.remaining -= 1;
+  }
 
   const { picked, failureReason } = await pickCandidateWithLlm(originalInput, candidates);
 
