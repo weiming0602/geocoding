@@ -13,6 +13,33 @@ def no_osm_download():
         yield mock_osm
 
 
+@pytest.fixture(autouse=True)
+def no_towns_download():
+    """Same for town boundaries (real Census cousub downloads otherwise)."""
+    with patch("geocoding.annual_update.ingest_towns", return_value=0) as mock_towns:
+        yield mock_towns
+
+
+def test_annual_update_ingests_towns_for_every_requested_state(tmp_path, no_towns_download):
+    with patch("geocoding.annual_update.update_state"), patch(
+        "geocoding.annual_update.ingest_address_points", return_value=0
+    ), patch("geocoding.annual_update.refresh_routing_topology"):
+        ok = annual_update("unused-dsn", 2025, tmp_path, states=["ME", "NH"])
+
+    assert ok is True
+    assert {call.args[1] for call in no_towns_download.call_args_list} == {"ME", "NH"}
+
+
+def test_annual_update_returns_false_when_towns_fail(tmp_path, no_towns_download):
+    no_towns_download.side_effect = RuntimeError("network error")
+    with patch("geocoding.annual_update.update_state"), patch(
+        "geocoding.annual_update.ingest_address_points", return_value=0
+    ), patch("geocoding.annual_update.refresh_routing_topology"):
+        ok = annual_update("unused-dsn", 2025, tmp_path, states=["ME"])
+
+    assert ok is False
+
+
 def test_annual_update_calls_update_state_for_every_requested_state(tmp_path):
     with patch("geocoding.annual_update.update_state") as mock_update_state, patch(
         "geocoding.annual_update.ingest_address_points"
