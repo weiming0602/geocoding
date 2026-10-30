@@ -1,112 +1,82 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { StyleSheet, Text, TextInput, View } from 'react-native';
 
-import { DEFAULT_API_BASE_URL, fetchOrThrow } from '../../shared/api/client';
+import { completeCheckout, createCheckoutSession } from '../../shared/api/client';
 import { findTier, formatUsd } from '../../shared/pricing';
 import { colors, radius, space } from '../../shared/theme';
+import { checkoutReturnSession, checkoutReturnUrl } from '../checkoutReturn';
 import ThemedButton from './ThemedButton';
 
-// Same rationale as ui/desktop/src/pages/Checkout.tsx: the app's PayPal
-// Client ID (public by design). Defaults to the sandbox Client ID so a
-// fresh build never accidentally takes real money; set
-// EXPO_PUBLIC_PAYPAL_CLIENT_ID (Expo inlines EXPO_PUBLIC_* at build time)
-// to a live app's Client ID to go live. The Client Secret only ever
-// lives server-side, in geocoding-server's .env.
-const PAYPAL_CLIENT_ID =
-  process.env.EXPO_PUBLIC_PAYPAL_CLIENT_ID ||
-  'AUDJ7TGH_-VU3s7R4O3XBDn80KhOZWab-25TanFeikBPx4hYA8aT_F9tqgaiwHmYwSRoJMxY9ODEiT3P';
-
 // Purely cosmetic (which note/wording to show) -- the server is what
-// actually decides sandbox vs. live. Keep this in sync with that so the
-// checkout screen never tells a real paying customer "no real money
-// moves".
-const PAYPAL_ENV = process.env.EXPO_PUBLIC_PAYPAL_ENV === 'live' ? 'live' : 'sandbox';
+// actually decides test vs. live (an `sk_test_` vs. `sk_live_`
+// STRIPE_SECRET_KEY). Keep this in sync with that so the checkout screen
+// never tells a real paying customer "no real money moves".
+const STRIPE_ENV = process.env.EXPO_PUBLIC_STRIPE_ENV === 'live' ? 'live' : 'test';
 
 type Props = {
   addressCount: number;
   onBack: () => void;
 };
 
-type Status = 'idle' | 'error' | 'success';
+type Status = 'idle' | 'redirecting' | 'completing' | 'error' | 'success';
 
+// Same flow as ui/desktop/src/pages/Checkout.tsx: redirect to Stripe's
+// hosted checkout page, then -- back on a fresh page load with
+// `session_id` in the URL (see checkoutReturn.ts) -- have the server
+// confirm the payment with Stripe and grant the quota.
 export default function CheckoutSection({ addressCount, onBack }: Props) {
   const tier = findTier(addressCount);
+  const [{ sessionId, canceled }] = useState(checkoutReturnSession);
   const [email, setEmail] = useState('');
-  const [status, setStatus] = useState<Status>('idle');
+  const [status, setStatus] = useState<Status>(sessionId ? 'completing' : 'idle');
   const [message, setMessage] = useState('');
   const [serviceKey, setServiceKey] = useState('');
   const [serviceKeyEmailed, setServiceKeyEmailed] = useState(false);
-  const containerRef = useRef<View>(null);
-  const emailRef = useRef(email);
-  emailRef.current = email;
+  // See Checkout.tsx -- guards against React's dev-mode double effect.
+  const completedSessionRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!tier) return;
-    const container = containerRef.current as unknown as HTMLElement | null;
-    if (!container) return;
+    if (!sessionId || completedSessionRef.current === sessionId) return;
+    completedSessionRef.current = sessionId;
+    completeCheckout(sessionId)
+      .then((body) => {
+        setStatus('success');
+        setServiceKey(body.serviceKey ?? '');
+        setServiceKeyEmailed(Boolean(body.serviceKeyEmailed));
+        setMessage(
+          body.stubbed
+            ? `Done (test mode, no real charge) — ${body.tier.toLocaleString()} total monthly addresses now available for ${body.email}.`
+            : `Payment received${STRIPE_ENV === 'test' ? ' (Stripe test mode)' : ''} — ${body.tier.toLocaleString()} total monthly addresses now available for ${body.email}.`
+        );
+      })
+      .catch((err) => {
+        setStatus('error');
+        setMessage(err instanceof Error ? err.message : 'Could not confirm the payment.');
+      });
+  }, [sessionId]);
 
-    const script = document.createElement('script');
-    script.src = `https://www.paypal.com/sdk/js?client-id=${PAYPAL_CLIENT_ID}&currency=USD`;
-    script.onload = () => {
-      const paypal = (window as any).paypal;
-      paypal
-        .Buttons({
-          createOrder: (_data: unknown, actions: any) =>
-            actions.order.create({
-              purchase_units: [{ amount: { value: (tier.priceCents / 100).toFixed(2) } }],
-            }),
-          onApprove: async (data: { orderID: string }) => {
-            const trimmedEmail = emailRef.current.trim();
-            if (!trimmedEmail) {
-              setStatus('error');
-              setMessage('Enter your account email before paying.');
-              return;
-            }
-            try {
-              // Deliberately not calling actions.order.capture() here --
-              // the server captures it (with the Client Secret), which is
-              // what actually confirms the money moved instead of just
-              // trusting the client's word for it.
-              const response = await fetchOrThrow(`${DEFAULT_API_BASE_URL}/billing/purchase`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                  email: trimmedEmail,
-                  addressCount: tier.addressCount,
-                  orderId: data.orderID,
-                }),
-              });
-              const body = await response.json();
-              if (!response.ok) {
-                setStatus('error');
-                setMessage(body.error ?? 'Purchase failed.');
-                return;
-              }
-              setStatus('success');
-              setServiceKey(body.serviceKey ?? '');
-              setServiceKeyEmailed(Boolean(body.serviceKeyEmailed));
-              setMessage(
-                body.stubbed
-                  ? `Done (test mode, no real charge) — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
-                  : `Payment captured${PAYPAL_ENV === 'sandbox' ? ' (sandbox)' : ''} — ${body.tier.toLocaleString()} total monthly addresses now available for ${trimmedEmail}.`
-              );
-            } catch (err) {
-              setStatus('error');
-              setMessage(err instanceof Error ? err.message : 'Purchase failed.');
-            }
-          },
-          onError: (err: unknown) => {
-            setStatus('error');
-            setMessage(err instanceof Error ? err.message : 'PayPal reported an error.');
-          },
-        })
-        .render(container);
-    };
-    document.body.appendChild(script);
-    return () => {
-      document.body.removeChild(script);
-    };
-  }, [tier]);
+  async function handlePay() {
+    if (!tier) return;
+    const trimmedEmail = email.trim();
+    if (!trimmedEmail) {
+      setStatus('error');
+      setMessage('Enter your account email before paying.');
+      return;
+    }
+    setStatus('redirecting');
+    setMessage('');
+    try {
+      const { url } = await createCheckoutSession({
+        email: trimmedEmail,
+        addressCount: tier.addressCount,
+        returnUrl: checkoutReturnUrl(tier.addressCount),
+      });
+      window.location.assign(url);
+    } catch (err) {
+      setStatus('error');
+      setMessage(err instanceof Error ? err.message : 'Could not start checkout.');
+    }
+  }
 
   if (!tier) return null;
 
@@ -119,25 +89,40 @@ export default function CheckoutSection({ addressCount, onBack }: Props) {
 
       <View style={styles.noteCard}>
         <Text style={styles.noteText}>
-          {PAYPAL_ENV === 'live'
-            ? "This is a real charge. Completing checkout charges your PayPal account or card for the amount above — captured server-side once you approve it."
-            : "Sandbox mode: this runs PayPal's real sandbox order flow, captured server-side — no real money moves, but the transaction itself is real (it'll show up in PayPal's sandbox dashboard). Your account's quota is topped up for real either way."}
+          {STRIPE_ENV === 'live'
+            ? "This is a real charge. Continuing takes you to Stripe's secure checkout page to pay by card for the amount above; you'll come back here once it's done."
+            : "Test mode: this runs Stripe's real checkout flow in test mode — no real money moves (pay with Stripe's test card 4242 4242 4242 4242, any future expiry, any CVC). Your account's quota is topped up for real either way."}
         </Text>
       </View>
 
-      <Text style={styles.label}>Account email</Text>
-      <TextInput
-        style={styles.input}
-        placeholder="you@company.com"
-        placeholderTextColor={colors.neutral500}
-        value={email}
-        onChangeText={setEmail}
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="email-address"
-      />
+      {status !== 'success' && status !== 'completing' && (
+        <>
+          {canceled && status === 'idle' && (
+            <Text style={styles.message}>Checkout canceled — nothing was charged.</Text>
+          )}
+          <Text style={styles.label}>Account email</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="you@company.com"
+            placeholderTextColor={colors.neutral500}
+            value={email}
+            onChangeText={setEmail}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+          />
 
-      <View ref={containerRef} style={styles.paypalContainer} />
+          <View style={styles.payButton}>
+            <ThemedButton
+              title={status === 'redirecting' ? 'Opening checkout…' : `Continue to payment — ${formatUsd(tier.priceCents)}`}
+              onPress={handlePay}
+              disabled={status === 'redirecting'}
+            />
+          </View>
+        </>
+      )}
+
+      {status === 'completing' && <Text style={styles.message}>Confirming your payment…</Text>}
 
       {status === 'success' && (
         <>
@@ -216,7 +201,7 @@ const styles = StyleSheet.create({
     marginBottom: space[4],
     color: colors.text,
   },
-  paypalContainer: {
+  payButton: {
     marginBottom: space[4],
   },
   message: {
