@@ -4,8 +4,8 @@ import react from '@vitejs/plugin-react';
 
 // The Road Alerts site (alerts.meridiangeocoding.com -- see
 // src/siteConfig.ts) is the same app built with VITE_APP=road-alerts; its
-// page title and Add-to-Home-Screen identity are static HTML, so they're
-// swapped here rather than at runtime.
+// page title, Add-to-Home-Screen identity and link-preview URLs are static
+// HTML, so they're swapped here rather than at runtime.
 function roadAlertsSiteHtml(): Plugin {
   return {
     name: 'road-alerts-site-html',
@@ -13,7 +13,8 @@ function roadAlertsSiteHtml(): Plugin {
       return html
         .replace(/<title>[^<]*<\/title>/, '<title>Meridian Road Alerts — live traffic hazards ahead of you</title>')
         .replace('href="/manifest.webmanifest"', 'href="/road-alerts.webmanifest"')
-        .replace('name="apple-mobile-web-app-title" content="Meridian"', 'name="apple-mobile-web-app-title" content="Road Alerts"');
+        .replace('name="apple-mobile-web-app-title" content="Meridian"', 'name="apple-mobile-web-app-title" content="Road Alerts"')
+        .replaceAll('https://www.meridiangeocoding.com/', 'https://alerts.meridiangeocoding.com/');
     },
   };
 }
