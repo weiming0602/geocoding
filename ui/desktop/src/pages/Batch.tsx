@@ -532,7 +532,7 @@ export default function Batch() {
                                   </span>
                                 </>
                               )}
-                              {result.source !== 'address_point' && result.correctedZip && (
+                              {result.correctedZip && (
                                 <>
                                   {' · '}
                                   <span className="tag" title="Found in the town named in the address; the ZIP given belongs to a different area.">

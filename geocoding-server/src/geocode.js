@@ -36,6 +36,10 @@ async function geocode(db, addressInput, { offsetFeet = 20, llmAssist = null } =
       },
       source: 'address_point',
       coordinates: { latitude: addressPoint.latitude, longitude: addressPoint.longitude },
+      // Matched by town despite a ZIP that says otherwise (see matchAddressPoint);
+      // correctedZip only when the street's real ZIP could be read off nearby.
+      ...(addressPoint.matchedByTown ? { matchedBy: 'town' } : {}),
+      ...(addressPoint.correctedZip ? { correctedZip: addressPoint.correctedZip } : {}),
     };
   }
 

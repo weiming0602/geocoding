@@ -101,9 +101,11 @@ async function candidateStreets(db, streetName, zip, state) {
  * so it's left unchecked rather than rejecting a match TIGER simply
  * has no data on. When street_names *does* have this street under a
  * completely different set of ZIPs, that's real contradicting evidence
- * (a typo, or the same street name in a different town) -- the match is
- * treated as no match instead of accepted with full confidence, falling
- * through to the interpolation path, which does validate ZIP directly.
+ * (a typo, or the same street name in a different town). Without a town
+ * the match is treated as no match, falling through to the interpolation
+ * path, which does validate ZIP directly; with one, the named town beats
+ * the ZIP -- the point is kept, tagged with the street's real ZIP
+ * (correctedZip) when the nearest segment of it has one.
  */
 async function matchAddressPoint(db, number, streetName, town, zip, state) {
   // TIGER-style input abbreviates suffixes ("Dr"); Maine's E911 data
@@ -136,10 +138,46 @@ async function matchAddressPoint(db, number, streetName, town, zip, state) {
       [streetName, expanded, zip]
     );
     const { street_known, zip_matches } = zipCheckRows[0];
-    if (street_known && !zip_matches) return null;
+    if (street_known && !zip_matches) {
+      // With a town, the point is in that very town (the query above
+      // filtered on it), and the named town beats the ZIP (see
+      // matchByStreetAndTown): keep the exact point, reporting the ZIP its
+      // street really has. Without one, the ZIP is the only location
+      // signal there is, and it says this is another street.
+      if (!town) return null;
+      point.matchedByTown = true;
+      point.correctedZip = await nearestStreetZip(db, [streetName, expanded], point);
+    }
   }
 
   return point;
+}
+
+// A corrected ZIP is read off the same-named street segment nearest an
+// address point, and only when that segment is this close -- farther
+// off, it may well be a different street that happens to share the name.
+const MAX_ZIP_LOOKUP_METERS = 300;
+
+/**
+ * The ZIP of the `names` street segment nearest `point`, or null when
+ * there's none close by or its two sides have different ZIPs (which side
+ * the point is on isn't worth working out just to label it).
+ */
+async function nearestStreetZip(db, names, point) {
+  const { rows } = await db.query(
+    `SELECT streets.zipl, streets.zipr,
+            ST_Distance(streets.geom::geography, ST_SetSRID(ST_MakePoint($3, $4), 4326)::geography) AS meters
+     FROM street_names
+     JOIN streets ON streets.tlid = street_names.tlid
+     WHERE UPPER(street_names.fullname) IN (UPPER($1), UPPER($2))
+     ORDER BY streets.geom <-> ST_SetSRID(ST_MakePoint($3, $4), 4326)
+     LIMIT 1`,
+    [names[0], names[1], point.longitude, point.latitude]
+  );
+  const nearest = rows[0];
+  if (!nearest || nearest.meters > MAX_ZIP_LOOKUP_METERS) return null;
+  const zips = [...new Set([nearest.zipl, nearest.zipr].filter(Boolean))];
+  return zips.length === 1 ? zips[0] : null;
 }
 
 const SIDES = {

@@ -225,7 +225,7 @@ export default function BatchGeocodeForm({
           result.source === 'interpolation' ? result.rangeSide : '',
           '',
           result.source === 'llm_assisted' ? (result.correctedStreet ?? result.correctedAddress) : '',
-          result.source !== 'address_point' ? (result.correctedZip ?? '') : '',
+          result.correctedZip ?? '',
         ]
           .map(csvField)
           .join(',');
@@ -440,7 +440,7 @@ export default function BatchGeocodeForm({
                     {result.source === 'llm_assisted'
                       ? ` · AI-corrected: ${result.correctedStreet ?? result.correctedAddress}`
                       : ''}
-                    {result.source !== 'address_point' && result.correctedZip
+                    {result.correctedZip
                       ? ` · ZIP corrected: ${result.correctedZip}`
                       : ''}
                   </Text>

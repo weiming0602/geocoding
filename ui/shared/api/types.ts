@@ -51,12 +51,12 @@ type GeocodeInput = { number: number; streetName: string; zip: string; state?: s
 // used to render an empty "side" tag for every address_point result
 // because they didn't.
 export type GeocodeResult =
-  | {
+  | ({
       input: GeocodeInput;
       match: AddressPointMatch;
       source: 'address_point';
       coordinates: Coordinates;
-    }
+    } & ZipCorrection)
   | ({
       input: GeocodeInput;
       match: StreetMatch;

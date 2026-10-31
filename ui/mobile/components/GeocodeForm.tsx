@@ -39,10 +39,9 @@ export default function GeocodeForm() {
     try {
       const result = await geocode(trimmedAddress);
       setCoordinates(result.coordinates);
-      const zipNote =
-        result.source !== 'address_point' && result.correctedZip
-          ? ` · ZIP corrected: ${result.correctedZip} (found in ${result.match.town ?? 'the named town'})`
-          : '';
+      const zipNote = result.correctedZip
+        ? ` · ZIP corrected: ${result.correctedZip} (found in ${result.match.town ?? 'the named town'})`
+        : '';
       if (result.source === 'interpolation') {
         setMatchedStreet(`${result.match.fullname} (${result.rangeSide} side)`);
         setMatchDetail(
@@ -55,7 +54,7 @@ export default function GeocodeForm() {
         setMatchDetail(`AI-corrected: not found as written, read as ${result.correctedAddress}${zipNote}`);
       } else {
         setMatchedStreet(result.match.fullname);
-        setMatchDetail(`Exact match (Maine E911) · ${result.match.town}, ${result.match.state_abbr}`);
+        setMatchDetail(`Exact match (Maine E911) · ${result.match.town}, ${result.match.state_abbr}${zipNote}`);
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Geocoding failed.';

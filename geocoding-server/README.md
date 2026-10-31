@@ -45,10 +45,14 @@ house number, narrowed by town) — see `matchAddressPoint()` in
 caller-supplied ZIP is cross-checked against `street_names`' ZIPs for
 that street *only when street_names actually has an opinion*: a street
 E911 covers but TIGER doesn't (no `street_names` row at all) is left
-unchecked, but a street TIGER does know under a completely different
-set of ZIPs is treated as a mismatch (not silently accepted), falling
-through to the range-interpolation path instead, which does check ZIP
-directly. State is checked directly against the point's own
+unchecked. A street TIGER does know under a completely different set
+of ZIPs is a mismatch: with no town in the address it's rejected
+(falling through to range interpolation, which checks ZIP directly);
+with one, the point is in that town, and the town wins -- the exact
+point is returned with `"matchedBy": "town"` and a `"correctedZip"`
+read off the nearest segment of that street (`"35 Academy St, Presque
+Isle, ME 04032"` -- 04032 is Freeport -- gets Presque Isle's surveyed
+point, corrected to 04769). State is checked directly against the point's own
 `state_abbr`. Each response reports which path was used
 (`"source": "address_point"` vs `"interpolation"` vs, for an
 authenticated request only, `"llm_assisted"` when the address was
