@@ -113,8 +113,8 @@ function GeocodingHelp() {
         real streets with similar spellings (from the town you named, then your ZIP) and asks an AI
         model which one you meant — "Pine St" for "Piine St". It can only pick a street that really
         exists, never invent one, and a rescued result is marked AI-corrected. Signed-in means a paid
-        batch run (automatic), the website's Geocode page with your email and service key entered,
-        or an API request that includes them. Up to 50 retries a day for single lookups, 1,000 a day
+        batch run (automatic), the Geocode screen with your email and service key entered under
+        "Use your account", or an API request that includes them. Up to 50 retries a day for single lookups, 1,000 a day
         in batch runs (200 per run).
       </Text>
 

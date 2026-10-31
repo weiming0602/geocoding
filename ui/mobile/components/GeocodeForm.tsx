@@ -1,10 +1,12 @@
-import React, { useCallback, useState } from 'react';
-import { Alert, StyleSheet, Text, TextInput, View } from 'react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import { Alert, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 
 import { geocode } from '../../shared/api/client';
+import type { AccountCredentials } from '../../shared/api/client';
 import type { Coordinates } from '../../shared/api/types';
 import { colors, radius, space } from '../../shared/theme';
 import GeocodeMap from './GeocodeMap';
+import { getStoredGeocodeAccount, setStoredGeocodeAccount } from './geocodeAccountStorage';
 import { Icon } from './icons';
 import ThemedButton from './ThemedButton';
 
@@ -19,6 +21,26 @@ export default function GeocodeForm() {
   // worth carrying the raw match object around for.
   const [matchDetail, setMatchDetail] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Optional: with both filled in, lookups are signed in -- quota-metered,
+  // and a misspelled street gets the AI-assisted retry (see client.ts's
+  // AccountCredentials). Remembered between launches.
+  const [account, setAccount] = useState<AccountCredentials>({ email: '', serviceKey: '' });
+  const [accountOpen, setAccountOpen] = useState(false);
+  const signedIn = account.email.trim() !== '' && account.serviceKey.trim() !== '';
+
+  useEffect(() => {
+    let cancelled = false;
+    getStoredGeocodeAccount().then((stored) => {
+      if (!cancelled && stored) setAccount(stored);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const saveAccount = useCallback(() => {
+    void setStoredGeocodeAccount(account);
+  }, [account]);
 
   const handleGeocode = useCallback(async () => {
     const trimmedAddress = address.trim();
@@ -36,8 +58,9 @@ export default function GeocodeForm() {
     setMatchedStreet(null);
     setMatchDetail(null);
 
+    saveAccount();
     try {
-      const result = await geocode(trimmedAddress);
+      const result = await geocode(trimmedAddress, undefined, account);
       setCoordinates(result.coordinates);
       const zipNote = result.correctedZip
         ? ` · ZIP corrected: ${result.correctedZip} (found in ${result.match.town ?? 'the named town'})`
@@ -63,7 +86,7 @@ export default function GeocodeForm() {
     } finally {
       setLoading(false);
     }
-  }, [address]);
+  }, [address, account, saveAccount]);
 
   return (
     <View style={styles.container}>
@@ -88,6 +111,51 @@ export default function GeocodeForm() {
       />
 
       <ThemedButton title="Geocode" onPress={handleGeocode} loading={loading} block />
+
+      <TouchableOpacity
+        onPress={() => setAccountOpen((open) => !open)}
+        accessibilityRole="button"
+        accessibilityState={{ expanded: accountOpen }}
+        style={styles.spacing}
+      >
+        <Text style={styles.accountToggle}>
+          {accountOpen ? '▾ ' : '▸ '}
+          {signedIn ? `Signed in as ${account.email.trim()}` : 'Use your account (AI spelling correction)'}
+        </Text>
+      </TouchableOpacity>
+      {accountOpen && (
+        <View style={styles.spacing}>
+          <Text style={styles.label}>Account email</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="you@company.com"
+            placeholderTextColor={colors.neutral500}
+            value={account.email}
+            onChangeText={(email) => setAccount((a) => ({ ...a, email }))}
+            onEndEditing={saveAccount}
+            autoCapitalize="none"
+            autoCorrect={false}
+            keyboardType="email-address"
+            editable={!loading}
+          />
+          <Text style={styles.label}>Service key</Text>
+          <TextInput
+            style={styles.input}
+            placeholder="mk_..."
+            placeholderTextColor={colors.neutral500}
+            value={account.serviceKey}
+            onChangeText={(serviceKey) => setAccount((a) => ({ ...a, serviceKey }))}
+            onEndEditing={saveAccount}
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!loading}
+          />
+          <Text style={styles.hint}>
+            Optional. With both filled in, each found address uses one from your plan, and a misspelled
+            street gets an AI-assisted retry. Remembered on this device; clear both fields to stop.
+          </Text>
+        </View>
+      )}
 
       {!loading && coordinates && (
         <View style={[styles.card, styles.spacing]}>
@@ -180,6 +248,19 @@ const styles = StyleSheet.create({
     color: colors.text,
     opacity: 0.65,
     marginTop: 2,
+  },
+  accountToggle: {
+    fontFamily: 'Lora_400Regular',
+    fontSize: 13,
+    color: colors.text,
+    opacity: 0.7,
+  },
+  hint: {
+    fontFamily: 'Lora_400Regular',
+    fontSize: 11,
+    color: colors.text,
+    opacity: 0.6,
+    marginTop: -space[2],
   },
   errorText: {
     fontFamily: 'Lora_400Regular',
