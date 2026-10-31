@@ -63,38 +63,59 @@ function GeocodingHelp() {
       </View>
 
       <Text style={styles.heading}>Forward geocoding: address → coordinates</Text>
+      <Text style={styles.paragraph}>Meridian tries these in order and stops at the first one that finds your address:</Text>
+      <Text style={styles.listItem}>
+        1. <Text style={styles.bold}>An exact surveyed point</Text> (Maine only). If your house number,
+        street and town match a building in Maine's E911 data, that exact point is returned.
+      </Text>
+      <Text style={styles.listItem}>
+        2. <Text style={styles.bold}>The street, inside the town you named.</Text> Meridian knows
+        every Maine and New Hampshire town's boundary, and looks for your street inside that town.
+      </Text>
+      <Text style={styles.listItem}>
+        3. <Text style={styles.bold}>The street, by ZIP code.</Text> Used when you gave no town, the
+        town isn't recognized, or it has no street by that name.
+      </Text>
       <Text style={styles.paragraph}>
-        Every street is stored as a series of segments. Each segment records an address range on its{' '}
+        Steps 2 and 3 work from street segments. Each segment records an address range on its{' '}
         <Text style={styles.bold}>left</Text> side and a separate range on its{' '}
-        <Text style={styles.bold}>right</Text> side — because the two sides of a street are usually
-        numbered differently (one side odd, one side even).
-      </Text>
-      <Text style={styles.paragraph}>When you geocode an address:</Text>
-      <Text style={styles.listItem}>1. Look up the street by name and ZIP code, and find every segment that could match.</Text>
-      <Text style={styles.listItem}>
-        2. Check the house number's parity — <Text style={styles.bold}>odd numbers are treated as the left side</Text>{' '}
-        of the street, <Text style={styles.bold}>even numbers as the right side</Text> — and pick the
-        segment whose range on that side actually contains the number.
-      </Text>
-      <Text style={styles.listItem}>
-        3. Interpolate a point proportionally along that segment: if the range runs 1–99 and you asked
-        for 91, the point sits about 91% of the way from the "1" end toward the "99" end.
-      </Text>
-      <Text style={styles.listItem}>
-        4. Offset the point slightly off the street centerline, onto the correct side, so the pin
-        lands on the building's side of the road rather than in the middle of the street.
+        <Text style={styles.bold}>right</Text> side — one side odd, the other even. Which side holds
+        the odd numbers varies from segment to segment, so Meridian reads it from each segment's own
+        data, picks the side whose range contains your number, places a point proportionally along
+        the segment (91 in a 1–99 range sits about 91% of the way along), and moves it slightly off
+        the centerline onto that side.
       </Text>
 
       <Image source={chestnutImage} style={styles.image} resizeMode="contain" />
       <Text style={styles.caption}>
-        Chestnut Rd runs from house number 1 to 99. 91 is odd, so it's placed on the left side of the
-        street, about 91% of the way toward the 99 end — matching the marker near "end num: 99."
+        Chestnut Rd runs from house number 1 to 99. On this segment the odd numbers are on the left,
+        so 91 is placed on the left side, about 91% of the way toward the 99 end — matching the
+        marker near "end num: 99."
       </Text>
 
       <Image source={sawyerImage} style={styles.image} resizeMode="contain" />
       <Text style={styles.caption}>
-        Sawyer Brook Rd runs from house number 2 to 98. 26 is even, so it's placed on the right side
-        of the street, close to the "start num: 2" end — since 26 is near the low end of the range.
+        Sawyer Brook Rd runs from house number 2 to 98. On this segment the even numbers are on the
+        right, so 26 is placed on the right side, close to the "start num: 2" end — since 26 is near
+        the low end of the range.
+      </Text>
+
+      <Text style={styles.heading}>When an address has a mistake</Text>
+      <Text style={styles.paragraph}>
+        <Text style={styles.bold}>Wrong ZIP code.</Text> The town you named comes first: "10 Forest
+        Ave, Lebanon, NH 03301" (03301 is Concord's) is still found in Lebanon, and the result says{' '}
+        <Text style={styles.bold}>ZIP corrected: 03766</Text>. The ZIP is only used when the town
+        can't place the address. Town names must be the official town or city — a village name like
+        "West Lebanon" isn't recognized and falls back to the ZIP.
+      </Text>
+      <Text style={styles.paragraph}>
+        <Text style={styles.bold}>Misspelled street.</Text> For signed-in requests, Meridian collects
+        real streets with similar spellings (from the town you named, then your ZIP) and asks an AI
+        model which one you meant — "Pine St" for "Piine St". It can only pick a street that really
+        exists, never invent one, and a rescued result is marked AI-corrected. Signed-in means a paid
+        batch run (automatic), the website's Geocode page with your email and service key entered,
+        or an API request that includes them. Up to 50 retries a day for single lookups, 1,000 a day
+        in batch runs (200 per run).
       </Text>
 
       <Text style={styles.heading}>Street aliases (a.k.a. names)</Text>
@@ -110,22 +131,23 @@ function GeocodingHelp() {
         Reverse geocoding runs the same logic backwards: find the street segment closest to the
         coordinate you provide, work out which side of that segment's direction of travel the point
         falls on, and interpolate a house number from how far along the segment the point sits — then
-        round that number to the correct parity (odd for the left side, even for the right).
+        round that number to match the numbering on that side of that segment (odd or even).
       </Text>
 
       <Text style={styles.heading}>Batch geocoding</Text>
       <Text style={styles.paragraph}>
         Batch jobs process a plain-text file of addresses (one per line, no cap on count), running
         the same forward-geocoding logic on every line independently — one bad address doesn't stop
-        the rest of the batch. Results can be downloaded as a ZIP. Note: quota is only checked and
-        recorded for email delivery, not for a plain batch run or ZIP download.
+        the rest of the batch. Results can be downloaded as a ZIP. Every batch run needs your account
+        email and service key, and uses one address from your plan for every line, found or not —
+        lines that aren't found get the AI-assisted retry at no extra cost.
       </Text>
 
       <Text style={styles.heading}>Plan &amp; quota</Text>
       <Text style={styles.paragraph}>
-        Usage is tracked per account email against a monthly request tier. Quota resets on the 1st of
-        each calendar month; an email-delivery request that would exceed the remaining quota is
-        rejected up front, before any addresses are processed.
+        Usage is tracked per account email against a monthly tier, which resets on the 1st of each
+        calendar month. A batch run that would exceed what's left is rejected up front, before any
+        addresses are processed. A signed-in single lookup uses one address only when it's found.
       </Text>
     </>
   );
