@@ -532,6 +532,14 @@ export default function Batch() {
                                   </span>
                                 </>
                               )}
+                              {result.correctedZip && (
+                                <>
+                                  {' · '}
+                                  <span className="tag" title="Found in the town named in the address; the ZIP given belongs to a different area.">
+                                    ZIP corrected: {result.correctedZip}
+                                  </span>
+                                </>
+                              )}
                             </span>
                           ) : (
                             <span style={{ color: '#a4402a' }}>{result.error}</span>

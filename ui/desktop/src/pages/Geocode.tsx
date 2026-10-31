@@ -1,10 +1,34 @@
 import { useCallback, useState } from 'react';
 
 import { geocode } from '../../../shared/api/client';
+import type { AccountCredentials } from '../../../shared/api/client';
 import MapView from '../components/MapView';
 import PageHeader from '../components/PageHeader';
 import { useRecentLookups } from '../state/RecentLookups';
 import type { RecentLookup } from '../state/RecentLookups';
+
+// Remembered in this browser only, the same way the /owner page keeps its
+// passcode -- so a signed-in user doesn't retype the key for every lookup.
+const ACCOUNT_STORAGE_KEY = 'meridian.geocodeAccount';
+
+function loadAccount(): AccountCredentials {
+  try {
+    const saved = JSON.parse(localStorage.getItem(ACCOUNT_STORAGE_KEY) ?? 'null');
+    if (saved && typeof saved.email === 'string' && typeof saved.serviceKey === 'string') return saved;
+  } catch {
+    // Storage blocked or unreadable -- start blank.
+  }
+  return { email: '', serviceKey: '' };
+}
+
+function saveAccount(account: AccountCredentials) {
+  try {
+    if (account.email || account.serviceKey) localStorage.setItem(ACCOUNT_STORAGE_KEY, JSON.stringify(account));
+    else localStorage.removeItem(ACCOUNT_STORAGE_KEY);
+  } catch {
+    // Not remembered; the lookup itself still works.
+  }
+}
 
 export default function Geocode() {
   const { recentLookups, addLookup } = useRecentLookups();
@@ -13,6 +37,14 @@ export default function Geocode() {
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<RecentLookup | null>(null);
   const [copyLabel, setCopyLabel] = useState('Copy coordinates');
+  const [account, setAccount] = useState<AccountCredentials>(loadAccount);
+  const signedIn = account.email.trim() !== '' && account.serviceKey.trim() !== '';
+
+  const updateAccount = (change: Partial<AccountCredentials>) => {
+    const next = { ...account, ...change };
+    setAccount(next);
+    saveAccount(next);
+  };
 
   const runGeocode = useCallback(async (query: string) => {
     const trimmed = query.trim();
@@ -23,13 +55,15 @@ export default function Geocode() {
     setLoading(true);
     setError(null);
     try {
-      const response = await geocode(trimmed);
+      const response = await geocode(trimmed, undefined, account);
       const lookup: RecentLookup = {
         address: trimmed,
         latitude: response.coordinates.latitude,
         longitude: response.coordinates.longitude,
         rangeSide: response.source === 'interpolation' ? response.rangeSide : undefined,
         approximate: response.source === 'interpolation' && response.approximate === true ? true : undefined,
+        correctedZip: response.correctedZip,
+        correctedStreet: response.source === 'llm_assisted' ? response.correctedStreet : undefined,
       };
       setResult(lookup);
       addLookup(lookup);
@@ -38,7 +72,7 @@ export default function Geocode() {
     } finally {
       setLoading(false);
     }
-  }, [addLookup]);
+  }, [addLookup, account]);
 
   const handleCopy = useCallback(() => {
     if (!result) return;
@@ -77,6 +111,37 @@ export default function Geocode() {
               {error}
             </p>
           )}
+
+          <details open={signedIn || undefined}>
+            <summary className="text-muted" style={{ cursor: 'pointer', fontSize: 13 }}>
+              {signedIn ? `Signed in as ${account.email.trim()}` : 'Use your account (AI spelling correction)'}
+            </summary>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-3)', marginTop: 'var(--space-3)' }}>
+              <div className="field">
+                <label>Account email</label>
+                <input
+                  className="input"
+                  placeholder="you@company.com"
+                  value={account.email}
+                  onChange={(e) => updateAccount({ email: e.target.value })}
+                />
+              </div>
+              <div className="field">
+                <label>Service key</label>
+                <input
+                  className="input"
+                  placeholder="mk_..."
+                  value={account.serviceKey}
+                  onChange={(e) => updateAccount({ serviceKey: e.target.value })}
+                />
+                <p className="text-muted" style={{ fontSize: 11, marginTop: 4 }}>
+                  Optional. With both filled in, each found address uses one from your plan, and a
+                  misspelled street gets an AI-assisted retry. Remembered in this browser; clear the
+                  fields to stop.
+                </p>
+              </div>
+            </div>
+          </details>
 
           <div className="hr" />
           <h5 className="text-muted" style={{ letterSpacing: '0.06em', textTransform: 'uppercase' }}>
@@ -135,6 +200,22 @@ export default function Geocode() {
                       {' · '}
                       <span className="tag" title="No street segment's address range includes this number; placed between the two nearest ones.">
                         approximate
+                      </span>
+                    </>
+                  )}
+                  {result.correctedStreet && (
+                    <>
+                      {' · '}
+                      <span className="tag tag-accent" title="Not found as written; AI read it as this street.">
+                        AI-corrected: {result.correctedStreet}
+                      </span>
+                    </>
+                  )}
+                  {result.correctedZip && (
+                    <>
+                      {' · '}
+                      <span className="tag" title="Found in the town you named; the ZIP you gave belongs to a different area.">
+                        ZIP corrected: {result.correctedZip}
                       </span>
                     </>
                   )}

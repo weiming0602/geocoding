@@ -16,7 +16,16 @@ export type StreetMatch = {
   zipr?: string;
   state?: string;
   state_abbr?: string;
+  // Set when the street was found by the town the address names (see
+  // ZipCorrection below), not by its ZIP.
+  town?: string;
 };
+
+// Found inside the town the address names, ahead of its ZIP
+// (geocoding-server/src/geocodeMatching.js's matchByStreetAndTown).
+// correctedZip is the matched street's real ZIP when the address's own
+// ZIP was a different one -- i.e. the input's ZIP looks wrong.
+type ZipCorrection = { matchedBy?: 'town'; correctedZip?: string };
 
 // A Maine E911 address point -- an exact match (see matchAddressPoint in
 // geocode.js), preferred over interpolation whenever one exists. No
@@ -42,13 +51,13 @@ type GeocodeInput = { number: number; streetName: string; zip: string; state?: s
 // used to render an empty "side" tag for every address_point result
 // because they didn't.
 export type GeocodeResult =
-  | {
+  | ({
       input: GeocodeInput;
       match: AddressPointMatch;
       source: 'address_point';
       coordinates: Coordinates;
-    }
-  | {
+    } & ZipCorrection)
+  | ({
       input: GeocodeInput;
       match: StreetMatch;
       source: 'interpolation';
@@ -60,8 +69,8 @@ export type GeocodeResult =
       // was placed in the gap between the two nearest ranges on the same
       // street (geocoding-server/src/geocodeMatching.js's rangeGapFallback).
       approximate?: boolean;
-    }
-  | {
+    } & ZipCorrection)
+  | ({
       // The street couldn't be found as written; an LLM picked which real
       // street was meant (geocoding-server/src/llmAssist.js) and the
       // result is interpolated along that one. Signed-in single geocodes
@@ -78,7 +87,7 @@ export type GeocodeResult =
       correctedAddress: string;
       // Just the street name, e.g. "Front St"
       correctedStreet?: string;
-    };
+    } & ZipCorrection);
 
 // POST /reverse-geocode -- NOT the same shape as GeocodeResult: the side
 // field is `side` here (not `rangeSide`), and the resolved point is

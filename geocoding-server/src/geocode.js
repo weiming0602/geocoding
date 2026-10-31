@@ -1,6 +1,6 @@
 const { parseAddress } = require('./parseAddress');
 const { NotFoundError } = require('./errors');
-const { matchAddressPoint, matchByStreetAndZip } = require('./geocodeMatching');
+const { matchAddressPoint, matchByStreetAndZip, matchByStreetAndTown } = require('./geocodeMatching');
 const { attemptLlmAssist } = require('./llmAssist');
 
 /**
@@ -36,7 +36,22 @@ async function geocode(db, addressInput, { offsetFeet = 20, llmAssist = null } =
       },
       source: 'address_point',
       coordinates: { latitude: addressPoint.latitude, longitude: addressPoint.longitude },
+      // Matched by town despite a ZIP that says otherwise (see matchAddressPoint);
+      // correctedZip only when the street's real ZIP could be read off nearby.
+      ...(addressPoint.matchedByTown ? { matchedBy: 'town' } : {}),
+      ...(addressPoint.correctedZip ? { correctedZip: addressPoint.correctedZip } : {}),
     };
+  }
+
+  // The town the address names comes before its ZIP: a street found
+  // inside that town is used even when the ZIP disagrees (and the result
+  // says so via correctedZip). Only when the town is unknown, or doesn't
+  // have this street/number, does the ZIP get its say below.
+  let townError = null;
+  if (town) {
+    const byTown = await matchByStreetAndTown(db, number, streetName, town, state, zip, offsetFeet);
+    if (byTown.result) return { input: { number, streetName, zip, state, town }, ...byTown.result };
+    townError = byTown.error;
   }
 
   // No exact address-point match, and no ZIP to fall back on -- unlike
@@ -47,6 +62,7 @@ async function geocode(db, addressInput, { offsetFeet = 20, llmAssist = null } =
   // actual problem, rather than letting `street_names.zipColumn = NULL`
   // silently match nothing and surface as a confusing "in ZIP null".
   if (!zip) {
+    if (townError) throw townError;
     const notFound = new NotFoundError(
       `could not find an exact address match for "${streetName}" in ${town ?? 'the given town'} -- ` +
         'add a ZIP code to search by street range instead'
@@ -62,6 +78,9 @@ async function geocode(db, addressInput, { offsetFeet = 20, llmAssist = null } =
     const result = await matchByStreetAndZip(db, number, streetName, zip, state, offsetFeet);
     return { input: { number, streetName, zip, state, town }, ...result };
   } catch (err) {
+    // The named town has this street, just not this number -- more useful
+    // than "no such street in this ZIP", and nothing a spelling fix helps.
+    if (err instanceof NotFoundError && townError) throw townError;
     if (err instanceof NotFoundError && llmAssist) {
       const assisted = await attemptLlmAssist(db, llmAssist, parsed, addressInput, offsetFeet);
       if (assisted) return { input: { number, streetName, zip, state, town }, ...assisted };

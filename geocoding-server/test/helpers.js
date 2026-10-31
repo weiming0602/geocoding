@@ -105,7 +105,8 @@ async function seedFixtureStreets(pool) {
       minx DOUBLE PRECISION,
       miny DOUBLE PRECISION,
       maxx DOUBLE PRECISION,
-      maxy DOUBLE PRECISION
+      maxy DOUBLE PRECISION,
+      geom geometry(Geometry, 4326)
     );
     CREATE TABLE street_names (
       id BIGSERIAL PRIMARY KEY,
@@ -127,7 +128,34 @@ async function seedFixtureStreets(pool) {
       state_abbr TEXT,
       geom geometry(Point, 4326)
     );
+    CREATE TABLE towns (
+      id BIGSERIAL PRIMARY KEY,
+      geoid TEXT NOT NULL,
+      state TEXT,
+      state_abbr TEXT,
+      name TEXT,
+      geom geometry(MultiPolygon, 4326)
+    );
   `);
+
+  // Town boundaries (geocoding/ingest_towns.py) for matchByStreetAndTown,
+  // well away from every other fixture: real NH towns whose streets below
+  // reproduce real wrong-ZIP addresses -- Lebanon's ZIP is 03766, Derry's
+  // 03038, Concord's 03301 -- plus Lebanon, ME (same town name, another
+  // state, also with a Forest Ave).
+  const towns = [
+    ['3300941300', 'New Hampshire', 'NH', 'Lebanon', -72.3, 43.6, -72.2, 43.7],
+    ['3301314200', 'New Hampshire', 'NH', 'Concord', -71.6, 43.15, -71.5, 43.25],
+    ['3301517940', 'New Hampshire', 'NH', 'Derry', -71.35, 42.86, -71.3, 42.9],
+    ['2303139000', 'Maine', 'ME', 'Lebanon', -70.95, 43.35, -70.85, 43.45],
+  ];
+  for (const [geoid, state, stateAbbr, name, minx, miny, maxx, maxy] of towns) {
+    await pool.query(
+      `INSERT INTO towns (geoid, state, state_abbr, name, geom)
+       VALUES ($1, $2, $3, $4, ST_Multi(ST_MakeEnvelope($5, $6, $7, $8, 4326)))`,
+      [geoid, state, stateAbbr, name, minx, miny, maxx, maxy]
+    );
+  }
 
   // One address point, in a town/street distinct from the streets fixture
   // above, so tests can verify geocode() prefers an exact point match over
@@ -202,6 +230,33 @@ async function seedFixtureStreets(pool) {
       rfromadd: '1', rtoadd: '99', zipl: '04032', zipr: '04032', state: 'Maine', state_abbr: 'ME',
       geometry: 'LINESTRING (-70.12 43.86, -70.12 43.861)',
     },
+    // Inside the towns above (see there).
+    {
+      id: 70, tlid: '70000000', fullname: 'Forest Ave', lfromadd: '1', ltoadd: '99',
+      rfromadd: '2', rtoadd: '98', zipl: '03766', zipr: '03766', state: 'New Hampshire', state_abbr: 'NH',
+      geometry: 'LINESTRING (-72.25 43.64, -72.25 43.645)',
+    },
+    {
+      id: 71, tlid: '71000000', fullname: 'Franklin St', lfromadd: '1', ltoadd: '99',
+      rfromadd: '2', rtoadd: '98', zipl: '03301', zipr: '03301', state: 'New Hampshire', state_abbr: 'NH',
+      geometry: 'LINESTRING (-71.55 43.2, -71.55 43.205)',
+    },
+    {
+      id: 72, tlid: '72000000', fullname: 'Franklin St', lfromadd: '1', ltoadd: '99',
+      rfromadd: '2', rtoadd: '98', zipl: '03038', zipr: '03038', state: 'New Hampshire', state_abbr: 'NH',
+      geometry: 'LINESTRING (-71.33 42.88, -71.33 42.885)',
+    },
+    {
+      id: 73, tlid: '73000000', fullname: 'Forest Ave', lfromadd: '1', ltoadd: '99',
+      rfromadd: '2', rtoadd: '98', zipl: '04027', zipr: '04027', state: 'Maine', state_abbr: 'ME',
+      geometry: 'LINESTRING (-70.9 43.4, -70.9 43.405)',
+    },
+    // Another town's Forest Ave, outside Lebanon NH, ending on its boundary.
+    {
+      id: 74, tlid: '74000000', fullname: 'Forest Ave', lfromadd: '1', ltoadd: '99',
+      rfromadd: '2', rtoadd: '98', zipl: '03784', zipr: '03784', state: 'New Hampshire', state_abbr: 'NH',
+      geometry: 'LINESTRING (-72.2 43.65, -72.15 43.65)',
+    },
   ];
 
   for (const row of rows) {
@@ -209,8 +264,9 @@ async function seedFixtureStreets(pool) {
     await pool.query(
       `INSERT INTO streets
          (id, tlid, fullname, lfromadd, ltoadd, rfromadd, rtoadd, zipl, zipr, state, state_abbr,
-          geometry, minx, miny, maxx, maxy)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+          geometry, minx, miny, maxx, maxy, geom)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16,
+               ST_GeomFromText($12, 4326))`,
       [
         row.id, row.tlid, row.fullname, row.lfromadd, row.ltoadd, row.rfromadd, row.rtoadd,
         row.zipl, row.zipr, row.state, row.state_abbr, row.geometry, minx, miny, maxx, maxy,

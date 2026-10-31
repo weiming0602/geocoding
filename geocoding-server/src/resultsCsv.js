@@ -24,8 +24,8 @@ function resultsToCsv(results, ids) {
   const idsMatch = Array.isArray(ids) && ids.length === results.length;
   const successRows = [
     idsMatch
-      ? ['id', 'address', 'latitude', 'longitude', 'source', 'matchFullname', 'correctedStreet', 'approximate']
-      : ['address', 'latitude', 'longitude', 'source', 'matchFullname', 'correctedStreet', 'approximate'],
+      ? ['id', 'address', 'latitude', 'longitude', 'source', 'matchFullname', 'correctedStreet', 'approximate', 'correctedZip']
+      : ['address', 'latitude', 'longitude', 'source', 'matchFullname', 'correctedStreet', 'approximate', 'correctedZip'],
   ];
   const errorRows = [idsMatch ? ['id', 'address', 'error'] : ['address', 'error']];
 
@@ -45,6 +45,9 @@ function resultsToCsv(results, ids) {
         // "true" when placed in a gap between two segments' address
         // ranges (geocodeMatching.js's rangeGapFallback), else empty.
         result.approximate ? 'true' : '',
+        // The street's real ZIP, when it was found in the address's named
+        // town under a different ZIP than the one given (matchByStreetAndTown).
+        result.correctedZip ?? '',
       ]);
     } else {
       errorRows.push([...idCell, result.address, result.error]);
