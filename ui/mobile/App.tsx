@@ -22,6 +22,7 @@ import ReverseGeocodeScreen from './screens/ReverseGeocodeScreen';
 import RoadAlertsScreen from './screens/RoadAlertsScreen';
 import SingleGeocodeScreen from './screens/SingleGeocodeScreen';
 import { INITIAL_IMPORT_STATE, type ImportWizardState } from './components/ImportAddressesForm';
+import { checkoutReturnTier } from './checkoutReturn';
 import { getRoadAlertsNotifications } from '../shared/api/client';
 import { colors, radius, space } from '../shared/theme';
 
@@ -165,7 +166,9 @@ function MenuItem({
 }
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>('single');
+  // Back from Stripe's checkout page (web only) -- reopen Pricing, where
+  // PricingContent picks the checkout back up.
+  const [screen, setScreen] = useState<Screen>(() => (checkoutReturnTier() !== null ? 'pricing' : 'single'));
   const [menuOpen, setMenuOpen] = useState(false);
   const [headingLoaded] = useCormorantGaramond({ CormorantGaramond_600SemiBold });
   const [bodyLoaded] = useLora({ Lora_400Regular, Lora_600SemiBold });

@@ -10,10 +10,11 @@ type Props = {
   onBack: () => void;
 };
 
-// PayPal's JS SDK is web-only (it renders a real hosted iframe, which
-// needs a DOM). CheckoutSection.web.tsx handles that platform; this is
-// the native (iOS/Android) fallback -- honest about the constraint rather
-// than faking a payment UI that can't actually work here.
+// Checkout redirects to Stripe's hosted page and relies on the browser
+// coming back to this app's own URL afterward (CheckoutSection.web.tsx),
+// which the native app has no equivalent of yet (it would need a deep-link
+// return URL). This is the native (iOS/Android) fallback -- honest about
+// the constraint rather than faking a payment UI that can't work here.
 export default function CheckoutSection({ addressCount, onBack }: Props) {
   const tier = findTier(addressCount);
 
@@ -27,7 +28,7 @@ export default function CheckoutSection({ addressCount, onBack }: Props) {
       )}
       <View style={styles.noteCard}>
         <Text style={styles.noteText}>
-          PayPal checkout isn't available in the native app yet — open the web app to complete this
+          Checkout isn't available in the native app yet — open the web app to complete this
           purchase.
         </Text>
       </View>
