@@ -8,12 +8,12 @@ const {
   MAX_CANDIDATES,
 } = require('./geocodeMatching');
 const { isLlmAssistConfigured, pickCandidateWithLlm, describeCandidate } = require('./anthropicClient');
-const { logLlmGeocodeAssist } = require('./llmGeocodeAssists');
+const { claimLlmGeocodeAssist, finishLlmGeocodeAssist } = require('./llmGeocodeAssists');
 
 // Conservative starting cap, not empirically tuned -- same "adjustable
 // starting value" convention as CANDIDATE_SIMILARITY_THRESHOLD in
 // geocodeMatching.js. Bounds a single authenticated account's LLM spend
-// independent of quota: quota (useQuota in server.js) is only ever
+// independent of quota: quota (reserveQuota in geocodingRoutes.js) is only ever
 // charged on a *successful* geocode, but this feature exists exclusively
 // on the failure path, so today's quota charges nothing about how many
 // times it fires -- this cap is the only thing that does.
@@ -139,35 +139,40 @@ async function attemptLlmAssistInner(
     .slice(0, MAX_CANDIDATES);
   if (candidates.length === 0) return null;
 
-  if (runBudget && runBudget.remaining <= 0) return null;
-  const dailyCap = context === 'batch' ? MAX_BATCH_ASSISTS_PER_ACCOUNT_PER_DAY : MAX_ASSISTS_PER_ACCOUNT_PER_DAY;
-  const { rows: usageRows } = await usersDb.query(
-    `SELECT count(*)::int AS n FROM llm_geocode_assists
-     WHERE email = $1 AND context = $2 AND created_at > now() - interval '1 day'`,
-    [email, context]
-  );
-  if (usageRows[0].n >= dailyCap) return null;
-  // Spent the moment the LLM is actually called, whatever it answers.
-  // Re-checked here, with no await between check and spend: batch runs
-  // several rows at once, and they'd all pass the check above while
-  // waiting on the query, then overspend the run's budget together.
+  // The run's budget is spent synchronously (no await between check and
+  // spend) -- batch runs several rows at once, and they'd otherwise all
+  // pass the check together and overspend it. Handed back below if the
+  // daily cap turns out to be reached.
   if (runBudget) {
     if (runBudget.remaining <= 0) return null;
     runBudget.remaining -= 1;
   }
+  const dailyCap = context === 'batch' ? MAX_BATCH_ASSISTS_PER_ACCOUNT_PER_DAY : MAX_ASSISTS_PER_ACCOUNT_PER_DAY;
+  // Claimed (and logged as in progress) before the LLM is called, so the
+  // daily cap holds under concurrency -- see claimLlmGeocodeAssist.
+  const assistId = await claimLlmGeocodeAssist(usersDb, { email, originalInput, candidates, context, dailyCap });
+  if (!assistId) {
+    if (runBudget) runBudget.remaining += 1;
+    return null;
+  }
+  const finish = (outcome) => finishLlmGeocodeAssist(usersDb, assistId, outcome);
 
+  try {
+    return await callLlmAndRematch(db, parsed, originalInput, candidates, offsetFeet, finish);
+  } catch (err) {
+    // The LLM call was already claimed against the cap; record that this
+    // attempt errored rather than leaving it "in_progress".
+    await finish({ picked: null, succeeded: false, failureReason: 'error' }).catch(() => {});
+    throw err;
+  }
+}
+
+/** The LLM call and re-match for a claimed attempt; `finish` records its outcome. */
+async function callLlmAndRematch(db, parsed, originalInput, candidates, offsetFeet, finish) {
   const { picked, failureReason } = await pickCandidateWithLlm(originalInput, candidates);
 
   if (!picked) {
-    await logLlmGeocodeAssist(usersDb, {
-      email,
-      originalInput,
-      candidates,
-      picked: null,
-      succeeded: false,
-      failureReason,
-      context,
-    });
+    await finish({ picked: null, succeeded: false, failureReason });
     return null;
   }
 
@@ -207,15 +212,7 @@ async function attemptLlmAssistInner(
     }
   }
   if (result && !(await correctionFitsNamedTown(db, parsed.town, result.coordinates))) {
-    await logLlmGeocodeAssist(usersDb, {
-      email,
-      originalInput,
-      candidates,
-      picked: correctedAddress,
-      succeeded: false,
-      failureReason: 'town_mismatch',
-      context,
-    });
+    await finish({ picked: correctedAddress, succeeded: false, failureReason: 'town_mismatch' });
     return null;
   }
 
@@ -228,27 +225,11 @@ async function attemptLlmAssistInner(
     // silently losing attempts that got this far -- then let the outer
     // wrapper's catch (or geocode()'s own normal error handling, since
     // we return null here) produce the caller-facing failure.
-    await logLlmGeocodeAssist(usersDb, {
-      email,
-      originalInput,
-      candidates,
-      picked: correctedAddress,
-      succeeded: false,
-      failureReason: 'rematch_failed',
-      context,
-    });
+    await finish({ picked: correctedAddress, succeeded: false, failureReason: 'rematch_failed' });
     return null;
   }
 
-  await logLlmGeocodeAssist(usersDb, {
-    email,
-    originalInput,
-    candidates,
-    picked: correctedAddress,
-    succeeded: true,
-    failureReason: null,
-    context,
-  });
+  await finish({ picked: correctedAddress, succeeded: true, failureReason: null });
 
   return {
     ...result,
