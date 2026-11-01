@@ -118,3 +118,22 @@ test('addToTier tops up an existing tier without resetting usage or the service 
   assert.equal(updated.service_key, created.service_key);
   await db.close();
 });
+
+test('ensureCurrentPeriod: a second stale-period reset does not wipe usage charged after the first', async () => {
+  const db = await makeUsersDb();
+  await upsertUser(db, 'erin@example.com', 5000);
+  await db.query("UPDATE users SET period_start = '2000-01-01' WHERE email = $1", ['erin@example.com']);
+
+  // Two requests both read the user while the period was still stale...
+  const staleA = await getUser(db, 'erin@example.com');
+  const staleB = await getUser(db, 'erin@example.com');
+  // ...A resets the period and charges something...
+  await ensureCurrentPeriod(db, staleA);
+  await recordUsage(db, 'erin@example.com', 250);
+  // ...then B, still holding the stale row, must not reset it again.
+  const refreshed = await ensureCurrentPeriod(db, staleB);
+
+  assert.equal(refreshed.used_this_period, 250);
+  assert.equal((await getUser(db, 'erin@example.com')).used_this_period, 250);
+  await db.close();
+});

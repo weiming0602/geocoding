@@ -84,11 +84,14 @@ async function ensureCurrentPeriod(db, user) {
   if (user.period_start === period) {
     return user;
   }
+  // Only resets a row still on the old period: two requests that both read
+  // the stale period would otherwise both reset it, and the second reset
+  // would wipe out whatever the first one charged in between.
   const { rows } = await db.query(
-    'UPDATE users SET period_start = $1, used_this_period = 0 WHERE email = $2 RETURNING *',
+    'UPDATE users SET period_start = $1, used_this_period = 0 WHERE email = $2 AND period_start <> $1 RETURNING *',
     [period, user.email]
   );
-  return rows[0];
+  return rows[0] || getUser(db, user.email);
 }
 
 async function recordUsage(db, email, count) {
@@ -96,6 +99,42 @@ async function recordUsage(db, email, count) {
     count,
     email,
   ]);
+}
+
+/**
+ * Atomically reserves `count` addresses of this period's quota: rolls the
+ * period over if a new month has started and adds `count` to the usage,
+ * but only if it still fits under the tier -- all in one UPDATE, so
+ * concurrent requests can't each see the same remaining quota and spend
+ * it several times over (a row-level lock serializes them, and Postgres
+ * re-checks the WHERE against the row as the previous one left it).
+ * Returns the updated row, or null if `count` doesn't fit.
+ */
+async function reserveUsage(db, email, count) {
+  const period = currentPeriodStart();
+  const { rows } = await db.query(
+    `UPDATE users SET
+       used_this_period = (CASE WHEN period_start = $3 THEN used_this_period ELSE 0 END) + $2,
+       period_start = $3
+     WHERE email = $1
+       AND tier - (CASE WHEN period_start = $3 THEN used_this_period ELSE 0 END) >= $2
+     RETURNING *`,
+    [email, count, period]
+  );
+  return rows[0] || null;
+}
+
+/**
+ * Gives back `count` addresses reserved by reserveUsage during `period`.
+ * A no-op once the period has rolled over -- the new month's reset already
+ * dropped the reservation along with everything else.
+ */
+async function releaseUsage(db, email, count, period) {
+  await db.query(
+    `UPDATE users SET used_this_period = GREATEST(used_this_period - $2, 0)
+     WHERE email = $1 AND period_start = $3`,
+    [email, count, period]
+  );
 }
 
 /**
@@ -124,5 +163,7 @@ module.exports = {
   verifyServiceKey,
   ensureCurrentPeriod,
   recordUsage,
+  reserveUsage,
+  releaseUsage,
   addToTier,
 };
