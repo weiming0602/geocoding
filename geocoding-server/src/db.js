@@ -1,4 +1,27 @@
-const { types, Pool } = require('pg');
+const pg = require('pg');
+
+const { types } = pg;
+
+/**
+ * pg's Pool, with an 'error' listener always attached. When Postgres
+ * drops a connection sitting idle in the pool (a Postgres restart --
+ * e.g. unattended-upgrades updating it -- an idle-session timeout, a
+ * network blip), the pool emits 'error'; with no listener, Node treats
+ * that as an uncaught exception and the whole process exits. That took
+ * the API down (nginx 502 / connection refused until systemd restarted
+ * it, killing every in-flight request, batch runs included) every time
+ * it happened. The pool already discards the dead client and opens a new
+ * one on the next query, so logging is all that's needed here. Every
+ * pool in this app (servers and scripts) comes from this export.
+ */
+class Pool extends pg.Pool {
+  constructor(config) {
+    super(config);
+    this.on('error', (err) => {
+      console.error('[db] idle Postgres connection dropped; the pool will reconnect:', err.message);
+    });
+  }
+}
 
 // BIGSERIAL/BIGINT columns (OID 20) come back from pg as strings by
 // default, to avoid silent precision loss above Number.MAX_SAFE_INTEGER.
