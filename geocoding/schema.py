@@ -238,3 +238,32 @@ CREATE INDEX IF NOT EXISTS idx_address_points_upper_street_number
     ON address_points (UPPER(street_fullname), address_number, state_abbr);
 CREATE INDEX IF NOT EXISTS idx_address_points_geom ON address_points USING GIST (geom);
 """
+
+# Town/city boundaries (TIGER/Line county subdivisions -- in New England
+# these are the real towns and cities, e.g. "Lebanon" city NH, not
+# census-only areas). street_names/streets carry no town at all, so this
+# is what lets geocodeMatching.js's matchByStreetAndTown look a street up
+# inside the town an address names, before (and independently of) its
+# ZIP -- a wrong ZIP otherwise sends the search to another town's streets.
+# Upserted by GEOID (see ingest_towns.py), not insert-only like streets:
+# boundaries and names do change between vintages.
+CREATE_TOWNS_TABLE_SQL = """
+CREATE TABLE IF NOT EXISTS towns (
+    id BIGSERIAL PRIMARY KEY,
+    geoid TEXT NOT NULL,
+    statefp TEXT,
+    countyfp TEXT,
+    cousubfp TEXT,
+    state TEXT,
+    state_abbr TEXT,
+    name TEXT,
+    namelsad TEXT,
+    geom geometry(MultiPolygon, 4326)
+);
+"""
+
+CREATE_TOWNS_INDEXES_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS idx_towns_geoid_unique ON towns (geoid);
+CREATE INDEX IF NOT EXISTS idx_towns_upper_name_state ON towns (UPPER(name), state_abbr);
+CREATE INDEX IF NOT EXISTS idx_towns_geom ON towns USING GIST (geom);
+"""

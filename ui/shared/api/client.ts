@@ -138,8 +138,22 @@ async function deleteJson<T>(baseUrl: string, path: string): Promise<T> {
   return parsed as T;
 }
 
-export function geocode(address: string, baseUrl = DEFAULT_API_BASE_URL): Promise<GeocodeResult> {
-  return postJson<GeocodeResult>(baseUrl, '/geocode', { address });
+// An account's email + service key. Sent with a single geocode, it makes the
+// request quota-metered instead of free/rate-limited, and turns on the LLM-
+// assisted retry for a street that isn't found as written (see
+// geocoding-server/src/llmAssist.js).
+export type AccountCredentials = { email: string; serviceKey: string };
+
+export function geocode(
+  address: string,
+  baseUrl = DEFAULT_API_BASE_URL,
+  account?: AccountCredentials
+): Promise<GeocodeResult> {
+  const email = account?.email.trim();
+  const serviceKey = account?.serviceKey.trim();
+  // Both or neither: half a credential pair is just an anonymous lookup.
+  const credentials = email && serviceKey ? { email, serviceKey } : {};
+  return postJson<GeocodeResult>(baseUrl, '/geocode', { address, ...credentials });
 }
 
 export function reverseGeocode(

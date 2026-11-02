@@ -62,26 +62,38 @@ function GeocodingHelp() {
       </div>
 
       <h2>Forward geocoding: address → coordinates</h2>
-      <p>
-        Every street is stored as a series of segments. Each segment records an address range on its{' '}
-        <strong>left</strong> side and a separate range on its <strong>right</strong> side — because
-        the two sides of a street are usually numbered differently (one side odd, one side even).
-      </p>
-      <p>When you geocode an address:</p>
+      <p>Meridian tries these in order and stops at the first one that finds your address:</p>
       <ol>
-        <li>Look up the street by name and ZIP code, and find every segment that could match.</li>
         <li>
-          Check the house number's parity — <strong>odd numbers are treated as the left side</strong>{' '}
-          of the street, <strong>even numbers as the right side</strong> — and pick the segment whose
-          range on that side actually contains the number.
+          <strong>An exact surveyed point</strong> (Maine only). Maine's E911 data has a real location
+          for most individual buildings. If your house number, street and town match one, that exact
+          point is returned.
         </li>
         <li>
-          Interpolate a point proportionally along that segment: if the range runs 1–99 and you asked
-          for 91, the point sits about 91% of the way from the "1" end toward the "99" end.
+          <strong>The street, inside the town you named.</strong> Meridian knows every Maine and New
+          Hampshire town's boundary, and looks for your street inside the town in your address.
         </li>
         <li>
-          Offset the point slightly off the street centerline, onto the correct side, so the pin lands
-          on the building's side of the road rather than in the middle of the street.
+          <strong>The street, by ZIP code.</strong> Used when you gave no town, the town isn't one
+          Meridian recognizes, or that town has no street by that name.
+        </li>
+      </ol>
+      <p>
+        Steps 2 and 3 work from street segments. Each segment records an address range on its{' '}
+        <strong>left</strong> side and a separate range on its <strong>right</strong> side, because
+        the two sides of a street are numbered differently: one side odd, the other even. Which side
+        holds the odd numbers isn't a fixed rule; it varies from segment to segment, and Meridian
+        reads it from each segment's own data. Then it:
+      </p>
+      <ol>
+        <li>Picks the segment, and the side, whose range actually contains your house number.</li>
+        <li>
+          Places a point proportionally along that segment: if the range runs 1–99 and you asked for
+          91, the point sits about 91% of the way from the "1" end toward the "99" end.
+        </li>
+        <li>
+          Moves the point slightly off the centerline onto that side, so the pin lands on the
+          building's side of the road rather than in the middle of the street.
         </li>
       </ol>
 
@@ -89,51 +101,116 @@ function GeocodingHelp() {
         <img src="/help/chestnut-91-left.png" style={{ display: 'block', width: '100%' }} />
       </div>
       <p className="text-muted" style={{ fontSize: 13, marginTop: -8 }}>
-        Chestnut Rd runs from house number 1 to 99. <strong>91 is odd</strong>, so it's placed on the{' '}
-        <strong>left</strong> side of the street, about 91% of the way toward the 99 end — matching
-        the marker near "end num: 99."
+        Chestnut Rd runs from house number 1 to 99. On this segment the odd numbers are on the{' '}
+        <strong>left</strong>, so 91 is placed on the left side, about 91% of the way toward the 99
+        end — matching the marker near "end num: 99."
       </p>
 
       <div className="plate" style={{ margin: 'var(--space-4) 0' }}>
         <img src="/help/sawyer-26-right.png" style={{ display: 'block', width: '100%' }} />
       </div>
       <p className="text-muted" style={{ fontSize: 13, marginTop: -8 }}>
-        Sawyer Brook Rd runs from house number 2 to 98. <strong>26 is even</strong>, so it's placed on
-        the <strong>right</strong> side of the street, close to the "start num: 2" end — since 26 is
-        near the low end of the range.
+        Sawyer Brook Rd runs from house number 2 to 98. On this segment the even numbers are on the{' '}
+        <strong>right</strong>, so 26 is placed on the right side, close to the "start num: 2" end —
+        since 26 is near the low end of the range.
       </p>
 
-      <h2>A typo isn't a dead end</h2>
+      <h2>When an address has a mistake</h2>
       <p>
-        A real-world address rarely arrives perfectly formed, so Meridian handles a few kinds of
-        mistakes differently depending on how much they actually confuse a search:
+        Real addresses often arrive with a wrong ZIP code or a misspelled street. Here's what Meridian
+        does with each, and how a result tells you it fixed something:
+      </p>
+      <table className="table" style={{ marginBottom: 'var(--space-4)' }}>
+        <thead>
+          <tr>
+            <th>Mistake</th>
+            <th>Example</th>
+            <th>What happens</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Wrong ZIP code</td>
+            <td>10 Forest Ave, Lebanon, NH <strong>03301</strong> (03301 is Concord's)</td>
+            <td>
+              Found in Lebanon anyway. The result is tagged <strong>ZIP corrected: 03766</strong>.
+            </td>
+          </tr>
+          <tr>
+            <td>Misspelled street</td>
+            <td>
+              73 <strong>Piine</strong> St, Lewiston, ME 04240
+            </td>
+            <td>
+              Signed in: an AI-assisted retry finds Pine St, tagged <strong>AI-corrected</strong>. Not
+              signed in: "no street found".
+            </td>
+          </tr>
+          <tr>
+            <td>Both at once</td>
+            <td>73 Piine St, Lewiston, ME 04106</td>
+            <td>Signed in: Pine St in Lewiston, with both tags.</td>
+          </tr>
+          <tr>
+            <td>No ZIP code</td>
+            <td>7 Federal St, Concord, NH</td>
+            <td>Found by town. A ZIP isn't required when the town is given.</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h3>Wrong ZIP codes: the town you named comes first</h3>
+      <p>
+        When your address names a town, Meridian looks for the street inside that town before it
+        trusts the ZIP. If the street is there, that's the result, even if the ZIP belongs somewhere
+        else. The street's real ZIP is reported back (<strong>ZIP corrected</strong>, and a{' '}
+        <code>correctedZip</code> column in batch results) so you can fix your records. The ZIP is
+        only used when the town can't place the address: the town isn't recognized, it has no street
+        by that name, or the same town name exists in both states and you gave neither a state nor a
+        matching ZIP.
+      </p>
+      <p className="text-muted" style={{ fontSize: 13 }}>
+        Town names have to be the official town or city. A village or mailing name that isn't its own
+        town (such as "West Lebanon", which is part of Lebanon) isn't recognized, so those addresses
+        fall back to their ZIP code. And because the town comes first, an address whose mailing town
+        differs from the town it's really in could, rarely, land on a same-named street in the named
+        town. The ZIP corrected tag makes that visible.
+      </p>
+
+      <h3>Misspelled streets: an AI-assisted retry</h3>
+      <p>
+        When a street isn't found as written, Meridian collects real streets with similar spellings,
+        first from the town you named and then from your ZIP code, and asks an AI model which one you
+        most likely meant ("Pine St" for "Piine St"). The model can only choose from streets that
+        really exist in Meridian's data, or say none of them fit; it can never invent a street.
+        Meridian then geocodes the chosen street normally, and rejects the pick if it lands more than
+        5 km outside the town you named. A rescued result is always tagged{' '}
+        <strong>AI-corrected</strong> with the street it was read as, so it's never mistaken for an
+        exact match.
       </p>
       <p>
-        <strong>Misspelled street names</strong> are the case Meridian can genuinely fix. When an
-        address fails to match anything on the first try, an authenticated request falls back to a
-        second pass: Meridian looks up real street names near the address's ZIP code (or town, if
-        no ZIP was given), hands a short list of those real candidates to an AI model, and asks it
-        to pick whichever one the misspelled input was most likely trying to say — "Pequawket
-        Trl" for a query that came in as "Peqwket Trl," for example. The model is only ever allowed
-        to choose from streets that already exist in Meridian's data or say none of them fit — it's
-        never allowed to invent a street that isn't really there. If it picks one, Meridian re-runs
-        the normal geocoding match against that real street and returns a genuine result, clearly
-        marked as AI-assisted so it's never confused with an exact match.
+        <strong>This retry only runs for signed-in requests</strong>, because it costs money to run:
       </p>
-      <p>
-        <strong>Wrong ZIP codes</strong> are a harder case, and honestly not well-handled yet: that
-        same fallback search is scoped to the ZIP code the request gave, on the assumption that the
-        ZIP is reliable even when the street name isn't. If the ZIP itself is wrong, the candidate
-        list comes from the wrong neighborhood entirely, so the AI model has nothing correct to pick
-        from. A wrong ZIP is the one mistake here most likely to still end in a failed match.
-      </p>
-      <p>
-        <strong>Wrong town names</strong> matter much less than you'd expect, because Meridian's
-        primary matching path doesn't actually key off the town at all — it matches by ZIP code and
-        street name, so a correct ZIP paired with the wrong town name on the same line still
-        geocodes normally. Town only comes into play as a fallback scope for the AI-assisted search
-        above when no ZIP is given at all, so an incorrect town mainly matters for addresses missing
-        a ZIP in the first place.
+      <ul>
+        <li>
+          <strong>Geocode page:</strong> open <strong>"Use your account"</strong> under the Geocode
+          button and enter your account email and service key. They're remembered in your browser
+          until you clear them.
+        </li>
+        <li>
+          <strong>Batch geocoding:</strong> automatic on every paid run. Every row that isn't found
+          gets one retry.
+        </li>
+        <li>
+          <strong>API:</strong> include <code>email</code> and <code>serviceKey</code> in the{' '}
+          <code>/geocode</code> request body.
+        </li>
+      </ul>
+      <p className="text-muted" style={{ fontSize: 13 }}>
+        A rescued address costs the same as any other found address; the retry itself is free. Each
+        account gets up to 50 retries a day on single lookups, and up to 1,000 a day in batch runs
+        (at most 200 per run). Past those limits, an address that isn't found as written simply
+        isn't found.
       </p>
 
       <h2>Street aliases (a.k.a. names)</h2>
@@ -149,15 +226,16 @@ function GeocodingHelp() {
         Reverse geocoding runs the same logic backwards: find the street segment closest to the
         coordinate you provide, work out which side of that segment's direction of travel the point
         falls on, and interpolate a house number from how far along the segment the point sits — then
-        round that number to the correct parity (odd for the left side, even for the right).
+        round that number to match the numbering on that side of that segment (odd or even).
       </p>
 
       <h2>Batch geocoding</h2>
       <p>
         Batch jobs process a plain-text file of addresses (one per line, no cap on count), running the
         same forward-geocoding logic on every line independently — one bad address doesn't stop the
-        rest of the batch. Results can be downloaded as a ZIP. Note: quota is only checked and recorded
-        for email delivery, not for a plain batch run or ZIP download.
+        rest of the batch. Results can be downloaded as a ZIP. Every batch run needs your account email
+        and service key, and uses one address from your plan for every line, whether or not it's
+        found. In return, lines that aren't found get the AI-assisted retry at no extra cost.
       </p>
       <p>
         If your file's first line is a header like <code>id,address</code> (or <code>customer_id</code>,
@@ -169,16 +247,18 @@ function GeocodingHelp() {
 
       <h2>Plan &amp; quota</h2>
       <p>
-        Usage is tracked per account email against a monthly request tier. Quota resets on the 1st of
-        each calendar month; an email-delivery request that would exceed the remaining quota is
-        rejected up front, before any addresses are processed.
+        Usage is tracked per account email against a monthly tier, which resets on the 1st of each
+        calendar month. A batch run that would exceed what's left is rejected up front, before any
+        addresses are processed. A signed-in single lookup uses one address only when it's found;
+        one that isn't found costs nothing.
       </p>
 
       <h2>Calling the API directly</h2>
       <p>
         Everything above is also available as a plain REST API — see <a href="#/api-docs">API Docs</a>{' '}
         for all five endpoints, with real request/response examples. Single lookups work without an
-        account, up to a modest rate limit; batch jobs still need a service key from a paid plan.
+        account, up to a modest rate limit (but without the AI-assisted retry); batch jobs need a
+        service key from a paid plan.
       </p>
     </>
   );

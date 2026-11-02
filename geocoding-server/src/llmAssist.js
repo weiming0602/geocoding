@@ -1,12 +1,19 @@
 const { isPlausiblyInCoverageArea } = require('./geocodeCoverage');
-const { candidateStreetNames, matchByStreetAndZip } = require('./geocodeMatching');
+const {
+  candidateStreetNames,
+  candidateStreetNamesInTown,
+  matchByStreetAndZip,
+  matchByStreetAndTown,
+  queryTowns,
+  MAX_CANDIDATES,
+} = require('./geocodeMatching');
 const { isLlmAssistConfigured, pickCandidateWithLlm, describeCandidate } = require('./anthropicClient');
-const { logLlmGeocodeAssist } = require('./llmGeocodeAssists');
+const { claimLlmGeocodeAssist, finishLlmGeocodeAssist } = require('./llmGeocodeAssists');
 
 // Conservative starting cap, not empirically tuned -- same "adjustable
 // starting value" convention as CANDIDATE_SIMILARITY_THRESHOLD in
 // geocodeMatching.js. Bounds a single authenticated account's LLM spend
-// independent of quota: quota (useQuota in server.js) is only ever
+// independent of quota: quota (reserveQuota in geocodingRoutes.js) is only ever
 // charged on a *successful* geocode, but this feature exists exclusively
 // on the failure path, so today's quota charges nothing about how many
 // times it fires -- this cap is the only thing that does.
@@ -26,16 +33,27 @@ const MAX_DISTANCE_FROM_NAMED_TOWN_METERS = 5000;
 
 /**
  * Whether a corrected result is plausibly in the town the address names.
- * Candidates come only from the address's own ZIP, so when that ZIP is
- * wrong too, the "correction" can be a similar-sounding street in another
- * town: a real batch row "16 Sammer St, Augusta, ME 04074" (04074 is
- * Scarborough) came back as Sawyer St in Scarborough, 90 km away. A
- * failed row is visible; a confidently wrong one isn't. Checked against
- * Maine E911 address points' towns -- a town with none (all of NH, or a
- * misspelled town name) can't be checked, so it's let through.
+ * Candidates from the address's own ZIP can be wrong when that ZIP is
+ * wrong too -- a similar-sounding street in another town: a real batch row
+ * "16 Sammer St, Augusta, ME 04074" (04074 is Scarborough) came back as
+ * Sawyer St in Scarborough, 90 km away. A failed row is visible; a
+ * confidently wrong one isn't. Checked against the town's boundary
+ * (towns) and Maine E911 address points' towns -- a town in neither (a
+ * misspelled town name, or no towns table yet) can't be checked, so it's
+ * let through.
  */
 async function correctionFitsNamedTown(db, town, coordinates) {
   if (!town || !coordinates) return true;
+  const townRows = await queryTowns(
+    db,
+    `SELECT bool_or(ST_DWithin(geom::geography, ST_SetSRID(ST_MakePoint($2, $3), 4326)::geography, $4)) AS near
+     FROM towns WHERE UPPER(name) = UPPER($1)`,
+    [town.trim(), coordinates.longitude, coordinates.latitude, MAX_DISTANCE_FROM_NAMED_TOWN_METERS]
+  );
+  // bool_or over no rows is NULL: no such town in the table.
+  const townNear = townRows ? townRows[0].near : null;
+  if (townNear !== null) return townNear;
+
   const { rows } = await db.query(
     `SELECT
        EXISTS (SELECT 1 FROM address_points WHERE upper(town) = upper($1)) AS town_known,
@@ -101,35 +119,60 @@ async function attemptLlmAssistInner(
   const inCoverage = await isPlausiblyInCoverageArea(db, parsed);
   if (!inCoverage) return null;
 
-  const candidates = await candidateStreetNames(db, parsed.streetName, {
+  // The named town's own similar streets first (they're what the town-
+  // first match in geocode.js would have used), then the ZIP's.
+  const townCandidates = parsed.town
+    ? await candidateStreetNamesInTown(db, parsed.streetName, parsed.town, parsed.state)
+    : [];
+  const zipCandidates = await candidateStreetNames(db, parsed.streetName, {
     zip: parsed.zip,
     state: parsed.state,
   });
+  const seen = new Set();
+  const candidates = [...townCandidates, ...zipCandidates]
+    .filter((c) => {
+      const key = `${c.fullname}|${c.zipl}|${c.zipr}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, MAX_CANDIDATES);
   if (candidates.length === 0) return null;
 
-  if (runBudget && runBudget.remaining <= 0) return null;
+  // The run's budget is spent synchronously (no await between check and
+  // spend) -- batch runs several rows at once, and they'd otherwise all
+  // pass the check together and overspend it. Handed back below if the
+  // daily cap turns out to be reached.
+  if (runBudget) {
+    if (runBudget.remaining <= 0) return null;
+    runBudget.remaining -= 1;
+  }
   const dailyCap = context === 'batch' ? MAX_BATCH_ASSISTS_PER_ACCOUNT_PER_DAY : MAX_ASSISTS_PER_ACCOUNT_PER_DAY;
-  const { rows: usageRows } = await usersDb.query(
-    `SELECT count(*)::int AS n FROM llm_geocode_assists
-     WHERE email = $1 AND context = $2 AND created_at > now() - interval '1 day'`,
-    [email, context]
-  );
-  if (usageRows[0].n >= dailyCap) return null;
-  // Spent the moment the LLM is actually called, whatever it answers.
-  if (runBudget) runBudget.remaining -= 1;
+  // Claimed (and logged as in progress) before the LLM is called, so the
+  // daily cap holds under concurrency -- see claimLlmGeocodeAssist.
+  const assistId = await claimLlmGeocodeAssist(usersDb, { email, originalInput, candidates, context, dailyCap });
+  if (!assistId) {
+    if (runBudget) runBudget.remaining += 1;
+    return null;
+  }
+  const finish = (outcome) => finishLlmGeocodeAssist(usersDb, assistId, outcome);
 
+  try {
+    return await callLlmAndRematch(db, parsed, originalInput, candidates, offsetFeet, finish);
+  } catch (err) {
+    // The LLM call was already claimed against the cap; record that this
+    // attempt errored rather than leaving it "in_progress".
+    await finish({ picked: null, succeeded: false, failureReason: 'error' }).catch(() => {});
+    throw err;
+  }
+}
+
+/** The LLM call and re-match for a claimed attempt; `finish` records its outcome. */
+async function callLlmAndRematch(db, parsed, originalInput, candidates, offsetFeet, finish) {
   const { picked, failureReason } = await pickCandidateWithLlm(originalInput, candidates);
 
   if (!picked) {
-    await logLlmGeocodeAssist(usersDb, {
-      email,
-      originalInput,
-      candidates,
-      picked: null,
-      succeeded: false,
-      failureReason,
-      context,
-    });
+    await finish({ picked: null, succeeded: false, failureReason });
     return null;
   }
 
@@ -147,7 +190,20 @@ async function attemptLlmAssistInner(
   const correctedAddress = describeCandidate(picked);
 
   let result = null;
-  for (const zip of zipsToTry) {
+  if (picked.inNamedTown) {
+    // Found inside the named town, so re-match it there (the address's
+    // ZIP may be the very thing that's wrong).
+    ({ result } = await matchByStreetAndTown(
+      db,
+      parsed.number,
+      picked.fullname,
+      parsed.town,
+      parsed.state,
+      parsed.zip,
+      offsetFeet
+    ));
+  }
+  for (const zip of result ? [] : zipsToTry) {
     try {
       result = await matchByStreetAndZip(db, parsed.number, picked.fullname, zip, parsed.state, offsetFeet);
       break;
@@ -156,15 +212,7 @@ async function attemptLlmAssistInner(
     }
   }
   if (result && !(await correctionFitsNamedTown(db, parsed.town, result.coordinates))) {
-    await logLlmGeocodeAssist(usersDb, {
-      email,
-      originalInput,
-      candidates,
-      picked: correctedAddress,
-      succeeded: false,
-      failureReason: 'town_mismatch',
-      context,
-    });
+    await finish({ picked: correctedAddress, succeeded: false, failureReason: 'town_mismatch' });
     return null;
   }
 
@@ -177,27 +225,11 @@ async function attemptLlmAssistInner(
     // silently losing attempts that got this far -- then let the outer
     // wrapper's catch (or geocode()'s own normal error handling, since
     // we return null here) produce the caller-facing failure.
-    await logLlmGeocodeAssist(usersDb, {
-      email,
-      originalInput,
-      candidates,
-      picked: correctedAddress,
-      succeeded: false,
-      failureReason: 'rematch_failed',
-      context,
-    });
+    await finish({ picked: correctedAddress, succeeded: false, failureReason: 'rematch_failed' });
     return null;
   }
 
-  await logLlmGeocodeAssist(usersDb, {
-    email,
-    originalInput,
-    candidates,
-    picked: correctedAddress,
-    succeeded: true,
-    failureReason: null,
-    context,
-  });
+  await finish({ picked: correctedAddress, succeeded: true, failureReason: null });
 
   return {
     ...result,
