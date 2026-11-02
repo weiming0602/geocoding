@@ -41,6 +41,11 @@ function usersDsn() {
 
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
+// Stripe signs a webhook over the exact bytes it sent, so this one path
+// keeps its raw body (req.rawBody) alongside the parsed JSON -- see
+// geocodingRoutes.js's webhook route.
+const STRIPE_WEBHOOK_PATH = '/billing/stripe-webhook';
+
 // Lets /geocode/batch and /geocode/batch/download run with no email and
 // no serviceKey at all -- a pure smoke test with no account/quota
 // involved (see the emailProvided checks in each route), and lets an
@@ -130,15 +135,39 @@ function createBaseApp({ logRequests }) {
   // needs some finite body-size ceiling for fileContent uploads (default
   // 100kb is far too small). This is just that technical floor, not a
   // business rule -- raise it further if a real batch ever needs to.
-  app.use(express.json({ limit: '200mb' }));
+  app.use(
+    express.json({
+      limit: '200mb',
+      verify: (req, _res, buf) => {
+        if (req.originalUrl === STRIPE_WEBHOOK_PATH) req.rawBody = buf;
+      },
+    })
+  );
   return app;
 }
 
-/** Listens on `port` and prints the startup banner plus a warning for every test-only flag that's set. */
-function startServer(app, { name, port }) {
+/**
+ * Listens on `port` and prints the startup banner plus a warning for every
+ * test-only flag that's set. `servesBilling` = this process serves
+ * geocodingRoutes.js's checkout routes (not the Road Alerts-only process).
+ */
+function startServer(app, { name, port, servesBilling = false }) {
   app.listen(port, () => {
     console.log(`${name} listening on http://localhost:${port}`);
     console.log(`using database: ${geocodingDsn()}`);
+    if (servesBilling && !process.env.STRIPE_SECRET_KEY) {
+      console.warn(
+        '⚠ STRIPE_SECRET_KEY is not set -- checkout is the billing.js stub, which ' +
+          'grants purchased quota WITHOUT taking any payment. Never run this way where ' +
+          'real customers can reach /billing/*.'
+      );
+    } else if (servesBilling && !process.env.STRIPE_WEBHOOK_SECRET) {
+      console.warn(
+        '⚠ STRIPE_WEBHOOK_SECRET is not set -- a paid purchase is only fulfilled when the ' +
+          "buyer's browser returns from Stripe (not if they close the tab first, nor for " +
+          'bank payments that clear later).'
+      );
+    }
     if (allowsTestEmptyServiceKey()) {
       console.warn(
         '⚠ ALLOW_TEST_EMPTY_SERVICE_KEY is set -- batch geocoding accepts an empty ' +
@@ -165,6 +194,7 @@ function startServer(app, { name, port }) {
 
 module.exports = {
   EMAIL_PATTERN,
+  STRIPE_WEBHOOK_PATH,
   allowsTestEmptyServiceKey,
   allowsTestWeightedPoints,
   allowsTestRoadSignals,

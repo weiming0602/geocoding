@@ -125,7 +125,7 @@ export type BatchGeocodeResponse = {
 // on all three batch endpoints (plain run, ZIP download, and
 // email-delivery) -- quota is tracked and enforced against the pair the
 // same way on all three. The key is issued once at purchase time (in
-// POST /billing/purchase's response) and must be presented alongside
+// POST /billing/complete's response) and must be presented alongside
 // the email on every batch request, so knowing an account's email alone
 // isn't enough to spend its quota.
 export type BatchSource = ({ filePath: string } | { fileContent: string }) & {
@@ -478,10 +478,38 @@ export type RoadRerouteResponse = {
   endsAtDestination?: boolean;
 };
 
+// POST /billing/checkout-session -- `url` is Stripe's hosted payment page
+// to redirect to (with STRIPE_SECRET_KEY unset on the server, `stubbed`
+// is true and `url` points straight back at the return URL instead).
+export type CheckoutSessionResponse = {
+  sessionId: string;
+  url: string;
+  stubbed: boolean;
+};
+
+// POST /billing/complete -- the paid purchase, once the browser is back
+// from Stripe. `serviceKeyEmailed` is null when this call didn't fulfill
+// the purchase itself (Stripe's webhook, or an earlier visit, already
+// did), so whether that email went out isn't known here.
+export type PurchaseResult = {
+  email: string;
+  tier: number;
+  usedThisPeriod: number;
+  remaining: number;
+  periodStart: string;
+  purchased: number;
+  priceCents: number;
+  stubbed: boolean;
+  serviceKey: string;
+  serviceKeyEmailed: boolean | null;
+};
+
 // GET /admin/transactions -- owner/manager-only view of completed
 // purchases (see geocoding-server/src/transactions.js). Only ever
-// includes a purchase that actually captured via PayPal and granted
-// quota; a failed/abandoned checkout attempt never appears here.
+// includes a purchase that was actually paid (Stripe; PayPal before it)
+// and granted quota; a failed/abandoned checkout attempt never appears
+// here. `orderId` is the Stripe Checkout Session id (a PayPal order id on
+// older rows).
 export type Transaction = {
   id: number;
   email: string;

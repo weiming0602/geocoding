@@ -3,15 +3,24 @@ import { StyleSheet, Text, View } from 'react-native';
 
 import { PRICING_TIERS, formatUsd, perAddressRate } from '../../shared/pricing';
 import { colors, radius, space } from '../../shared/theme';
+import { checkoutReturnTier, clearCheckoutReturn } from '../checkoutReturn';
 import CheckoutSection from './CheckoutSection';
 import { Icon } from './icons';
 import ThemedButton from './ThemedButton';
 
 export default function PricingContent() {
-  const [selectedTier, setSelectedTier] = useState<number | null>(null);
+  const [selectedTier, setSelectedTier] = useState<number | null>(checkoutReturnTier);
 
   if (selectedTier !== null) {
-    return <CheckoutSection addressCount={selectedTier} onBack={() => setSelectedTier(null)} />;
+    return (
+      <CheckoutSection
+        addressCount={selectedTier}
+        onBack={() => {
+          clearCheckoutReturn();
+          setSelectedTier(null);
+        }}
+      />
+    );
   }
 
   return (

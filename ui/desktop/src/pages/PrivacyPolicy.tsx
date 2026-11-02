@@ -48,8 +48,8 @@ export default function PrivacyPolicy() {
           you provide one so we can reply. Feedback comments are automatically deleted after 90 days.
         </li>
         <li>
-          <strong>Payment information.</strong> Handled entirely by PayPal at checkout -- Meridian never receives
-          or stores your card number, PayPal password, or other payment credentials, only confirmation that a
+          <strong>Payment information.</strong> Handled entirely by Stripe at checkout -- Meridian never receives
+          or stores your card number or other payment credentials, only confirmation that a
           purchase succeeded.
         </li>
         <li>
@@ -69,7 +69,7 @@ export default function PrivacyPolicy() {
       <h2>Third-party services we rely on</h2>
       <p>Meridian is built on public data and a small number of third-party services, each used only for its specific purpose:</p>
       <ul>
-        <li><strong>PayPal</strong> -- processes payments for additional Batch geocoding quota.</li>
+        <li><strong>Stripe</strong> -- processes payments for additional Batch geocoding quota.</li>
         <li><strong>Resend</strong> -- delivers the transactional emails Meridian sends (service key delivery, etc.).</li>
         <li><strong>OpenStreetMap (Nominatim and Overpass)</strong> -- powers the Find Places search.</li>
         <li><strong>New England 511</strong> -- the source of Road Alerts' live traffic hazard data.</li>

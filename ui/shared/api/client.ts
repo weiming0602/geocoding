@@ -26,6 +26,8 @@ import type {
   TestWeightedPoint,
   TestWeightedPointsResponse,
   TransactionsResponse,
+  CheckoutSessionResponse,
+  PurchaseResult,
   WeightedPointPingResponse,
   WeightedPointsResponse,
   WeightedPointCandidatesResponse,
@@ -582,4 +584,21 @@ export function getTransactions(
 ): Promise<TransactionsResponse> {
   const qs = new URLSearchParams({ passcode });
   return getJson<TransactionsResponse>(baseUrl, `/admin/transactions?${qs.toString()}`);
+}
+
+// Step 1 of a purchase: the server prices `addressCount` itself and
+// returns Stripe's hosted checkout page to redirect to. Stripe sends the
+// browser back to `returnUrl` with `session_id=...` (paid) or `canceled=1`
+// appended to its query string.
+export function createCheckoutSession(
+  params: { email: string; addressCount: number; returnUrl: string },
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<CheckoutSessionResponse> {
+  return postJson<CheckoutSessionResponse>(baseUrl, '/billing/checkout-session', params);
+}
+
+// Step 2, back from Stripe: the server confirms the session was paid and
+// grants the quota (once -- safe to call again, e.g. on a page refresh).
+export function completeCheckout(sessionId: string, baseUrl = DEFAULT_API_BASE_URL): Promise<PurchaseResult> {
+  return postJson<PurchaseResult>(baseUrl, '/billing/complete', { sessionId });
 }

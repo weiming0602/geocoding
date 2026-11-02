@@ -16,7 +16,7 @@ that data, either by matching a real surveyed point or by interpolating
 along a street segment's address range; and two client apps (a React
 web app, an Expo/React Native mobile app) share one API client and a
 common design system to expose that as single-lookup, reverse-geocode,
-batch, and address-import workflows, with self-serve PayPal billing for
+batch, and address-import workflows, with self-serve Stripe billing for
 batch volume beyond a free tier.
 
 ## System diagram
@@ -38,7 +38,7 @@ flowchart TB
         reverse["reverseGeocode.js"]
         batch["batchGeocode.js"]
         places["placesSearch.js\n(Nominatim → Overpass)"]
-        billing["billing.js (PayPal)\nquota.js / users.js"]
+        billing["billing.js (Stripe)\nquota.js / users.js"]
         feedback["feedback.js"]
     end
 
@@ -50,7 +50,7 @@ flowchart TB
     billing --> usersdb
     feedback --> usersdb
 
-    paypal[["PayPal API"]] <--> billing
+    stripe[["Stripe API"]] <--> billing
     resend[["Resend"]] -.service-key email.-> billing
     osm[["Nominatim / Overpass\n(OpenStreetMap)"]] <--> places
 
@@ -66,7 +66,7 @@ flowchart TB
 | `geocoding/` | Python 3, psycopg | Ingests TIGER/Line + Maine E911 data into Postgres/PostGIS; the same interpolation math also lives here (`interpolate.py`) as a second implementation kept in sync by hand with the JS one, for the Python-side test/reference path. |
 | `geocoding-server/` | Node.js, Express, `pg` | The public API. Owns both database pools, request validation, quota/auth, billing, email delivery, and the two upstream integrations (Nominatim/Overpass for place search). |
 | `ui/shared/` | TypeScript | API client, response types, coordinate parsing, pricing data, the public progress timeline, and design tokens — imported directly by both frontend apps rather than duplicated. Deliberately excludes anything with `maplibre-gl` types, since each app's own install of that library is a nominally distinct type to TypeScript. |
-| `ui/desktop/` | React 19, Vite, react-router 8 | Web app. Every screen the API exposes, plus Pricing/Checkout (PayPal Buttons SDK) and a Help page with annotated match diagrams. |
+| `ui/desktop/` | React 19, Vite, react-router 8 | Web app. Every screen the API exposes, plus Pricing/Checkout (redirects to Stripe Checkout) and a Help page with annotated match diagrams. |
 | `ui/mobile/` | Expo 57, React Native 0.86 | Same feature set as desktop, native-first: no router (a hand-rolled tab switcher in `App.tsx`), no interactive map on native (`GeocodeMap.tsx` is a deep-link "Open in Maps" button; the web build gets a real MapLibre map), SheetJS reads picked files as base64 instead of `arrayBuffer()`. |
 | `ops/` | systemd units, shell scripts | Runs the server as a service (auto-restart, journald logging), and schedules the annual data-refresh and database-backup jobs. |
 
@@ -121,11 +121,15 @@ large batch (bounded concurrency is planned, not yet built — see
 ## Auth, quota, and billing
 
 There's no signup/login/session system. An account is a row in `users`
-(email, tier, usage, an opaque `service_key`). `/billing/purchase`
-captures a one-time PayPal order server-side, verifies the captured
-amount matches the tier's real price, adds the tier's address count to
-the account's quota, generates a `service_key` if the account is new,
-and emails it via SES (stubbed when SES env vars are unset). Every batch
+(email, tier, usage, an opaque `service_key`). `/billing/checkout-session`
+creates a one-time Stripe Checkout Session priced server-side from the
+tier, and the browser pays on Stripe's hosted page. Once Stripe confirms
+the session was paid -- via `/billing/complete` when the browser comes
+back, or Stripe's signed `/billing/stripe-webhook` -- the server adds the
+tier's address count to the account's quota (once per session, enforced
+by a unique index on `transactions.order_id`), generates a `service_key`
+if the account is new, and emails it via Resend (stubbed when its env
+vars are unset). Every batch
 endpoint requires **both** the email and its matching service key —
 knowing an account's email alone is deliberately not enough to spend its
 quota. A `GET /quota` read-only lookup takes just the email, since it

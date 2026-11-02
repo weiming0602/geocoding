@@ -16,7 +16,7 @@ registerGeocodingRoutes(app, { db, usersDbPromise });
 registerRoadAlertsRoutes(app, { db, usersDbPromise });
 
 if (require.main === module) {
-  startServer(app, { name: 'geocoding-server', port: Number(process.env.PORT) || 3001 });
+  startServer(app, { name: 'geocoding-server', port: Number(process.env.PORT) || 3001, servesBilling: true });
 }
 
 module.exports = { app, db, usersDbPromise };
