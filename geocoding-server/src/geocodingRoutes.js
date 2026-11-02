@@ -8,7 +8,7 @@ const { searchPlaces } = require('./placesSearch');
 const { getUser, ensureCurrentPeriod } = require('./users');
 const { submitFeedback } = require('./feedback');
 const { fulfillPurchase, listTransactions, markTransactionsNotified } = require('./transactions');
-const { checkQuota, useQuota } = require('./quota');
+const { reserveQuota, releaseQuota } = require('./quota');
 const { checkRateLimit } = require('./geocodeRateLimit');
 const {
   sendResultsEmail,
@@ -52,6 +52,18 @@ function resolveAddresses(body) {
   return fileContent !== undefined ? readAddressContent(fileContent) : readAddressLines(filePath);
 }
 
+// Gives back a quota reservation (see quota.js's reserveQuota) for a
+// request that turned out not to owe it. Never throws: the caller is
+// already answering with the request's real error, which a failed
+// refund shouldn't replace.
+async function refundQuota(usersDb, reservation, count) {
+  try {
+    await releaseQuota(usersDb, reservation, count);
+  } catch (err) {
+    console.error(`failed to refund ${count} reserved address(es) to ${reservation.email}`, err);
+  }
+}
+
 /** Registers every geocoding route on `app`. `db` is the read-only geocoding pool. */
 function registerGeocodingRoutes(app, { db, usersDbPromise }) {
   app.post('/geocode', async (req, res) => {
@@ -59,11 +71,14 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
     const email = req.body && req.body.email;
     const serviceKey = req.body && req.body.serviceKey;
     const authenticated = typeof email === 'string' && email.trim().length > 0;
+    let usersDb;
+    // Reserved up front (see quota.js's reserveQuota); only a successful
+    // lookup is billable, so any failure below gives it back.
+    let reservation = null;
     try {
-      let usersDb;
       if (authenticated) {
         usersDb = await usersDbPromise;
-        await checkQuota(usersDb, email, serviceKey, 1);
+        reservation = await reserveQuota(usersDb, email, serviceKey, 1);
       } else {
         // This path never touched geocoding_users before this feature existed --
         // an outage there shouldn't take down the site's own free lookup pages.
@@ -82,11 +97,10 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
         llmAssist: authenticated ? { usersDb, email } : null,
       });
 
-      if (authenticated) {
-        await useQuota(usersDb, email, 1);
-      }
+      reservation = null; // found -- keep the charge
       res.json(result);
     } catch (err) {
+      if (reservation) await refundQuota(usersDb, reservation, 1);
       if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
       if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
       if (err instanceof OutOfRangeError) return res.status(422).json({ error: err.message });
@@ -109,6 +123,11 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
     const serviceKey = req.body && req.body.serviceKey;
     const testMode = allowsTestEmptyServiceKey();
     const emailProvided = typeof email === 'string' && email.trim().length > 0;
+    let usersDb;
+    let addresses;
+    // Every row is billable, found or not -- the reservation is only given
+    // back if the run itself fails before finishing.
+    let reservation = null;
     try {
       if ((!testMode || emailProvided) && (typeof email !== 'string' || !EMAIL_PATTERN.test(email))) {
         throw new ValidationError('email must be a valid email address');
@@ -117,7 +136,7 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
         throw new ValidationError('serviceKey must be a non-empty string');
       }
 
-      const addresses = resolveAddresses(req.body);
+      addresses = resolveAddresses(req.body);
 
       if (!emailProvided) {
         // testMode with no email at all -- a pure smoke test, no
@@ -126,13 +145,13 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
         return res.json({ results });
       }
 
-      const usersDb = await usersDbPromise;
-      await checkQuota(usersDb, email, serviceKey, addresses.length);
+      usersDb = await usersDbPromise;
+      reservation = await reserveQuota(usersDb, email, serviceKey, addresses.length);
 
       // A real, paid run: rows that aren't found get an LLM-assisted retry
       // (see batchGeocode.js). The smoke-test branch above never does.
       const results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET, llmAssist: batchLlmAssist(usersDb, email) });
-      await useQuota(usersDb, email, addresses.length);
+      reservation = null; // the run finished -- keep the charge
 
       // Only reached once a real account's quota has actually been spent
       // -- never for the emailProvided-false smoke-test branch above,
@@ -153,6 +172,7 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
         tier: current.tier,
       });
     } catch (err) {
+      if (reservation) await refundQuota(usersDb, reservation, addresses.length);
       if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
       if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
       if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
@@ -169,6 +189,9 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
     const emailProvided = typeof email === 'string' && email.trim().length > 0;
     let results;
     let user = null;
+    let usersDb;
+    let addresses;
+    let reservation = null; // see /geocode/batch
     try {
       if ((!testMode || emailProvided) && (typeof email !== 'string' || !EMAIL_PATTERN.test(email))) {
         throw new ValidationError('email must be a valid email address');
@@ -177,13 +200,13 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
         throw new ValidationError('serviceKey must be a non-empty string');
       }
 
-      const addresses = resolveAddresses(req.body);
+      addresses = resolveAddresses(req.body);
 
       if (emailProvided) {
-        const usersDb = await usersDbPromise;
-        user = await checkQuota(usersDb, email, serviceKey, addresses.length);
+        usersDb = await usersDbPromise;
+        user = reservation = await reserveQuota(usersDb, email, serviceKey, addresses.length);
         results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET, llmAssist: batchLlmAssist(usersDb, email) });
-        await useQuota(usersDb, email, addresses.length);
+        reservation = null; // the run finished -- keep the charge
         await sendBatchRunNotification({
           email,
           addressCount: addresses.length,
@@ -197,6 +220,7 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
         results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET });
       }
     } catch (err) {
+      if (reservation) await refundQuota(usersDb, reservation, addresses.length);
       if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
       if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
       if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
@@ -214,7 +238,8 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename="batch-geocode-results.zip"');
     if (user) {
-      res.setHeader('X-Quota', `${user.used_this_period + results.length}/${user.tier}`);
+      // The reservation is already counted in used_this_period.
+      res.setHeader('X-Quota', `${user.used_this_period}/${user.tier}`);
     }
     res.send(zipBuffer);
   });
@@ -223,6 +248,9 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
     const filePath = req.body && req.body.filePath;
     const email = req.body && req.body.email;
     const serviceKey = req.body && req.body.serviceKey;
+    let usersDb;
+    let addresses;
+    let reservation = null; // see /geocode/batch
 
     try {
       if (typeof email !== 'string' || !EMAIL_PATTERN.test(email)) {
@@ -235,9 +263,10 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
         throw new ValidationError('serviceKey must be a non-empty string');
       }
 
-      const addresses = readAddressLines(filePath);
-      const usersDb = await usersDbPromise;
-      const user = await checkQuota(usersDb, email, serviceKey, addresses.length);
+      addresses = readAddressLines(filePath);
+      usersDb = await usersDbPromise;
+      reservation = await reserveQuota(usersDb, email, serviceKey, addresses.length);
+      const user = reservation;
 
       const results = await geocodeAddressList(db, addresses, { offsetFeet: OFFSET_FEET, llmAssist: batchLlmAssist(usersDb, email) });
       const { successCsv, errorCsv } = resultsToCsv(results);
@@ -246,7 +275,7 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
         { name: 'errors.csv', content: errorCsv },
       ]);
 
-      await useQuota(usersDb, email, addresses.length);
+      reservation = null; // the run finished -- keep the charge
       await sendBatchRunNotification({
         email,
         addressCount: addresses.length,
@@ -260,11 +289,12 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
       res.setHeader('Content-Disposition', 'attachment; filename="batch-geocode-results.zip"');
       res.setHeader(
         'X-Quota',
-        `${user.used_this_period + addresses.length}/${user.tier}`
+        `${user.used_this_period}/${user.tier}` // reservation already counted
       );
       res.setHeader('X-Email-Delivery', delivery.stubbed ? 'stubbed' : 'sent');
       res.send(zipBuffer);
     } catch (err) {
+      if (reservation) await refundQuota(usersDb, reservation, addresses.length);
       if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
       if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
       if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
@@ -275,7 +305,7 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
   });
 
   // Read-only quota lookup for a Plan & Quota screen: reports usage without
-  // gating anything (unlike checkQuota/useQuota in quota.js, which are tied
+  // gating anything (unlike reserveQuota/releaseQuota in quota.js, which are tied
   // to an actual batch-email send). There's no signup/login/session concept
   // in this app, so the caller must supply the email to look up.
   app.get('/quota', async (req, res) => {
@@ -546,11 +576,14 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
     const email = req.body && req.body.email;
     const serviceKey = req.body && req.body.serviceKey;
     const authenticated = typeof email === 'string' && email.trim().length > 0;
+    let usersDb;
+    // Reserved up front (see quota.js's reserveQuota); only a successful
+    // lookup is billable, so any failure below gives it back.
+    let reservation = null;
     try {
-      let usersDb;
       if (authenticated) {
         usersDb = await usersDbPromise;
-        await checkQuota(usersDb, email, serviceKey, 1);
+        reservation = await reserveQuota(usersDb, email, serviceKey, 1);
       } else {
         // This path never touched geocoding_users before this feature existed --
         // an outage there shouldn't take down the site's own free lookup pages.
@@ -566,11 +599,10 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
 
       const result = await reverseGeocode(db, latitude, longitude);
 
-      if (authenticated) {
-        await useQuota(usersDb, email, 1);
-      }
+      reservation = null; // found -- keep the charge
       res.json(result);
     } catch (err) {
+      if (reservation) await refundQuota(usersDb, reservation, 1);
       if (err instanceof ValidationError) return res.status(400).json({ error: err.message });
       if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
       if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });

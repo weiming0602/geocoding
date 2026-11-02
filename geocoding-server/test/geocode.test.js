@@ -243,19 +243,40 @@ test('an address_points match under the real street ZIP is accepted', async () =
   await db.close();
 });
 
-test('an address_points match under a ZIP street_names contradicts is rejected', async () => {
+test('an address_points match in the named town wins over a ZIP street_names contradicts', async () => {
   const db = await makeDb();
   // Same street+number+town as the previous test, but a ZIP that
-  // street_names positively knows is wrong for "Pequawket Trl" (it's
-  // only ever registered under 04091) -- must not be accepted with full
-  // confidence just because the street+number+town lined up. Falls
-  // through to interpolation, which finds no candidate under this ZIP
-  // either (house 500 isn't a real address anyway), so it 404s instead
-  // of silently returning the Standish point under the wrong ZIP.
-  await assert.rejects(
-    () => geocode(db, '500 Pequawket Trl, Standish, ME 00001'),
-    NotFoundError
+  // street_names knows is wrong for "Pequawket Trl" (only ever 04091).
+  // The named town beats the ZIP (as in matchByStreetAndTown), so the
+  // exact Standish point is kept -- with the street's real ZIP reported.
+  const result = await geocode(db, '500 Pequawket Trl, Standish, ME 00001');
+  assert.equal(result.source, 'address_point');
+  assert.equal(result.match.siteUid, 'test-uid-2');
+  assert.equal(result.matchedBy, 'town');
+  // The nearest Pequawket Trl segment (id 12) is ~430 m away -- too far to
+  // vouch for the point's ZIP.
+  assert.equal(result.correctedZip, undefined);
+
+  // A segment of it right by the point does.
+  await db.query(
+    `INSERT INTO streets (id, tlid, fullname, zipl, zipr, state_abbr, geometry, geom)
+     VALUES (80, '80000000', 'Pequawket Trl', '04091', '04091', 'ME',
+             'LINESTRING (-70.7801 43.8299, -70.7801 43.8305)', ST_GeomFromText('LINESTRING (-70.7801 43.8299, -70.7801 43.8305)', 4326))`
   );
+  await db.query(
+    `INSERT INTO street_names (tlid, fullname, paflag, zipl, zipr, state_abbr) VALUES ('80000000', 'Pequawket Trl', 'P', '04091', '04091', 'ME')`
+  );
+  const corrected = await geocode(db, '500 Pequawket Trl, Standish, ME 00001');
+  assert.equal(corrected.correctedZip, '04091');
+  await db.close();
+});
+
+test('without a town, an address_points match under a ZIP street_names contradicts is rejected', async () => {
+  const db = await makeDb();
+  // No town to vouch for the point -- the ZIP is the only location signal,
+  // and it says this is some other Pequawket Trl. Falls through to
+  // interpolation, which finds nothing under this ZIP either.
+  await assert.rejects(() => geocode(db, '500 Pequawket Trl, ME 00001'), NotFoundError);
   await db.close();
 });
 

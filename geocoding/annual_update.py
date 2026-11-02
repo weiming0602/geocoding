@@ -15,6 +15,7 @@ from datetime import date
 from pathlib import Path
 
 from .ingest_address_points import ingest_address_points
+from .ingest_towns import ingest_towns
 from .osm_oneway import update_osm_oneway
 from .routing_topology import refresh_routing_topology
 from .states import STATES
@@ -24,8 +25,8 @@ from .update_state import update_state
 def annual_update(
     dsn: str, year: int, data_dir: Path, *, states=None, skip_address_points=False, skip_osm_oneway=False
 ) -> bool:
-    """Runs update_state for each of `states` (default: everything in
-    STATES), refreshes the pgRouting topology from the result, then
+    """Runs update_state and ingest_towns for each of `states` (default:
+    everything in STATES), refreshes the pgRouting topology from the result, then
     (unless skipped) re-matches OpenStreetMap one-way restrictions onto
     the refreshed streets (osm_oneway.py) and refreshes Maine's E911
     address points. Returns True if every
@@ -41,6 +42,15 @@ def annual_update(
             update_state(state_abbr, dsn, year, data_dir / state_abbr.lower())
         except Exception as exc:  # noqa: BLE001 -- one state's failure shouldn't stop the rest
             print(f"[{date.today()}] FAILED updating {state_abbr}: {exc}", file=sys.stderr)
+            ok = False
+        # Town boundaries (see ingest_towns.py) -- what geocoding by named
+        # town searches within. Separate try: streets can still be current
+        # if this one download fails, and vice versa.
+        try:
+            count = ingest_towns(dsn, state_abbr, year, data_dir / state_abbr.lower())
+            print(f"[{date.today()}] {state_abbr}: {count} town boundaries")
+        except Exception as exc:  # noqa: BLE001
+            print(f"[{date.today()}] FAILED updating {state_abbr} town boundaries: {exc}", file=sys.stderr)
             ok = False
 
     # Re-derives streets_topology_nodes/streets_routing_edges from whatever

@@ -23,6 +23,12 @@ geocoding request. Current as of August 2026.
   (census.gov/geo/tiger).
 - **Coverage today:** Maine and New Hampshire. 498,936 street segments and
   475,147 associated street names/aliases currently loaded.
+- **Town boundaries** come from the same TIGER/Line release: the
+  statewide **county subdivisions** (`COUSUB`) layer -- in New England,
+  the real towns and cities (529 in Maine, 259 in New Hampshire, 2024
+  vintage) -- loaded into `towns`. TIGER's street segments carry no town
+  name, so this is what lets a request find a street inside the town an
+  address names even when its ZIP is wrong. Same public-domain license.
 
 ### 2. Maine Office of GIS — E911 address points
 
@@ -102,12 +108,15 @@ geocoding request. Current as of August 2026.
 | `geocoding/ingest_featnames.py` | Loads that county's TIGER/Line **featnames** file (street name aliases — many streets go by more than one name) into `street_names`. |
 | `geocoding/ingest_address_points.py` | Pages through Maine's public ArcGIS FeatureServer and loads every E911 address point into `address_points`. |
 | `geocoding/update_state.py` | Downloads and ingests every county's edges + featnames for one state, for a given TIGER vintage year. |
-| `geocoding/annual_update.py` | Runs `update_state` for every covered state plus the Maine address-point refresh, in one command — this is the one meant to run unattended (see `ops/geocoding-annual-update.timer`). |
+| `geocoding/ingest_towns.py` | Downloads one state's TIGER/Line **county subdivisions** (town/city boundaries) and upserts them into `towns` by GEOID. |
+| `geocoding/annual_update.py` | Runs `update_state` and `ingest_towns` for every covered state plus the Maine address-point refresh, in one command — this is the one meant to run unattended (see `ops/geocoding-annual-update.timer`). |
 
 All of the above are **insert-only and idempotent** — each row is keyed on a
 stable ID from the source data itself (TLID for streets/street names,
 SITE_UID for address points), so re-running any of them, including on top
-of existing data, only adds rows that are genuinely new. This is what makes
+of existing data, only adds rows that are genuinely new. (`towns` is the
+exception: it's upserted by GEOID instead, since town names and boundaries
+do change between vintages -- still safe to re-run.) This is what makes
 it safe to run the annual update unattended: it can't corrupt or duplicate
 what's already there, whether that's picking up a new TIGER vintage once a
 year or newly-added E911 addresses.
@@ -120,11 +129,17 @@ order:
 1. **Exact E911 point match** (Maine only) — house number + street name +
    town matched directly against a real surveyed point. If found, that
    exact point is returned.
-2. **TIGER range-interpolation fallback** — look up the street by name and
-   ZIP, find the segment whose left/right range contains the house number
-   (parity decides the side: odd → left, even → right), interpolate a point
-   proportionally along that segment, then offset it slightly off the
-   centerline onto the correct side of the street.
+2. **TIGER range interpolation within the named town** — when the address
+   names a town, look the street up inside that town's boundary (`towns`),
+   ignoring a ZIP that points somewhere else, and interpolate along the
+   segment whose range holds the house number. A ZIP that didn't match is
+   reported back as `correctedZip`.
+3. **TIGER range interpolation by ZIP** — otherwise, look up the street by
+   name and ZIP, find the segment whose left or right range contains the
+   house number (whichever side's own ZIP and number parity fit — TIGER
+   has no fixed odd/even side), interpolate a point proportionally along
+   that segment, then offset it slightly off the centerline onto that
+   side of the street.
 
 Reverse geocoding (coordinates → address) runs the same logic backwards:
 find the nearest street segment, determine which side of it the point falls

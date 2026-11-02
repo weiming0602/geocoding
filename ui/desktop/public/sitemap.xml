@@ -8,11 +8,9 @@
   switch to path-based routing (BrowserRouter) plus a server/host rewrite
   rule that serves index.html for every path -- a hosting-time decision,
   not something to do speculatively now.
-
-  TODO: replace REPLACE_WITH_REAL_DOMAIN once a real domain is registered.
 -->
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
   <url>
-    <loc>https://REPLACE_WITH_REAL_DOMAIN/</loc>
+    <loc>https://www.meridiangeocoding.com/</loc>
   </url>
 </urlset>

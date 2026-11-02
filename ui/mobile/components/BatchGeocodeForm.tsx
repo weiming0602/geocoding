@@ -211,7 +211,7 @@ export default function BatchGeocodeForm({
       return;
     }
 
-    const header = '#,ID,Address,Success,Latitude,Longitude,Side,Error,Corrected street';
+    const header = '#,ID,Address,Success,Latitude,Longitude,Side,Error,Corrected street,Corrected ZIP';
     const rows = results.map((result, index) => {
       const id = forwardedIds![index];
       if (result.success) {
@@ -225,11 +225,12 @@ export default function BatchGeocodeForm({
           result.source === 'interpolation' ? result.rangeSide : '',
           '',
           result.source === 'llm_assisted' ? (result.correctedStreet ?? result.correctedAddress) : '',
+          result.correctedZip ?? '',
         ]
           .map(csvField)
           .join(',');
       }
-      return [String(index + 1), id, result.address, 'false', '', '', '', result.error, ''].map(csvField).join(',');
+      return [String(index + 1), id, result.address, 'false', '', '', '', result.error, '', ''].map(csvField).join(',');
     });
     const csv = [header, ...rows].join('\n');
 
@@ -438,6 +439,9 @@ export default function BatchGeocodeForm({
                       : ''}
                     {result.source === 'llm_assisted'
                       ? ` · AI-corrected: ${result.correctedStreet ?? result.correctedAddress}`
+                      : ''}
+                    {result.correctedZip
+                      ? ` · ZIP corrected: ${result.correctedZip}`
                       : ''}
                   </Text>
                 ) : (

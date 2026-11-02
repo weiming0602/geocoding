@@ -12,6 +12,12 @@ export type RecentLookup = {
   // Placed in a gap between two street segments' address ranges -- see
   // GeocodeResult's `approximate`.
   approximate?: boolean;
+  // Found in the address's named town under a different ZIP than the one
+  // given -- see GeocodeResult's `correctedZip`.
+  correctedZip?: string;
+  // Not found as written; the LLM-assisted retry read it as this street
+  // (signed-in lookups only) -- see GeocodeResult's `correctedStreet`.
+  correctedStreet?: string;
 };
 
 const STORAGE_KEY = 'meridian.recentLookups';
