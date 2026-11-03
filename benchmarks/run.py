@@ -8,7 +8,7 @@ For each provider: geocode every address in the fixed sample, measure
 the distance from the returned point to the address's true E911
 location, then (unless --no-record):
   - append one summary row per provider to benchmarks/RESULTS.md, and
-  - write per-address results to benchmarks/runs/<date>_<provider>.csv
+  - write per-address results to benchmarks/runs/<date>_<commit>_<provider>.csv
     (id, found, error in meters, the service's match type -- never a
     third-party service's coordinates).
 """
@@ -143,7 +143,9 @@ def main():
         lines.append(line)
         if not args.no_record:
             slug = "".join(c if c.isalnum() else "-" for c in f"{provider.name}-{provider.mode}".lower()).strip("-")
-            write_run_csv(RUNS_DIR / f"{day}_{slug}.csv", rows)
+            # Revision in the name, so a second run on the same day (e.g. after
+            # a fix) doesn't overwrite the first one's per-address results.
+            write_run_csv(RUNS_DIR / f"{day}_{revision}_{slug}.csv", rows)
 
     if lines and not args.no_record:
         with RESULTS_MD.open("a") as f:

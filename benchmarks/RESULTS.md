@@ -73,6 +73,16 @@ never a third-party service's coordinates).
     several sharing the address (see the first run's note). Fixing that is
     the clearest way to close the gap.
   - Cost: 300 geocodes (not stored), within Esri's free tier.
+- **2026-11-03, shared-address fix** (PR #114, commit `616b8d7`, measured
+  before merging, with the fix applied on top of this benchmark):
+  - **Meridian as shipped: 93.0% → 99.3% within 50 m**, found 98.3% →
+    100%, wrong place 0.3% → 0%. All 300 addresses now resolve to E911
+    points (was 255). Ahead of Esri (97.3%) and Google (89.7%) in Maine.
+  - The 2 addresses still beyond 50 m are units in shared-address groups:
+    the fix returns the unit nearest the group's center, which can be a
+    different unit than the one sampled.
+  - TIGER only is unchanged (the fix only touches E911 matching), so
+    only the as-shipped row was re-recorded.
 
 ## Results
 
@@ -84,3 +94,4 @@ never a third-party service's coordinates).
 | 2026-11-03 | af1dc7c-dirty | maine_e911_300 | Nominatim (OpenStreetMap) | public API | 98.0% | 85.0% | 90.0% | 94.0% | 1.3% | 1 | 34 |
 | 2026-11-03 | f8c483a | maine_e911_300 | Google Geocoding API | geocode/json | 100.0% | 86.3% | 89.7% | 95.7% | 2.3% | 3 | 52 |
 | 2026-11-03 | fad7ea0 | maine_e911_300 | Esri ArcGIS geocoding | findAddressCandidates | 100.0% | 95.7% | 97.3% | 99.7% | 0.0% | 0 | 3 |
+| 2026-11-03 | 616b8d7 (PR #114) | maine_e911_300 | Meridian | as shipped (E911 + TIGER) | 100.0% | 99.3% | 99.3% | 100.0% | 0.0% | 0 | 0 |
