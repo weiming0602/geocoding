@@ -244,6 +244,50 @@ Known hard cases, recorded rather than silently "fixed": a corner building
 nearer the cross street than the street it's addressed on; long driveways
 (nearest segment may be the wrong road); buildings beyond 200 m.
 
+**Built** (`address_inference/attach.py`, tests in
+`tests/test_address_inference_attach.py`):
+
+```
+python -m address_inference.attach "dbname=geocoding" me --town Freeport
+python -m address_inference.attach "dbname=geocoding" me --county 23005
+python -m address_inference.attach "dbname=geocoding" me    # whole state, county by county
+```
+
+- One row per (building, addressable segment within 200 m) in
+  `address_inference.building_segments` (partitioned by state): `side`,
+  `t`, `dist_m`, `rank` (1 = nearest), plus `at_end` (the building
+  projects past the segment's end, i.e. beside its extension, not the
+  road itself) and `range_on_side` (that side has an address range).
+  `side` is NULL in the rare exactly-collinear case.
+- Segments with no address range on either side (highways, unnamed
+  connectors) are never candidates.
+- Uses the building's `inner_point` (inside the footprint), not its
+  centroid.
+- Re-running replaces only the rows of the buildings in scope.
+
+**Side convention check:** on Freeport's E911 points (exact-matched
+streets, nearest matched segment), where the house number fits only one
+side's range, the computed side agreed with that side **95.6%** (left,
+1,577 / 1,650) and **95.2%** (right, 1,541 / 1,619) of the time. That
+confirms the L/R convention matches TIGER's ranges; the ~5% disagreement
+is the misplacement the model will have to learn around.
+
+**Freeport results (2026-11-02):** 28,195 rows in ~1 s. Of the 4,957
+buildings inside Freeport:
+
+| | |
+|---|---|
+| Median candidate segments per building | 4 |
+| Median / p90 distance to nearest addressable segment | 39 m / 110 m |
+| Nearest segment has a range on the building's side | 4,209 (85%) |
+| Nearest segment is only beside its extension (`at_end`) | 796 (16%) |
+| **No addressable segment within 200 m** | **375 (7.6%)** |
+
+The 7.6% with no candidate are mostly on roads TIGER lacks (consistent
+with Stage 1b's 9% of addresses on unmatched streets) or far down long
+rural driveways. M1–M3 fall back to M0 for them; whether the radius
+should grow for rural areas is a question for the Stage 4 error map.
+
 ### Stage 3: Prediction methods
 
 All methods produce a predicted point for each `(number, street, ZIP)` drawn
