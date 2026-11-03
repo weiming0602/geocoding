@@ -43,7 +43,15 @@ read-write).
   segments by canonical name + location, never ZIP: `python -m
   address_inference.street_match "dbname=geocoding" me --town Freeport`
   (Freeport: 90.7% of addresses matched; the rest are on roads TIGER
-  lacks). Regions are TOML files in `address_inference/regions/`.
+  lacks). Stage 2 attaches every building to each addressable TIGER
+  segment within 200 m (side/position/distance): `python -m
+  address_inference.attach "dbname=geocoding" me --town Freeport`. Stages
+  3-4 train a LightGBM ranker on E911 labels and score it against today's
+  interpolation and geometry baselines: `python -m
+  address_inference.evaluate "dbname=geocoding" me --town Freeport` (needs
+  `pip install -r address_inference/requirements.txt`; Freeport: within
+  50 m 24.5% -> 46.6%). Regions are TOML files in
+  `address_inference/regions/`.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

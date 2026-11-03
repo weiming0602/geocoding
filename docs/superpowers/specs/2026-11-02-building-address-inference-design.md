@@ -244,6 +244,50 @@ Known hard cases, recorded rather than silently "fixed": a corner building
 nearer the cross street than the street it's addressed on; long driveways
 (nearest segment may be the wrong road); buildings beyond 200 m.
 
+**Built** (`address_inference/attach.py`, tests in
+`tests/test_address_inference_attach.py`):
+
+```
+python -m address_inference.attach "dbname=geocoding" me --town Freeport
+python -m address_inference.attach "dbname=geocoding" me --county 23005
+python -m address_inference.attach "dbname=geocoding" me    # whole state, county by county
+```
+
+- One row per (building, addressable segment within 200 m) in
+  `address_inference.building_segments` (partitioned by state): `side`,
+  `t`, `dist_m`, `rank` (1 = nearest), plus `at_end` (the building
+  projects past the segment's end, i.e. beside its extension, not the
+  road itself) and `range_on_side` (that side has an address range).
+  `side` is NULL in the rare exactly-collinear case.
+- Segments with no address range on either side (highways, unnamed
+  connectors) are never candidates.
+- Uses the building's `inner_point` (inside the footprint), not its
+  centroid.
+- Re-running replaces only the rows of the buildings in scope.
+
+**Side convention check:** on Freeport's E911 points (exact-matched
+streets, nearest matched segment), where the house number fits only one
+side's range, the computed side agreed with that side **95.6%** (left,
+1,577 / 1,650) and **95.2%** (right, 1,541 / 1,619) of the time. That
+confirms the L/R convention matches TIGER's ranges; the ~5% disagreement
+is the misplacement the model will have to learn around.
+
+**Freeport results (2026-11-02):** 28,195 rows in ~1 s. Of the 4,957
+buildings inside Freeport:
+
+| | |
+|---|---|
+| Median candidate segments per building | 4 |
+| Median / p90 distance to nearest addressable segment | 39 m / 110 m |
+| Nearest segment has a range on the building's side | 4,209 (85%) |
+| Nearest segment is only beside its extension (`at_end`) | 796 (16%) |
+| **No addressable segment within 200 m** | **375 (7.6%)** |
+
+The 7.6% with no candidate are mostly on roads TIGER lacks (consistent
+with Stage 1b's 9% of addresses on unmatched streets) or far down long
+rural driveways. M1–M3 fall back to M0 for them; whether the radius
+should grow for rural areas is a question for the Stage 4 error map.
+
 ### Stage 3: Prediction methods
 
 All methods produce a predicted point for each `(number, street, ZIP)` drawn
@@ -357,12 +401,75 @@ beat them on the test set to earn its place.
 
 ### Environment
 
-The project `.venv` has no ML libraries yet. Adds: `lightgbm`, `numpy`,
-`pandas` (and `scikit-learn` for metrics), experiment-only, listed in
-`experiments/building_addresses/requirements.txt`, not the main
-requirements. Training data size: ~798K addresses × ≤15 candidates ≈ 12M
-rows × ~20 features as float32, roughly 1 GB, which fits on this machine
-(14 cores, 14.6 GB RAM) with Ollama stopped.
+`lightgbm`, `numpy`, `pandas` and `scikit-learn` (pinned in
+`address_inference/requirements.txt`, experiment-only, not the main
+`pyproject.toml` dependencies; installed in the project `.venv`
+2026-11-03: lightgbm 4.7.0, numpy 2.5.4, pandas 3.1.0, scikit-learn
+1.9.1, all with Python 3.14 wheels). Training data size: ~798K addresses ×
+≤50 candidates ≈ 40M rows × ~22 features as float32, a few GB; fits on
+this machine (14 cores, 14.6 GB RAM) with Ollama stopped, but statewide
+may need per-county batching.
+
+### Built: Freeport proof (2026-11-03)
+
+```
+python -m address_inference.evaluate "dbname=geocoding" me --town Freeport
+```
+
+`address_inference/dataset.py` builds one row per (address, candidate
+building) with features, the E911 label and baselines M0–M3;
+`evaluate.py` trains the LightGBM ranker and scores every method on the
+same addresses. With one town there are no held-out towns, so it's
+**5-fold cross-validation grouped by street**: every ML prediction comes
+from a model that never saw that street.
+
+Coverage:
+
+| | |
+|---|---|
+| Freeport E911 addresses on matched streets | 4,789 |
+| Scorable (a TIGER range holds the number) | 4,519 |
+| … with a true building within 30 m | 4,351 |
+| … true building among the 50 candidates | 4,174 (96% of those; the ceiling for "right building") |
+
+Results (all 4,519 scorable addresses; an address with no candidate
+buildings falls back to M0):
+
+| Method | ≤25 m | **≤50 m** | ≤150 m | Median error | p90 error | Right building |
+|---|---|---|---|---|---|---|
+| M0 interpolation (today) | 6.4% | 24.5% | 63.9% | 103 m | 235 m | – |
+| M1 snap to nearest same-side building | 24.7% | 34.5% | 64.1% | 96 m | 241 m | 23.3% |
+| M2 rank order | 21.7% | 29.4% | 62.8% | 110 m | 253 m | 20.6% |
+| M3 rank order, no outbuildings | 22.9% | 29.7% | 63.0% | 108 m | 255 m | 23.0% |
+| **ML ranker (LightGBM)** | **37.0%** | **46.6%** | **71.1%** | **60 m** | 239 m | **36.5%** |
+
+What it says:
+- **The ML ranker roughly doubles "within 50 m" over today's
+  interpolation** (24.5% → 46.6%) and cuts the median error from 103 m
+  to 60 m. It beats every geometry rule, and the rules alone don't get
+  close (best: M1 at 34.5%).
+- **It doesn't pass the Phase 3 bar yet** (≥40% lower median error *and*
+  ≥70% right building): median is 42% lower, but right building is
+  36.5%. That bar was set for training on many towns; this is one town
+  of ~3,600 training addresses per fold.
+- **The p90 error barely moves** (~240 m): the worst cases are addresses
+  whose TIGER range is far from reality, which no choice among nearby
+  buildings fixes.
+- **Freeport's interpolation is worse than Maine's average** (M0 median
+  103 m here vs 57 m on the statewide benchmark sample), so it's a hard
+  town to start on.
+- Most useful features (gain): `same_side`, `dist_vs_nearest_road`,
+  `rank_gap`, `meters_per_number`, `sqmeters`. Adding the
+  numbering-density features (`pos_m`, `numbers_from_start`,
+  `meters_per_number`) took ≤50 m from 43.6% to 46.6%; going from 20 to
+  50 candidates raised the ceiling from 76% to 96%.
+- In Freeport, Maine house numbers don't follow one fixed distance rule:
+  meters per house number along a segment has a median of 6.5 with an
+  interquartile range of 2.8–14, so the model has to learn the local
+  density rather than assume one.
+
+Next: more towns (Phase 2) so the model trains on far more than 3,600
+addresses and can be tested on towns it never saw.
 
 ## Scaling to more places
 
