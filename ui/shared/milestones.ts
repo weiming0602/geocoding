@@ -239,6 +239,12 @@ export const MILESTONES: Milestone[] = [
     description: 'A serious alert now rings three times, then speaks -- once, however many hazards arrive together.',
   },
   {
+    date: 'Nov 3, 2026',
+    title: 'Apartments and multi-unit addresses placed exactly',
+    description:
+      "Addresses shared by several units, like apartment buildings, condos and mobile-home parks, now land on the property itself instead of an estimate along the street. In a test of 300 randomly chosen Maine addresses, 99.3% were placed within 50 meters of their official E911 location.",
+  },
+  {
     date: 'Coming soon',
     title: 'New Hampshire accuracy upgrade',
     description: 'The same real per-house location data, for New Hampshire.',
