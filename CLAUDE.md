@@ -33,6 +33,14 @@ read-write).
   --states ME NH` (~6 min for ME+NH, mostly the download). It processes
   one state at a time and keeps only `street_oneway`: `osm_ways` (raw OSM
   roads, nearly the size of `streets`) is emptied after each state.
+- Building-address experiment (`address_inference/`, its own package and
+  Postgres schema -- never read by geocoding-server; design in
+  `docs/superpowers/specs/2026-11-02-building-address-inference-design.md`):
+  Stage 1 loads FEMA/ORNL building footprints (CC BY 4.0, see
+  `DATA_SOURCES.md` §4) with `python -m address_inference.load_footprints
+  "dbname=geocoding" me --town Freeport` (or `--county 23005`, or no flag
+  for the whole state). Regions are TOML files in
+  `address_inference/regions/`.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

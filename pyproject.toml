@@ -20,4 +20,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["geocoding*"]
+include = ["geocoding*", "address_inference*"]
+
+[tool.setuptools.package-data]
+address_inference = ["regions/*.toml"]
