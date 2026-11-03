@@ -35,6 +35,38 @@ Esri rows appear once `GOOGLE_MAPS_API_KEY` / `ARCGIS_API_KEY` are set.
 Per-address results for each run are in `runs/` (error in meters only,
 never a third-party service's coordinates).
 
+## Current standings: Meridian vs. Esri vs. Google (and others)
+
+Latest result per service on the same 300 Maine addresses
+(`maine_e911_300`). Update this table whenever a new run changes a
+service's numbers; the dated history is in "Results" below.
+
+| Rank | Service | As of | Found | **Within 50 m** | Within 25 m | Wrong place (>500 m) | Median error | p90 error |
+|---|---|---|---|---|---|---|---|---|
+| 1 | **Meridian, as shipped** (with PR #114) | 2026-11-03 | 100% | **99.3%** | 99.3% | 0.0% | 0 m | 0 m |
+| 2 | Esri ArcGIS geocoding | 2026-11-03 | 100% | 97.3% | 95.7% | 0.0% | 0 m | 3 m |
+| 3 | Nominatim (OpenStreetMap) | 2026-11-03 | 98.0% | 90.0% | 85.0% | 1.3% | 1 m | 34 m |
+| 4 | Google Geocoding API | 2026-11-03 | 100% | 89.7% | 86.3% | 2.3% | 3 m | 52 m |
+| 5 | US Census Geocoder | 2026-11-03 | 91.3% | 39.3% | 18.3% | 6.0% | 60 m | 262 m |
+| 6 | Meridian, TIGER only (no E911; what NH gets) | 2026-11-03 | 82.3% | 38.0% | 17.0% | 3.3% | 57 m | 250 m |
+
+How to read it:
+- **In Maine, Meridian is now the most accurate of the five**, because it
+  uses the state's E911 points directly and (since PR #114) no longer
+  skips the 16% that share an address. Esri is close behind and likely
+  uses the same E911 data. Google is accurate when it labels a result
+  `ROOFTOP` (92.3% within 50 m) but always returns *something*: its
+  `APPROXIMATE` results were all several km off.
+- **Outside E911 coverage, Meridian is no better than the Census
+  Geocoder** (both interpolate TIGER ranges, ~38-39%). That's the gap
+  the building-inference work (docs/superpowers/specs/
+  2026-11-02-building-address-inference-design.md) is aimed at; its
+  Freeport model reached 46.6% within 50 m vs 24.5% for interpolation
+  there (Freeport only, not this sample).
+- These are Maine-only results on a sample where E911 is the truth, which
+  favors E911-based services. NH, where nobody has E911, would look
+  different.
+
 ## Notes on runs
 
 - **2026-11-03, first run** (commit `af1dc7c-dirty` = master plus the
