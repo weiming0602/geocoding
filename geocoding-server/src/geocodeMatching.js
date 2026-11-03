@@ -74,6 +74,10 @@ async function candidateStreets(db, streetName, zip, state) {
   );
 }
 
+// Points sharing one address are treated as one property only when all of
+// them are this close to their center -- see matchAddressPoint.
+const MAX_SHARED_ADDRESS_SPREAD_METERS = 300;
+
 /**
  * Prototype: looks for an exact real-world location in Maine's E911
  * address_points table (see ingest_address_points.py) before ever
@@ -106,6 +110,17 @@ async function candidateStreets(db, streetName, zip, state) {
  * path, which does validate ZIP directly; with one, the named town beats
  * the ZIP -- the point is kept, tagged with the street's real ZIP
  * (correctedZip) when the nearest segment of it has one.
+ *
+ * Several points can share one address: E911 has a point per unit in
+ * apartment buildings, condos and mobile-home parks (16% of Maine's
+ * points; "765 Roosevelt Trail, Windham" has 1,815). Those used to count
+ * as ambiguous and fall back to interpolation -- up to 1 km off. Now,
+ * when every point is in one town and within MAX_SHARED_ADDRESS_SPREAD_METERS
+ * of their center, the point nearest that center is returned (a real
+ * structure, unlike the center itself), with pointCount saying how many
+ * share the address. Wider groups are still treated as ambiguous: those
+ * look like data errors more than one property (99% of Maine's groups
+ * are within 245 m; 79 groups span over 1 km).
  */
 async function matchAddressPoint(db, number, streetName, town, zip, state) {
   // TIGER-style input abbreviates suffixes ("Dr"); Maine's E911 data
@@ -115,14 +130,31 @@ async function matchAddressPoint(db, number, streetName, town, zip, state) {
   const params = town ? [streetName, expanded, number, town] : [streetName, expanded, number];
 
   const { rows } = await db.query(
-    `SELECT id, site_uid, street_fullname, town, county, state_abbr, ST_X(geom) AS longitude, ST_Y(geom) AS latitude
-     FROM address_points
-     WHERE UPPER(street_fullname) IN (UPPER($1), UPPER($2)) AND address_number = $3 ${townClause}`,
+    `WITH matched AS (
+       SELECT id, site_uid, street_fullname, town, county, state_abbr, geom
+       FROM address_points
+       WHERE UPPER(street_fullname) IN (UPPER($1), UPPER($2)) AND address_number = $3 ${townClause}
+     ), center AS (
+       SELECT ST_Centroid(ST_Collect(geom)) AS geom, count(*)::int AS point_count,
+              count(DISTINCT UPPER(town))::int AS town_count
+       FROM matched
+     )
+     SELECT m.id, m.site_uid, m.street_fullname, m.town, m.county, m.state_abbr,
+            ST_X(m.geom) AS longitude, ST_Y(m.geom) AS latitude,
+            c.point_count, c.town_count,
+            (SELECT max(ST_Distance(m2.geom::geography, c.geom::geography)) FROM matched m2) AS spread_meters
+     FROM matched m, center c
+     ORDER BY m.geom <-> c.geom, m.id
+     LIMIT 1`,
     params
   );
 
-  if (rows.length !== 1) return null; // no match, or ambiguous across towns with no town given
-  const point = rows[0];
+  if (rows.length === 0) return null;
+  const { point_count: pointCount, town_count: townCount, spread_meters: spreadMeters, ...point } = rows[0];
+  // Same address in several towns (no town given to tell them apart), or
+  // points too far apart to be one property: ambiguous, as before.
+  if (pointCount > 1 && (townCount > 1 || spreadMeters > MAX_SHARED_ADDRESS_SPREAD_METERS)) return null;
+  point.pointCount = pointCount;
 
   if (state && state.length === 2 && point.state_abbr && point.state_abbr.toUpperCase() !== state.toUpperCase()) {
     return null;
