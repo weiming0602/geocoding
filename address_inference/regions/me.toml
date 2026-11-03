@@ -1,0 +1,14 @@
+# One file per region. Adding a place = a new file like this one (plus a
+# source adapter only if its data comes from somewhere new).
+id = "me"
+name = "Maine"
+state_fips = "23"
+state_abbr = "ME"
+
+[footprints]
+source = "usa_structures"
+
+# Ground-truth address points. A region with none can still be predicted,
+# just not trained on or scored.
+[[labels]]
+source = "maine_e911"

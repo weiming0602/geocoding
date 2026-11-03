@@ -107,6 +107,30 @@ geocoding request. Current as of August 2026.
   `street_oneway` is replaced only then. A road crossing a state line is
   in both states' extracts and counts once.
 
+### 4. FEMA/ORNL USA Structures — building footprints (experiment only)
+
+- **What it is:** a polygon for every structure over 450 sq ft in the US,
+  traced from satellite imagery by Oak Ridge National Laboratory, with an
+  occupancy class (Residential, Commercial, ...) and area. Fetched from
+  Esri's hosted copy (`USA_Structures_View` FeatureServer, item
+  `0ec8512ad21e4bb987d7e848d14e7e24`). ~924K structures in Maine.
+- **Why it matters:** input to the building-based address inference
+  experiment (`address_inference/`, design in
+  `docs/superpowers/specs/2026-11-02-building-address-inference-design.md`),
+  which tries to place addresses on the right building where no E911
+  points exist. **Not used by geocoding today**: it lives in its own
+  `address_inference` schema that geocoding-server never reads.
+- **License:** **CC BY 4.0**, not public domain (per the item's license
+  info, checked 2026-11-02). Commercial use is fine; anything shipped from
+  it must credit "Oak Ridge National Laboratory (ORNL); Federal Emergency
+  Management Agency (FEMA) Geospatial Response Office". The parcel-derived
+  address fields (`PROP_ADDR`, `PROP_CITY`, `PROP_ZIP`, ...) are never
+  stored: their own terms are unclear, and they'd leak the answer into an
+  experiment that's scored against real addresses.
+- **Coverage today:** Freeport, ME's bounding box only (7,441 structures),
+  loaded with `python -m address_inference.load_footprints
+  "dbname=geocoding" me --town Freeport`.
+
 ## How the data gets in (and stays current)
 
 | Script | What it does |
