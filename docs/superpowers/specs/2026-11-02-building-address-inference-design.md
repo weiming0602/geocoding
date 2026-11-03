@@ -155,18 +155,65 @@ Freeport's ZIPs.** Spot checks show three different causes:
 | Cause | Freeport example | Fix |
 |---|---|---|
 | Naming differences | "SOUTH FREEPORT ROAD" vs `S Freeport Rd`; "US ROUTE ONE" vs `US Hwy 1` / `US Rte 1` (TIGER alias in `street_names`) | Full name normalization (directionals, suffixes, number words, route names) + TIGER's `street_names` aliases |
-| TIGER's ZIP is wrong for the place | "ROGERS ROAD" in Freeport is in TIGER as `Rogers Rd` with ZIP 04096 (Yarmouth) | Match by name **and location** (segment near the label points), not by ZIP |
-| Road not in TIGER at all | "SOMERSET CONDOS", "FREEPORT VILLAGE STATION" (condo complexes, a shopping center), likely private ways | Recorded as `no_tiger_road`; see "Roads TIGER doesn't have" below |
+| ZIP-scoped lookup misses the street | Matching only within the town's ZIPs is fragile (TIGER ZIPs follow USPS delivery areas, not town lines) | Match by name **and location** (segment near the label points), not by ZIP |
+| Road not in TIGER at all | "SOMERSET CONDOS", "FREEPORT VILLAGE STATION" (condo complexes, a shopping center), private ways; **"ROGERS ROAD" (97 addresses)**: half its points have no TIGER segment within 150 m, and the nearest TIGER `Rogers Rd` is 5.8 km away in another town | Recorded as unmatched with a reason; see "Roads TIGER doesn't have" below |
+
+(Correction, after Stage 1b was built: the first draft of this table said
+Freeport's Rogers Road was in TIGER under Yarmouth's ZIP. That `Rogers Rd`
+is a different road 5.8 km away; Freeport's is missing from TIGER.)
 
 So street identification is its own stage: for each region's label street
 names, find the TIGER segments they correspond to using name similarity
-**plus** spatial agreement with that street's label points. Output:
-`address_inference.street_match(region_id, label_street, tlid, method,
-confidence)`. The same matching is needed in unlabeled regions too (the
-address the user types must still find its road), so it's part of the
-pipeline, not a training-only step. Its own accuracy is reported per
-region, because every address on an unmatched street is lost before the
-model ever sees it.
+**plus** spatial agreement with that street's label points. The same
+matching is needed in unlabeled regions too (the address the user types
+must still find its road), so it's part of the pipeline, not a
+training-only step. Its own accuracy is reported per region, because every
+address on an unmatched street is lost before the model ever sees it.
+
+**Built** (`address_inference/street_names.py`, `street_match.py`, tests
+in `tests/test_address_inference_streets.py`):
+
+```
+python -m address_inference.street_match "dbname=geocoding" me --town Freeport
+```
+
+- `canonical()` normalizes both sides the same way: directionals,
+  USPS abbreviations TIGER actually uses (wherever they appear, e.g.
+  "Mast Lndg Rd"), `SAINT`→`ST`, and route names ("US ROUTE ONE",
+  "ROUTE 1", "US Hwy 1" → `RTE 1`; "INTERSTATE 295", "I- 295" → `I 295`).
+- Candidates: every TIGER name (primary + `street_names` aliases) on a
+  segment within 150 m of the street's own E911 points. ZIP is not used.
+- Decision, in order: **exact** canonical name (any support: TIGER's road
+  often stops short of newer houses, e.g. Cortland Rd at 8%), **base_name**
+  (same name apart from the road-type word, ≥50% support: "ROOS HILL
+  DRIVE" vs `Roos Hill Rd`, "SOMERSET CONDOS" vs `Somerset`; sometimes a
+  lane off a same-named road, so later stages can trust it less),
+  **fuzzy** (≥0.85 similarity, ≥60% support: "MALLETT DRIVE" vs
+  `Mallet Dr`). Otherwise unmatched, as **no_road_nearby** (<50% of points
+  have any TIGER segment, named or not, within 150 m) or **name_mismatch**
+  (points sit beside a differently named road). Never forced onto the
+  nearest road.
+- Writes `address_inference.street_matches` (one row per label street,
+  with method/reason, support, nearest TIGER name) and
+  `street_match_segments` (label street → tlid), replacing the town's
+  previous rows on re-run.
+
+**Freeport results (2026-11-02):**
+
+| Outcome | Streets | Addresses |
+|---|---|---|
+| exact | 339 (68.9%) | 4,541 (85.7%) |
+| base_name | 29 (5.9%) | 219 (4.1%) |
+| fuzzy | 11 (2.2%) | 49 (0.9%) |
+| **matched total** | **379 (77.0%)** | **4,809 (90.7%)** |
+| no_road_nearby | 30 (6.1%) | 198 (3.7%) |
+| name_mismatch | 83 (16.9%) | 293 (5.5%) |
+
+So ~91% of Freeport's addresses reach a TIGER road; the other ~9% are on
+roads TIGER lacks (mostly short private ways and condo loops: 83 streets
+average 3.5 addresses each), which no TIGER-based method can place on
+their own street. The `alias` method never fired in Freeport: canonical
+route names already make "US ROUTE ONE" equal TIGER's primary `US Hwy 1`.
 
 **Roads TIGER doesn't have** (private ways, condo loops, new subdivisions):
 - First, measure: buildings far from any TIGER road and clustered together
