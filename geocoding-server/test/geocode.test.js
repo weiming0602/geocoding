@@ -203,6 +203,57 @@ test('an exact address_points match is preferred over interpolation', async () =
   await db.close();
 });
 
+// E911 has one point per unit at apartments, condos and mobile-home parks,
+// so several points can share one address (16% of Maine's points).
+async function addSharedAddress(db, number, street, town, points) {
+  for (const [i, [lon, lat]] of points.entries()) {
+    await db.query(
+      `INSERT INTO address_points (site_uid, address_number, street_fullname, town, county, state_abbr, geom)
+       VALUES ($1, $2, $3, $4, 'Test County', 'ME', ST_SetSRID(ST_MakePoint($5, $6), 4326))`,
+      [`shared-${number}-${town}-${i}`, number, street, town, lon, lat]
+    );
+  }
+}
+
+test('a single address_points match reports no shared-address count', async () => {
+  const db = await makeDb();
+  const result = await geocode(db, '42 Test Point Lane, Testville, ME 00000');
+  assert.equal(result.match.addressPointCount, undefined);
+  await db.close();
+});
+
+test('units sharing one address resolve to the unit nearest their center', async () => {
+  const db = await makeDb();
+  // Three units ~20-40 m apart; the middle one is nearest their center.
+  await addSharedAddress(db, 765, 'Unit Park Road', 'Testville', [
+    [-70.5003, 43.5], [-70.5, 43.5001], [-70.4997, 43.5],
+  ]);
+  const result = await geocode(db, '765 Unit Park Road, Testville, ME 00000');
+  assert.equal(result.source, 'address_point');
+  assert.deepEqual(result.coordinates, { latitude: 43.5001, longitude: -70.5 });
+  assert.equal(result.match.addressPointCount, 3);
+  await db.close();
+});
+
+test('points sharing an address but too far apart are still ambiguous', async () => {
+  const db = await makeDb();
+  // ~1.6 km apart: two places, not one property. No TIGER street to fall back to.
+  await addSharedAddress(db, 765, 'Unit Park Road', 'Testville', [[-70.51, 43.5], [-70.49, 43.5]]);
+  await assert.rejects(() => geocode(db, '765 Unit Park Road, Testville, ME 00000'), NotFoundError);
+  await db.close();
+});
+
+test('without a town, the same address in two towns is still ambiguous', async () => {
+  const db = await makeDb();
+  await addSharedAddress(db, 765, 'Unit Park Road', 'Testville', [[-70.5, 43.5]]);
+  await addSharedAddress(db, 765, 'Unit Park Road', 'Othertown', [[-70.5001, 43.5]]);
+  await assert.rejects(() => geocode(db, '765 Unit Park Road, ME 00000'));
+  const named = await geocode(db, '765 Unit Park Road, Othertown, ME 00000');
+  assert.equal(named.source, 'address_point');
+  assert.equal(named.match.town, 'Othertown');
+  await db.close();
+});
+
 test('address_points matching expands a USPS suffix abbreviation (Ln -> Lane)', async () => {
   const db = await makeDb();
   const result = await geocode(db, '42 Test Point Ln, Testville, ME 00000');

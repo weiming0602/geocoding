@@ -33,6 +33,9 @@ async function geocode(db, addressInput, { offsetFeet = 20, llmAssist = null } =
         town: addressPoint.town,
         county: addressPoint.county,
         state_abbr: addressPoint.state_abbr,
+        // Several E911 points (units) share this address; this is the one
+        // nearest their center. See matchAddressPoint.
+        ...(addressPoint.pointCount > 1 ? { addressPointCount: addressPoint.pointCount } : {}),
       },
       source: 'address_point',
       coordinates: { latitude: addressPoint.latitude, longitude: addressPoint.longitude },
