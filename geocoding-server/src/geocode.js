@@ -18,12 +18,19 @@ const { attemptLlmAssist } = require('./llmAssist');
  * server.js's /geocode handler ever passes this, and only when the
  * request is authenticated -- every other caller (including
  * batchGeocode.js) always gets today's plain-404 behavior unchanged.
+ *
+ * `useAddressPoints: false` skips the E911 address-point lookup, so the
+ * result is what TIGER interpolation alone gives -- what every place
+ * without E911 data (all of NH) gets. Only the accuracy benchmark
+ * (scripts/benchmark-geocode.js) passes it; no route does.
  */
-async function geocode(db, addressInput, { offsetFeet = 20, llmAssist = null } = {}) {
+async function geocode(db, addressInput, { offsetFeet = 20, llmAssist = null, useAddressPoints = true } = {}) {
   const parsed = parseAddress(addressInput);
   const { number, streetName, zip, state, town } = parsed;
 
-  const addressPoint = await matchAddressPoint(db, number, streetName, town, zip, state);
+  const addressPoint = useAddressPoints
+    ? await matchAddressPoint(db, number, streetName, town, zip, state)
+    : null;
   if (addressPoint) {
     return {
       input: { number, streetName, zip, state, town },

@@ -44,6 +44,14 @@ read-write).
   address_inference.street_match "dbname=geocoding" me --town Freeport`
   (Freeport: 90.7% of addresses matched; the rest are on roads TIGER
   lacks). Regions are TOML files in `address_inference/regions/`.
+- Geocoding accuracy benchmark (`benchmarks/`): `python -m benchmarks.run`
+  geocodes a frozen sample of 300 Maine E911 addresses with Meridian (as
+  shipped, and TIGER-only via `geocode()`'s `useAddressPoints: false` /
+  `geocoding-server/scripts/benchmark-geocode.js`), the US Census
+  Geocoder, Nominatim, and Google/Esri when `GOOGLE_MAPS_API_KEY` /
+  `ARCGIS_API_KEY` are set; scores each by meters from the E911 point and
+  appends a dated row per service to `benchmarks/RESULTS.md` (the progress
+  log -- internal only). Never stores third-party coordinates.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)
