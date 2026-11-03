@@ -62,6 +62,17 @@ never a third-party service's coordinates).
     makes up its 2.3% "wrong place": Google always returns *something*,
     and the label is the only warning.
   - Cost: 300 requests on the Geocoding API.
+- **2026-11-03, Esri added** (same sample, commit `fad7ea0`):
+  - **Best of all services: 97.3% within 50 m**, median 0 m, p90 3 m, no
+    wrong places. Every result was a `PointAddress` match. Median 0 m means
+    it returns the E911 points themselves, so Esri very likely uses Maine's
+    E911 data as its source here (not verified).
+  - **It beats Meridian as shipped (93.0%) for a fixable reason:** both
+    start from the same E911 points, but Meridian falls back to
+    interpolation for the 15% of addresses whose E911 point is one of
+    several sharing the address (see the first run's note). Fixing that is
+    the clearest way to close the gap.
+  - Cost: 300 geocodes (not stored), within Esri's free tier.
 
 ## Results
 
@@ -72,3 +83,4 @@ never a third-party service's coordinates).
 | 2026-11-03 | af1dc7c-dirty | maine_e911_300 | US Census Geocoder | Public_AR_Current | 91.3% | 18.3% | 39.3% | 72.0% | 6.0% | 60 | 262 |
 | 2026-11-03 | af1dc7c-dirty | maine_e911_300 | Nominatim (OpenStreetMap) | public API | 98.0% | 85.0% | 90.0% | 94.0% | 1.3% | 1 | 34 |
 | 2026-11-03 | f8c483a | maine_e911_300 | Google Geocoding API | geocode/json | 100.0% | 86.3% | 89.7% | 95.7% | 2.3% | 3 | 52 |
+| 2026-11-03 | fad7ea0 | maine_e911_300 | Esri ArcGIS geocoding | findAddressCandidates | 100.0% | 95.7% | 97.3% | 99.7% | 0.0% | 0 | 3 |
