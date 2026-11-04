@@ -590,10 +590,12 @@ export function getTransactions(
 export function getAddressInferenceReview(
   passcode: string,
   town: string | null = null,
+  method: string | null = null,
   baseUrl = DEFAULT_API_BASE_URL
 ): Promise<AddressInferenceReviewResponse> {
   const qs = new URLSearchParams({ passcode });
   if (town) qs.set('town', town);
+  if (method) qs.set('method', method);
   return getJson<AddressInferenceReviewResponse>(baseUrl, `/admin/address-inference/review?${qs.toString()}`);
 }
 

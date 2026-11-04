@@ -10,14 +10,16 @@ async function seedPredictions(pool) {
   await pool.query('CREATE SCHEMA address_inference');
   await pool.query(`
     CREATE TABLE address_inference.ml_predictions (
-      region_id TEXT, town TEXT, address_id TEXT, address_number INTEGER, street TEXT,
+      region_id TEXT, town TEXT, method TEXT, address_id TEXT, address_number INTEGER, street TEXT,
       e911_lat DOUBLE PRECISION, e911_lon DOUBLE PRECISION, m0_lat DOUBLE PRECISION, m0_lon DOUBLE PRECISION,
       true_building TEXT, picked_building TEXT, picked_lat DOUBLE PRECISION, picked_lon DOUBLE PRECISION,
       error_m DOUBLE PRECISION, status TEXT, candidates INTEGER, run_date DATE)`);
   await pool.query(`
     INSERT INTO address_inference.ml_predictions VALUES
-      ('me', 'Freeport', 'a1', 12, 'MAIN ST', 43.857, -70.103, 43.8571, -70.1031, 'b1', 'b1', 43.857, -70.103, 4.2, 'right', 30, '2026-11-03'),
-      ('me', 'Freeport', 'a2', 14, 'MAIN ST', 43.858, -70.103, 43.8581, -70.1031, 'b2', 'b3', 43.859, -70.103, 111.4, 'wrong', 30, '2026-11-03')`);
+      ('me', 'Freeport', 'ml', 'a1', 12, 'MAIN ST', 43.857, -70.103, 43.8571, -70.1031, 'b1', 'b1', 43.857, -70.103, 4.2, 'right', 30, '2026-11-03'),
+      ('me', 'Freeport', 'ml', 'a2', 14, 'MAIN ST', 43.858, -70.103, 43.8581, -70.1031, 'b2', 'b3', 43.859, -70.103, 111.4, 'wrong', 30, '2026-11-03'),
+      ('me', 'Freeport', 'ml_order', 'a1', 12, 'MAIN ST', 43.857, -70.103, 43.8571, -70.1031, 'b1', 'b1', 43.857, -70.103, 4.2, 'right', 30, '2026-11-03'),
+      ('me', 'Freeport', 'ml_order', 'a2', 14, 'MAIN ST', 43.858, -70.103, 43.8581, -70.1031, 'b2', 'b2', 43.858, -70.103, 3.0, 'right', 30, '2026-11-03')`);
   await pool.query(`
     CREATE TABLE address_inference.structures (source_id TEXT, sqmeters DOUBLE PRECISION, geom geometry(MultiPolygon, 4326))`);
   await pool.query(`
@@ -63,11 +65,12 @@ test('GET /admin/address-inference/review returns each address with its true and
     async ({ port }) =>
       withPasscode(async () => {
         const response = await fetch(
-          `http://127.0.0.1:${port}/admin/address-inference/review?passcode=correct-horse&town=freeport`
+          `http://127.0.0.1:${port}/admin/address-inference/review?passcode=correct-horse&town=freeport&method=ml`
         );
         assert.equal(response.status, 200);
         const body = await response.json();
         assert.equal(body.town, 'Freeport');
+        assert.equal(body.method, 'ml');
         assert.deepEqual(body.summary, { right: 1, wrong: 1 });
         assert.deepEqual(body.towns, [{ region: 'me', town: 'Freeport', runDate: '2026-11-03', addresses: 2 }]);
         const wrong = body.addresses.find((a) => a.id === 'a2');
@@ -78,6 +81,22 @@ test('GET /admin/address-inference/review returns each address with its true and
         // Only footprints near the town's addresses.
         assert.deepEqual(body.buildings.features.map((f) => f.properties), [{ id: 'b1', sqmeters: 140 }]);
         assert.equal(body.buildings.features[0].geometry.type, 'MultiPolygon');
+      }),
+    { seedStreets: false, geoOptions: { postgis: true }, geoSeed: seedPredictions }
+  ));
+
+test('GET /admin/address-inference/review defaults to ML + road order and flags changed picks', () =>
+  withTestServer(
+    async ({ port }) =>
+      withPasscode(async () => {
+        const response = await fetch(`http://127.0.0.1:${port}/admin/address-inference/review?passcode=correct-horse`);
+        const body = await response.json();
+        assert.equal(body.method, 'ml_order');
+        assert.deepEqual(body.summary, { right: 2 });
+        const a2 = body.addresses.find((a) => a.id === 'a2');
+        assert.equal(a2.changedFromMl, true);
+        assert.equal(a2.mlStatus, 'wrong');
+        assert.equal(body.addresses.find((a) => a.id === 'a1').changedFromMl, false);
       }),
     { seedStreets: false, geoOptions: { postgis: true }, geoSeed: seedPredictions }
   ));

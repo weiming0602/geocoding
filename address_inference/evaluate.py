@@ -9,6 +9,8 @@ Methods compared on the same scorable addresses:
   M2  rank order along the side of the street
   M3  M2 without likely outbuildings
   ML  LightGBM lambdarank over the candidate buildings (dataset.FEATURES)
+  ML+order  ML's probabilities, assigned one-to-one in increasing number
+            order along the road per street and parity (order.py)
 
 Single-town honesty: the model is cross-validated with folds grouped by
 STREET (GroupKFold), so every ML prediction comes from a model that never
@@ -27,7 +29,7 @@ import pandas as pd
 import psycopg
 from sklearn.model_selection import GroupKFold
 
-from . import dataset
+from . import dataset, order
 from .regions import load_region
 
 N_FOLDS = 5
@@ -39,12 +41,13 @@ MODEL_PARAMS = dict(
 )
 
 
-def cross_validated_picks(candidate_df):
-    """{address_id: source_id} from out-of-fold ranker scores, plus the
+def cross_validated_scores(candidate_df):
+    """candidate_df plus an out-of-fold ranker `score` per row, and the
     per-feature importance (gain) summed over folds."""
     df = candidate_df.sort_values(["address_id", "d_m0"]).reset_index(drop=True)
     X = df[dataset.FEATURES].astype(float)
-    picks, importance = {}, np.zeros(len(dataset.FEATURES))
+    df["score"] = np.nan
+    importance = np.zeros(len(dataset.FEATURES))
     folds = GroupKFold(n_splits=N_FOLDS).split(X, df["label"], groups=df["street"])
     for train_idx, test_idx in folds:
         train = df.iloc[train_idx]
@@ -55,11 +58,20 @@ def cross_validated_picks(candidate_df):
         model.fit(train[dataset.FEATURES].astype(float), train["label"],
                   group=train.groupby("address_id", sort=False).size().to_numpy())
         importance += model.booster_.feature_importance("gain")
+        df.loc[test_idx, "score"] = model.predict(X.iloc[test_idx])
+    return df, pd.Series(importance, index=dataset.FEATURES).sort_values(ascending=False)
 
-        test = df.iloc[test_idx].assign(score=model.predict(X.iloc[test_idx]))
-        best = test.loc[test.groupby("address_id")["score"].idxmax()]
-        picks.update(dict(zip(best["address_id"], best["source_id"])))
-    return picks, pd.Series(importance, index=dataset.FEATURES).sort_values(ascending=False)
+
+def top_picks(scored_df) -> dict:
+    best = scored_df.loc[scored_df.groupby("address_id")["score"].idxmax()]
+    return dict(zip(best["address_id"], best["source_id"]))
+
+
+def cross_validated_picks(candidate_df):
+    """{address_id: source_id} from out-of-fold ranker scores, plus the
+    per-feature importance (gain) summed over folds."""
+    scored, importance = cross_validated_scores(candidate_df)
+    return top_picks(scored), importance
 
 
 def score_method(address_df, candidate_df, picks):
@@ -98,6 +110,7 @@ CREATE_PREDICTIONS_SQL = """
 CREATE TABLE IF NOT EXISTS address_inference.ml_predictions (
     region_id TEXT NOT NULL,
     town TEXT NOT NULL,
+    method TEXT NOT NULL,
     address_id TEXT NOT NULL,
     address_number INTEGER NOT NULL,
     street TEXT NOT NULL,
@@ -113,9 +126,12 @@ CREATE TABLE IF NOT EXISTS address_inference.ml_predictions (
     status TEXT NOT NULL,
     candidates INTEGER NOT NULL,
     run_date DATE NOT NULL,
-    PRIMARY KEY (region_id, town, address_id)
+    PRIMARY KEY (region_id, town, method, address_id)
 )
 """
+
+# Saved methods: the ranker alone, and the ranker + road order (order.py).
+SAVED_METHODS = {"ML": "ml", "ML+order": "ml_order"}
 
 STATUSES = ("right", "wrong", "missed", "no_building")
 
@@ -132,7 +148,7 @@ def prediction_status(true_building, pick, true_in_candidates):
     return "wrong" if true_in_candidates else "missed"
 
 
-def prediction_rows(region_id, town, address_df, candidate_df, picks, run_date):
+def prediction_rows(region_id, town, method, address_df, candidate_df, picks, run_date):
     coords = candidate_df.drop_duplicates("source_id").set_index("source_id")[["lat", "lon"]]
     counts = candidate_df.groupby("address_id").size()
     in_candidates = set(candidate_df.loc[candidate_df["label"] == 1, "address_id"])
@@ -142,7 +158,7 @@ def prediction_rows(region_id, town, address_df, candidate_df, picks, run_date):
         lat, lon = (coords.at[pick, "lat"], coords.at[pick, "lon"]) if pick is not None else (a.m0_lat, a.m0_lon)
         true_building = a.true_building if isinstance(a.true_building, str) else None
         rows.append((
-            region_id, town, a.id, int(a.number), a.street, float(a.true_lat), float(a.true_lon),
+            region_id, town, method, a.id, int(a.number), a.street, float(a.true_lat), float(a.true_lon),
             float(a.m0_lat), float(a.m0_lon), true_building, pick,
             float(lat) if pick is not None else None, float(lon) if pick is not None else None,
             float(dataset.haversine_m(a.true_lat, a.true_lon, lat, lon)),
@@ -155,13 +171,19 @@ def prediction_rows(region_id, town, address_df, candidate_df, picks, run_date):
 def save_predictions(dsn, region_id, town, rows):
     """Replaces this town's rows: one run per town is kept."""
     with psycopg.connect(dsn) as conn:
+        # Derived data: a table from before the `method` column is just rebuilt.
+        has_method = conn.execute(
+            "SELECT 1 FROM information_schema.columns WHERE table_schema = 'address_inference' "
+            "AND table_name = 'ml_predictions' AND column_name = 'method'").fetchone()
+        if not has_method:
+            conn.execute("DROP TABLE IF EXISTS address_inference.ml_predictions")
         conn.execute(CREATE_PREDICTIONS_SQL)
         conn.execute("DELETE FROM address_inference.ml_predictions WHERE region_id = %s AND town = %s",
                      (region_id, town))
         with conn.cursor() as cur:
             cur.executemany(
                 "INSERT INTO address_inference.ml_predictions VALUES "
-                "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 rows,
             )
 
@@ -173,11 +195,15 @@ def evaluate(dsn, region, town, save=False):
     in_candidates = set(candidate_df.loc[candidate_df["label"] == 1, "address_id"])
 
     picks = dataset.baseline_picks(candidate_df)
-    picks["ML"], importance = cross_validated_picks(candidate_df)
+    scored, importance = cross_validated_scores(candidate_df)
+    picks["ML"] = top_picks(scored)
+    picks["ML+order"] = order.order_constrained_picks(
+        address_df, scored, order.load_positions(dsn, region, town), picks["ML"])
 
     table = [summarize("M0 interpolation (today)", score_method(address_df, candidate_df, None))]
     for name, label in (("M1", "M1 snap to building"), ("M2", "M2 rank order"),
-                        ("M3", "M3 rank order, no outbuildings"), ("ML", "ML ranker (LightGBM)")):
+                        ("M3", "M3 rank order, no outbuildings"), ("ML", "ML ranker (LightGBM)"),
+                        ("ML+order", "ML + road order (one-to-one)")):
         table.append(summarize(label, score_method(address_df, candidate_df, picks[name])))
 
     coverage = {
@@ -188,8 +214,10 @@ def evaluate(dsn, region, town, save=False):
         "candidate rows": len(candidate_df),
     }
     if save:
-        save_predictions(dsn, region.id, town,
-                         prediction_rows(region.id, town, address_df, candidate_df, picks["ML"], date.today()))
+        rows = []
+        for name, method in SAVED_METHODS.items():
+            rows += prediction_rows(region.id, town, method, address_df, candidate_df, picks[name], date.today())
+        save_predictions(dsn, region.id, town, rows)
     return pd.DataFrame(table), coverage, importance
 
 

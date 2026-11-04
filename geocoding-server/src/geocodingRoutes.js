@@ -586,7 +586,8 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
         throw new UnauthorizedError('passcode is missing or incorrect');
       }
       const town = typeof req.query.town === 'string' ? req.query.town : null;
-      res.json(await getAddressInferenceReview(db, town));
+      const method = typeof req.query.method === 'string' ? req.query.method : null;
+      res.json(await getAddressInferenceReview(db, town, method));
     } catch (err) {
       if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
       if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });

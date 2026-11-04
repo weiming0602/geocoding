@@ -1,7 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { ApiError, getAddressInferenceReview } from '../../../shared/api/client';
-import type { AddressInferenceReviewResponse, TrainingAddress, TrainingStatus } from '../../../shared/api/types';
+import type {
+  AddressInferenceReviewResponse,
+  TrainingAddress,
+  TrainingMethod,
+  TrainingStatus,
+} from '../../../shared/api/types';
 import AccountTabs, { ADMIN_PASSCODE_STORAGE_KEY } from '../components/AccountTabs';
 import PageHeader from '../components/PageHeader';
 import TrainingDataMap, { BUILDING_COLORS, STATUS_COLORS, describe } from '../components/TrainingDataMap';
@@ -18,6 +23,10 @@ const STATUS_LABELS: Record<TrainingStatus, string> = {
   wrong: 'Wrong building',
   missed: 'True building not a candidate',
   no_building: 'No building at the E911 point',
+};
+const METHOD_LABELS: Record<TrainingMethod, string> = {
+  ml_order: 'ML + road order',
+  ml: 'ML alone',
 };
 const STATUS_ORDER: TrainingStatus[] = ['wrong', 'missed', 'right', 'no_building'];
 const LIST_LIMIT = 200;
@@ -52,6 +61,8 @@ export default function TrainingData() {
   const [passcode, setPasscode] = useState<string | null>(readPasscode);
   const [passcodeInput, setPasscodeInput] = useState('');
   const [town, setTown] = useState<string | null>(null);
+  const [method, setMethod] = useState<TrainingMethod>('ml_order');
+  const [changedOnly, setChangedOnly] = useState(false);
   const [data, setData] = useState<AddressInferenceReviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -61,11 +72,11 @@ export default function TrainingData() {
   const [focusNonce, setFocusNonce] = useState(0);
   const mapBoxRef = useRef<HTMLDivElement>(null);
 
-  const load = useCallback(async (key: string, townName: string | null) => {
+  const load = useCallback(async (key: string, townName: string | null, methodName: TrainingMethod) => {
     setLoading(true);
     setError(null);
     try {
-      setData(await getAddressInferenceReview(key, townName));
+      setData(await getAddressInferenceReview(key, townName, methodName));
       setSelected(null);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -86,8 +97,8 @@ export default function TrainingData() {
   }, []);
 
   useEffect(() => {
-    if (passcode) load(passcode, town);
-  }, [passcode, town, load]);
+    if (passcode) load(passcode, town, method);
+  }, [passcode, town, method, load]);
 
   const unlock = () => {
     const trimmed = passcodeInput.trim();
@@ -113,9 +124,24 @@ export default function TrainingData() {
     const needle = search.trim().toUpperCase();
     return data.addresses
       .filter((a) => visible.has(a.status))
+      .filter((a) => !changedOnly || a.changedFromMl)
       .filter((a) => !needle || `${a.number} ${a.street}`.includes(needle))
       .sort((a, b) => b.errorMeters - a.errorMeters);
-  }, [data, visible, search]);
+  }, [data, visible, search, changedOnly]);
+
+  // The map shows the same addresses as the list's status + changed filters.
+  const mapData = useMemo(
+    () => (data && changedOnly ? { ...data, addresses: data.addresses.filter((a) => a.changedFromMl) } : data),
+    [data, changedOnly]
+  );
+  const changedCounts = useMemo(() => {
+    const changed = (data?.addresses ?? []).filter((a) => a.changedFromMl);
+    return {
+      total: changed.length,
+      fixed: changed.filter((a) => a.status === 'right').length,
+      broke: changed.filter((a) => a.mlStatus === 'right').length,
+    };
+  }, [data]);
 
   const sqmeters = useMemo(
     () => new Map((data?.buildings.features ?? []).map((f) => [f.properties.id, f.properties.sqmeters])),
@@ -131,7 +157,8 @@ export default function TrainingData() {
       <p className="text-muted" style={{ marginBottom: 'var(--space-4)', maxWidth: 760 }}>
         Building-address experiment: every point is a Maine E911 address the ML ranker trained and was tested on
         (cross-validated by street, so each pick comes from a model that never saw that street). The color shows
-        whether it picked the building E911 says is that address. Owner only, not linked for visitors.
+        whether it picked the building E911 says is that address. "ML + road order" keeps one building per number
+        and numbers increasing along the road, per street and side. Owner only, not linked for visitors.
       </p>
 
       {!passcode && (
@@ -183,7 +210,32 @@ export default function TrainingData() {
               {total.toLocaleString()} addresses · run {data.runDate}
               {loading ? ' · refreshing…' : ''}
             </span>
+            <div style={{ display: 'flex', gap: 'var(--space-2)' }} role="group" aria-label="Method">
+              {(data.methods ?? ['ml_order', 'ml']).map((m) => (
+                <button
+                  key={m}
+                  className={`btn ${method === m ? 'btn-primary' : 'btn-secondary'}`}
+                  onClick={() => {
+                    setMethod(m);
+                    if (m === 'ml') setChangedOnly(false);
+                  }}
+                  disabled={loading}
+                >
+                  {METHOD_LABELS[m]}
+                </button>
+              ))}
+            </div>
           </div>
+          {data.method === 'ml_order' && (
+            <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 'var(--space-3)' }}>
+              <input type="checkbox" checked={changedOnly} onChange={(e) => setChangedOnly(e.target.checked)} />
+              <span>
+                Only addresses where road order changed the pick ({changedCounts.total.toLocaleString()}:{' '}
+                <span style={{ color: STATUS_COLORS.right }}>{changedCounts.fixed.toLocaleString()} now right</span>,{' '}
+                <span style={{ color: STATUS_COLORS.wrong }}>{changedCounts.broke.toLocaleString()} were right before</span>)
+              </span>
+            </label>
+          )}
 
           <div
             style={{
@@ -244,7 +296,7 @@ export default function TrainingData() {
 
           <div ref={mapBoxRef} style={{ scrollMarginTop: 'var(--space-4)' }}>
             <TrainingDataMap
-              data={data}
+              data={mapData ?? data}
               visible={visible}
               selected={selected}
               focusNonce={focusNonce}
@@ -255,6 +307,13 @@ export default function TrainingData() {
           {selected && (
             <div className="card elev-sm" style={{ marginTop: 'var(--space-3)' }}>
               <div>{describe(selected)}</div>
+              {data.method === 'ml_order' && (
+                <div style={{ fontSize: 13, marginTop: 4 }}>
+                  {selected.changedFromMl
+                    ? `Road order changed the pick. ML alone: ${STATUS_LABELS[selected.mlStatus].toLowerCase()}.`
+                    : 'Same pick as ML alone.'}
+                </div>
+              )}
               <div className="text-muted" style={{ fontSize: 13, marginTop: 4 }}>
                 E911 building: {selected.trueBuilding ?? 'none'}
                 {selected.trueBuilding && sqmeters.get(selected.trueBuilding) != null
@@ -300,6 +359,7 @@ export default function TrainingData() {
                   <th>Address</th>
                   <th>Result</th>
                   <th>Off by</th>
+                  {data.method === 'ml_order' && <th>ML alone</th>}
                   <th>Candidates</th>
                 </tr>
               </thead>
@@ -325,12 +385,15 @@ export default function TrainingData() {
                       {STATUS_LABELS[a.status]}
                     </td>
                     <td style={{ fontVariantNumeric: 'tabular-nums' }}>{a.errorMeters.toLocaleString()} m</td>
+                    {data.method === 'ml_order' && (
+                      <td className="text-muted">{a.changedFromMl ? STATUS_LABELS[a.mlStatus] : 'same pick'}</td>
+                    )}
                     <td style={{ fontVariantNumeric: 'tabular-nums' }}>{a.candidates}</td>
                   </tr>
                 ))}
                 {listed.length === 0 && (
                   <tr>
-                    <td colSpan={4} className="text-muted">
+                    <td colSpan={5} className="text-muted">
                       Nothing matches -- tick a category above or clear the filter.
                     </td>
                   </tr>

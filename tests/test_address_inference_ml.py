@@ -136,7 +136,35 @@ def test_prediction_status_separates_wrong_picks_from_unreachable_ones():
 def test_prediction_rows_record_the_pick_and_its_error():
     from datetime import date
     address_df, cand = build_one(51, "h2")
-    (row,) = evaluate.prediction_rows("me", "Freeport", address_df, cand, {"e1": "h1"}, date(2026, 11, 3))
-    assert row[2:5] == ("e1", 51, "MAIN STREET")
-    assert row[9:11] == ("h2", "h1") and row[14] == "wrong" and row[15] == 5
-    assert row[13] == pytest.approx(240, abs=5)  # h1 sits ~0.003 deg west of the E911 point
+    (row,) = evaluate.prediction_rows("me", "Freeport", "ml", address_df, cand, {"e1": "h1"}, date(2026, 11, 3))
+    assert row[2:6] == ("ml", "e1", 51, "MAIN STREET")
+    assert row[10:12] == ("h2", "h1") and row[15] == "wrong" and row[16] == 5
+    assert row[14] == pytest.approx(240, abs=5)  # h1 sits ~0.003 deg west of the E911 point
+
+
+# --- road order (order.py) ------------------------------------------------------
+
+
+def test_monotone_assign_keeps_numbers_in_road_order_and_one_per_building():
+    from address_inference import order
+    # Alone, both numbers would take building 1; in order, 10 -> 0 and 20 -> 1.
+    P = np.array([[0.45, 0.55, 0.0],
+                  [0.0, 0.9, 0.1]])
+    total, match = order.monotone_assign(P)
+    assert match == {0: 0, 1: 1} and total == pytest.approx(1.35)
+
+
+def test_order_constrained_picks_fixes_a_crossed_pair_and_picks_the_direction():
+    from address_inference import order
+    address_df = pd.DataFrame([
+        {"id": "a10", "number": 10, "street": "MAIN", "scorable": True},
+        {"id": "a20", "number": 20, "street": "MAIN", "scorable": True},
+    ])
+    # Road runs b3 -> b2 -> b1 (numbers increase toward b1).
+    positions = {("MAIN", "b1"): 300.0, ("MAIN", "b2"): 200.0, ("MAIN", "b3"): 100.0}
+    scored = pd.DataFrame([
+        ("a10", "b2", 2.0), ("a10", "b3", 1.8), ("a10", "b1", -5.0),
+        ("a20", "b2", 2.0), ("a20", "b1", 1.0), ("a20", "b3", -5.0),
+    ], columns=["address_id", "source_id", "score"])
+    picks = order.order_constrained_picks(address_df, scored, positions, {"a10": "b2", "a20": "b2"})
+    assert picks in ({"a10": "b3", "a20": "b2"}, {"a10": "b2", "a20": "b1"})

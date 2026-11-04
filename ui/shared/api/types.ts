@@ -545,7 +545,15 @@ export type TrainingAddress = {
   errorMeters: number;
   status: TrainingStatus;
   candidates: number;
+  // What the ranker alone did -- differs from status/pickedBuilding only
+  // for method 'ml_order', where road order may have changed the pick.
+  mlStatus: TrainingStatus;
+  changedFromMl: boolean;
 };
+
+// 'ml' = the ranker alone; 'ml_order' = ranker + road order, one building
+// per number, numbers increasing along the road (address_inference/order.py).
+export type TrainingMethod = 'ml' | 'ml_order';
 
 export type TrainingTown = { region: string; town: string; runDate: string; addresses: number };
 
@@ -554,6 +562,8 @@ export type AddressInferenceReviewResponse = {
   town: string;
   region: string;
   runDate: string;
+  method: TrainingMethod;
+  methods: TrainingMethod[];
   summary: Partial<Record<TrainingStatus, number>>;
   addresses: TrainingAddress[];
   buildings: {
