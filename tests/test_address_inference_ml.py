@@ -230,3 +230,26 @@ def test_main_road_first_claims_a_confident_building_from_the_side_street():
     # Not confident enough to claim: the side street keeps its own choice.
     timid = order.order_constrained_picks(address_df, scored, positions, fallback, street_order=prio, claim_min_p=1.01)
     assert timid["side4"] == "corner"
+
+
+# --- dead ends -------------------------------------------------------------------
+
+
+def test_beyond_end_is_ahead_of_the_road_not_beside_it():
+    pts = [(-70.105, 43.85), (-70.095, 43.85)]  # west -> east, ends at -70.095
+    assert dataset.beyond_end(pts, 1, 43.8501, -70.0940)       # ~80 m past the end, ~11 m off-line
+    assert not dataset.beyond_end(pts, 1, 43.8510, -70.0948)   # beside the last stretch (behind the end)
+    assert not dataset.beyond_end(pts, 1, 43.8520, -70.0945)   # past the end but mostly sideways (>45 deg)
+    assert dataset.beyond_end(pts, 0, 43.8499, -70.1060)       # past the START end too
+    assert not dataset.beyond_end(pts, 0.5, 43.8501, -70.0940)  # not at an end at all
+
+
+def test_a_house_past_the_dead_end_counts_for_either_side():
+    # h_end sits ~80 m past the east end, digitized slightly to the RIGHT
+    # (south) -- but the left (odd) side's number may still take it.
+    rows = candidate_rows() + [("MAIN STREET", "h_end", "1", "R", 1.0, True, 80, 150, "Residential",
+                                "Single Family Dwelling", None, 43.84995, -70.0940, "1", 80)]
+    _, cand = dataset.build([("e1", 99, "MAIN STREET", "exact", 43.84995, -70.0940, "h_end")], [SEGMENT], rows)
+    row = cand.set_index("source_id")
+    assert row.at["h_end", "beyond_end"] and row.at["h_end", "same_side"]
+    assert not row.at["s1", "beyond_end"] and not row.at["s1", "same_side"]

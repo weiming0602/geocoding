@@ -53,7 +53,14 @@ WHERE a.town = %(town)s AND a.state_abbr = %(state)s AND a.address_number > 0
 
 SEGMENTS_SQL = """
 SELECT sms.label_street, st.tlid, st.lfromadd, st.ltoadd, st.rfromadd, st.rtoadd, st.geometry,
-       ST_Length(st.geom::geography)
+       ST_Length(st.geom::geography),
+       -- Dead ends: a segment end no other road touches (within 2 m).
+       NOT EXISTS (SELECT 1 FROM streets o WHERE o.tlid <> st.tlid
+                     AND o.geom && ST_Expand(ST_StartPoint(st.geom), 0.0001)
+                     AND ST_DWithin(o.geom::geography, ST_StartPoint(st.geom)::geography, 2)) AS dead_start,
+       NOT EXISTS (SELECT 1 FROM streets o WHERE o.tlid <> st.tlid
+                     AND o.geom && ST_Expand(ST_EndPoint(st.geom), 0.0001)
+                     AND ST_DWithin(o.geom::geography, ST_EndPoint(st.geom)::geography, 2)) AS dead_end
 FROM address_inference.street_match_segments sms
 JOIN streets st ON st.tlid = sms.tlid
 WHERE sms.region_id = %(region)s AND sms.town = %(town)s
@@ -74,6 +81,32 @@ JOIN address_inference.building_segments nearest
  AND nearest.source_id = bs.source_id AND nearest.rank = 1
 WHERE sms.region_id = %(region)s AND sms.town = %(town)s
 """
+
+
+# A building past the end of its street (every attachment to the street at
+# a segment end) within this angle of the road's continuing direction is
+# "beyond the end": its left/right side is a coin flip decided by the last
+# few meters of the line, so it counts for either side. Dead ends are
+# where E911 and TIGER lines often stop short of the last house
+# (Arrowhead Ridge Road's 9 is ~100 m past E911's line).
+BEYOND_END_MAX_ANGLE_DEG = 45
+
+
+def beyond_end(points, t, lat, lon) -> bool:
+    """Is (lat, lon) ahead of the segment's end at t (0 or 1), inside
+    BEYOND_END_MAX_ANGLE_DEG of the line's direction there?"""
+    if t not in (0, 1) or len(points) < 2:
+        return False
+    (ax, ay), (bx, by) = (points[-2], points[-1]) if t == 1 else (points[1], points[0])
+    kx = np.cos(np.radians(by))  # degrees of longitude are shorter by cos(lat)
+    dx, dy = (bx - ax) * kx, by - ay
+    vx, vy = (lon - bx) * kx, lat - by
+    norm = np.hypot(dx, dy)
+    if norm == 0:
+        return False
+    forward = (vx * dx + vy * dy) / norm
+    lateral = abs(vx * dy - vy * dx) / norm
+    return forward > 0 and lateral <= forward * np.tan(np.radians(BEYOND_END_MAX_ANGLE_DEG))
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -180,7 +213,8 @@ def build(addresses, segments, candidates, ranges="tiger"):
     numbers on that street side (min..max of `addresses`) -- TIGER's
     numbers, often far wider than the real ones (Arrowhead Ridge Road:
     1-99 vs 1-9), are never used for scale."""
-    seg_keys = ("label_street", "tlid", "lfromadd", "ltoadd", "rfromadd", "rtoadd", "geometry", "length_m")
+    seg_keys = ("label_street", "tlid", "lfromadd", "ltoadd", "rfromadd", "rtoadd", "geometry", "length_m",
+                "dead_start", "dead_end")
     segs_by_street = defaultdict(list)
     for row in segments:
         seg = dict(zip(seg_keys, row))
@@ -230,6 +264,9 @@ def build(addresses, segments, candidates, ranges="tiger"):
 def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_cands):
     range_start = int(cover_seg["lfromadd" if side == "L" else "rfromadd"])
     street_tlids = {s["tlid"] for s in street_segs}
+    points_by_tlid = {s["tlid"]: s["points"] for s in street_segs}
+    # Which ends are dead ends (unknown -- e.g. rows without the flags -- counts as one).
+    dead_by_tlid = {s["tlid"]: (s.get("dead_start", True), s.get("dead_end", True)) for s in street_segs}
     by_building = defaultdict(list)
     for cand in street_cands:
         by_building[cand["source_id"]].append(cand)
@@ -251,6 +288,12 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
     for source_id, cands in by_building.items():
         best = min(cands, key=lambda c: c["dist_m"])  # this building's nearest segment OF THIS STREET
         on_cover = next((c for c in cands if c["tlid"] == cover_seg["tlid"]), None)
+        # Past the street's end (no attachment to it alongside a segment):
+        # either side can hold it.
+        dead_start, dead_end = dead_by_tlid.get(best["tlid"], (False, False))
+        at_dead_end = (best["t"] == 0 and dead_start) or (best["t"] == 1 and dead_end)
+        past_end = all(c["at_end"] for c in cands) and at_dead_end and beyond_end(
+            points_by_tlid.get(best["tlid"], []), best["t"], best["lat"], best["lon"])
         d_m0 = float(haversine_m(addr["m0_lat"], addr["m0_lon"], best["lat"], best["lon"]))
         rows.append({
             "address_id": addr["id"],
@@ -261,7 +304,8 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
             # --- features ---
             "d_m0": d_m0,
             "on_cover_segment": on_cover is not None,
-            "same_side": (on_cover["side"] == side) if on_cover else (best["side"] == side),
+            "same_side": past_end or ((on_cover["side"] == side) if on_cover else (best["side"] == side)),
+            "beyond_end": past_end,
             "dt": abs(on_cover["t"] - fraction) * cover_seg["length_m"] if on_cover else np.nan,
             # Raw "how far along" vs "how many numbers along" from the range's
             # start: lets the model learn the local numbering density instead
@@ -304,7 +348,7 @@ FEATURES = [
     "d_m0", "d_m0_rank", "on_cover_segment", "same_side", "dt", "rank_gap", "buildings_on_side",
     "implied_addresses", "pos_m", "numbers_from_start", "meters_per_number", "dist_road", "at_end", "nearest_road_is_street", "dist_vs_nearest_road",
     "sqmeters", "residential", "single_family", "outbldg_flag", "bigger_in_front", "segment_length_m",
-    "match_exact",
+    "match_exact", "beyond_end",
 ]
 
 
