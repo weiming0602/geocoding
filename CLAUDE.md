@@ -50,7 +50,14 @@ read-write).
   interpolation and geometry baselines: `python -m
   address_inference.evaluate "dbname=geocoding" me --town Freeport` (needs
   `pip install -r address_inference/requirements.txt`; Freeport: within
-  50 m 24.5% -> 46.6%). Regions are TOML files in
+  50 m 24.5% -> 46.6%). Add `--save` to keep each training address's ML
+  pick in `address_inference.ml_predictions` (one run per town), which the
+  owner-only Account > Training data tab (`ui/desktop`'s
+  `TrainingData.tsx`, `GET /admin/address-inference/review`, same
+  `ADMIN_PASSCODE` gate as `/owner`) maps: right/wrong/missed picks with
+  the E911 building vs. the picked one. The tab shows only in a browser
+  that has unlocked `/owner`; the endpoint 404s where the experiment never
+  ran (the droplets). Regions are TOML files in
   `address_inference/regions/`.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see

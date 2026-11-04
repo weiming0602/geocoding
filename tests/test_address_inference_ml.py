@@ -120,3 +120,23 @@ def test_cross_validation_learns_a_learnable_rule():
         (r for r in rows if r["address_id"] == f"a{a}"), key=lambda r: r["rank_gap"])["source_id"] for a in range(400)])
     assert correct > 0.8  # chance is 1 in 6
     assert importance.index[0] == "rank_gap"
+
+
+# --- saved predictions -------------------------------------------------------
+
+
+def test_prediction_status_separates_wrong_picks_from_unreachable_ones():
+    assert evaluate.prediction_status("h2", "h2", True) == "right"
+    assert evaluate.prediction_status("h2", "h1", True) == "wrong"
+    assert evaluate.prediction_status("h2", "h1", False) == "missed"
+    assert evaluate.prediction_status("h2", None, False) == "missed"
+    assert evaluate.prediction_status(None, "h1", False) == "no_building"
+
+
+def test_prediction_rows_record_the_pick_and_its_error():
+    from datetime import date
+    address_df, cand = build_one(51, "h2")
+    (row,) = evaluate.prediction_rows("me", "Freeport", address_df, cand, {"e1": "h1"}, date(2026, 11, 3))
+    assert row[2:5] == ("e1", 51, "MAIN STREET")
+    assert row[9:11] == ("h2", "h1") and row[14] == "wrong" and row[15] == 5
+    assert row[13] == pytest.approx(240, abs=5)  # h1 sits ~0.003 deg west of the E911 point

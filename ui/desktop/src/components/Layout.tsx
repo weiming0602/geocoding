@@ -20,7 +20,7 @@ type NavEntry = { to: string; label: string; icon: IconName; end?: boolean; matc
 // TABS lists by hand -- these are short and change rarely enough that a
 // shared import would be more indirection than it's worth.
 const BATCH_ROUTES = ['/batch', '/import-addresses', '/find-places'];
-const ACCOUNT_ROUTES = ['/plan-quota', '/pricing', '/progress', '/api-docs', '/help'];
+const ACCOUNT_ROUTES = ['/plan-quota', '/pricing', '/progress', '/api-docs', '/help', '/training-data'];
 const ROAD_ALERTS_ROUTES = ['/road-alerts', '/road-alerts-home-board', '/road-alert-test', '/road-alerts-alarm-test', '/road-alerts-sandbox'];
 
 // Find places and Import addresses both exist to feed Batch geocode an

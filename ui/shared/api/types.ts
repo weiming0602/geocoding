@@ -523,3 +523,45 @@ export type Transaction = {
 export type TransactionsResponse = {
   transactions: Transaction[];
 };
+
+// GET /admin/address-inference/review -- owner-only map of the building-
+// address ML experiment's training data (geocoding-server/src/
+// addressInferenceReview.js). One row per scorable E911 training address.
+// status: right = the ranker picked the E911 building; wrong = it picked
+// another although the true one was a candidate; missed = the true
+// building was never a candidate; no_building = no footprint within 30 m
+// of the E911 point (no label).
+export type TrainingStatus = 'right' | 'wrong' | 'missed' | 'no_building';
+
+export type TrainingAddress = {
+  id: string;
+  number: number;
+  street: string;
+  e911: { latitude: number; longitude: number };
+  interpolated: { latitude: number; longitude: number };
+  trueBuilding: string | null;
+  pickedBuilding: string | null;
+  picked: { latitude: number; longitude: number } | null;
+  errorMeters: number;
+  status: TrainingStatus;
+  candidates: number;
+};
+
+export type TrainingTown = { region: string; town: string; runDate: string; addresses: number };
+
+export type AddressInferenceReviewResponse = {
+  towns: TrainingTown[];
+  town: string;
+  region: string;
+  runDate: string;
+  summary: Partial<Record<TrainingStatus, number>>;
+  addresses: TrainingAddress[];
+  buildings: {
+    type: 'FeatureCollection';
+    features: {
+      type: 'Feature';
+      geometry: { type: 'MultiPolygon' | 'Polygon'; coordinates: unknown };
+      properties: { id: string; sqmeters: number | null };
+    }[];
+  };
+};

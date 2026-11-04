@@ -10,6 +10,7 @@ const { submitFeedback } = require('./feedback');
 const { fulfillPurchase, listTransactions, markTransactionsNotified } = require('./transactions');
 const { reserveQuota, releaseQuota } = require('./quota');
 const { checkRateLimit } = require('./geocodeRateLimit');
+const { getAddressInferenceReview } = require('./addressInferenceReview');
 const {
   sendResultsEmail,
   sendServiceKeyEmail,
@@ -566,6 +567,29 @@ function registerGeocodingRoutes(app, { db, usersDbPromise }) {
       });
     } catch (err) {
       if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+      console.error(err);
+      res.status(500).json({ error: 'internal error' });
+    }
+  });
+
+  // Owner-only map of the building-address ML experiment's training data
+  // (ui/desktop's Account > Training data tab): same ADMIN_PASSCODE gate
+  // as /admin/transactions above. See addressInferenceReview.js.
+  app.get('/admin/address-inference/review', async (req, res) => {
+    const passcode = req.query && req.query.passcode;
+    try {
+      if (
+        typeof passcode !== 'string' ||
+        !process.env.ADMIN_PASSCODE ||
+        passcode !== process.env.ADMIN_PASSCODE
+      ) {
+        throw new UnauthorizedError('passcode is missing or incorrect');
+      }
+      const town = typeof req.query.town === 'string' ? req.query.town : null;
+      res.json(await getAddressInferenceReview(db, town));
+    } catch (err) {
+      if (err instanceof UnauthorizedError) return res.status(401).json({ error: err.message });
+      if (err instanceof NotFoundError) return res.status(404).json({ error: err.message });
       console.error(err);
       res.status(500).json({ error: 'internal error' });
     }

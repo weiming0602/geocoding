@@ -26,6 +26,7 @@ import type {
   TestWeightedPoint,
   TestWeightedPointsResponse,
   TransactionsResponse,
+  AddressInferenceReviewResponse,
   CheckoutSessionResponse,
   PurchaseResult,
   WeightedPointPingResponse,
@@ -584,6 +585,16 @@ export function getTransactions(
 ): Promise<TransactionsResponse> {
   const qs = new URLSearchParams({ passcode });
   return getJson<TransactionsResponse>(baseUrl, `/admin/transactions?${qs.toString()}`);
+}
+
+export function getAddressInferenceReview(
+  passcode: string,
+  town: string | null = null,
+  baseUrl = DEFAULT_API_BASE_URL
+): Promise<AddressInferenceReviewResponse> {
+  const qs = new URLSearchParams({ passcode });
+  if (town) qs.set('town', town);
+  return getJson<AddressInferenceReviewResponse>(baseUrl, `/admin/address-inference/review?${qs.toString()}`);
 }
 
 // Step 1 of a purchase: the server prices `addressCount` itself and

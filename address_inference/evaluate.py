@@ -24,6 +24,7 @@ from datetime import date
 import lightgbm as lgb
 import numpy as np
 import pandas as pd
+import psycopg
 from sklearn.model_selection import GroupKFold
 
 from . import dataset
@@ -90,7 +91,82 @@ def summarize(name, scored):
     }
 
 
-def evaluate(dsn, region, town):
+# One row per scorable training address: the E911 point, its true building
+# (label), and what the cross-validated ranker picked -- what the owner
+# dashboard's "Training data" tab maps (GET /admin/address-inference/review).
+CREATE_PREDICTIONS_SQL = """
+CREATE TABLE IF NOT EXISTS address_inference.ml_predictions (
+    region_id TEXT NOT NULL,
+    town TEXT NOT NULL,
+    address_id TEXT NOT NULL,
+    address_number INTEGER NOT NULL,
+    street TEXT NOT NULL,
+    e911_lat DOUBLE PRECISION NOT NULL,
+    e911_lon DOUBLE PRECISION NOT NULL,
+    m0_lat DOUBLE PRECISION NOT NULL,
+    m0_lon DOUBLE PRECISION NOT NULL,
+    true_building TEXT,
+    picked_building TEXT,
+    picked_lat DOUBLE PRECISION,
+    picked_lon DOUBLE PRECISION,
+    error_m DOUBLE PRECISION NOT NULL,
+    status TEXT NOT NULL,
+    candidates INTEGER NOT NULL,
+    run_date DATE NOT NULL,
+    PRIMARY KEY (region_id, town, address_id)
+)
+"""
+
+STATUSES = ("right", "wrong", "missed", "no_building")
+
+
+def prediction_status(true_building, pick, true_in_candidates):
+    """right: picked the E911 building. wrong: picked another building
+    although the true one was a candidate. missed: the true building was
+    never a candidate (no ranker could pick it). no_building: no footprint
+    within TRUE_BUILDING_RADIUS_M of the E911 point, so there's no label."""
+    if not isinstance(true_building, str):
+        return "no_building"
+    if pick == true_building:
+        return "right"
+    return "wrong" if true_in_candidates else "missed"
+
+
+def prediction_rows(region_id, town, address_df, candidate_df, picks, run_date):
+    coords = candidate_df.drop_duplicates("source_id").set_index("source_id")[["lat", "lon"]]
+    counts = candidate_df.groupby("address_id").size()
+    in_candidates = set(candidate_df.loc[candidate_df["label"] == 1, "address_id"])
+    rows = []
+    for a in address_df[address_df["scorable"]].itertuples():
+        pick = picks.get(a.id)
+        lat, lon = (coords.at[pick, "lat"], coords.at[pick, "lon"]) if pick is not None else (a.m0_lat, a.m0_lon)
+        true_building = a.true_building if isinstance(a.true_building, str) else None
+        rows.append((
+            region_id, town, a.id, int(a.number), a.street, float(a.true_lat), float(a.true_lon),
+            float(a.m0_lat), float(a.m0_lon), true_building, pick,
+            float(lat) if pick is not None else None, float(lon) if pick is not None else None,
+            float(dataset.haversine_m(a.true_lat, a.true_lon, lat, lon)),
+            prediction_status(true_building, pick, a.id in in_candidates),
+            int(counts.get(a.id, 0)), run_date,
+        ))
+    return rows
+
+
+def save_predictions(dsn, region_id, town, rows):
+    """Replaces this town's rows: one run per town is kept."""
+    with psycopg.connect(dsn) as conn:
+        conn.execute(CREATE_PREDICTIONS_SQL)
+        conn.execute("DELETE FROM address_inference.ml_predictions WHERE region_id = %s AND town = %s",
+                     (region_id, town))
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO address_inference.ml_predictions VALUES "
+                "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                rows,
+            )
+
+
+def evaluate(dsn, region, town, save=False):
     address_df, candidate_df = dataset.build(*dataset.load(dsn, region, town))
     scorable = address_df[address_df["scorable"]]
     with_truth = scorable["true_building"].notna()
@@ -111,6 +187,9 @@ def evaluate(dsn, region, town):
         "  true building among the candidates (ceiling for right-building %)": len(in_candidates),
         "candidate rows": len(candidate_df),
     }
+    if save:
+        save_predictions(dsn, region.id, town,
+                         prediction_rows(region.id, town, address_df, candidate_df, picks["ML"], date.today()))
     return pd.DataFrame(table), coverage, importance
 
 
@@ -136,8 +215,11 @@ def main():
     parser.add_argument("dsn")
     parser.add_argument("region")
     parser.add_argument("--town", required=True)
+    parser.add_argument("--save", action="store_true",
+                        help="keep each address's ML pick in address_inference.ml_predictions "
+                             "(mapped by the owner dashboard's Training data tab)")
     args = parser.parse_args()
-    table, coverage, importance = evaluate(args.dsn, load_region(args.region), args.town)
+    table, coverage, importance = evaluate(args.dsn, load_region(args.region), args.town, save=args.save)
     print(report_markdown(args.town, table, coverage, importance))
 
 
