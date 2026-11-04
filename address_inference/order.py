@@ -86,6 +86,7 @@ def probabilities(scored_df) -> pd.Series:
 # building's place among the side's buildings" next to the ranker's
 # probability (see order_constrained_picks).
 RANK_WEIGHT = 0.0
+MATCH_BONUS = 0.3
 
 
 def order_constrained_picks(address_df, scored_df, positions, fallback,
@@ -130,7 +131,10 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         for direction in (1, -1):
             order = sorted(buildings, key=lambda b: direction * positions[(street, b)])
             P = np.array([[np.mean(prob[(n, b)]) if (n, b) in prob else np.nan for b in order] for n in numbers])
-            P = np.where(np.isnan(P), 0.0, P + rank_weight * rank_fit)
+            # MATCH_BONUS: placing a number always beats leaving it out, so
+            # every number gets a building in road order when the side has
+            # enough; a non-candidate pair is never allowed.
+            P = np.where(np.isnan(P), -1e9, P + rank_weight * rank_fit + MATCH_BONUS)
             total, match = monotone_assign(P)
             if best is None or total > best[0]:
                 best = (total, {numbers[i]: order[j] for i, j in match.items()})
