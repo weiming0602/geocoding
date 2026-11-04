@@ -51,8 +51,8 @@ read-write).
   address_inference.evaluate "dbname=geocoding" me --town Freeport` (needs
   `pip install -r address_inference/requirements.txt`; Freeport: within
   50 m 24.5% -> 46.6%; `address_inference/order.py` then assigns each
-  street side's numbers one-to-one in increasing order along the road, 48.5%
-  within 50 m, 85.6% within 150 m). Add `--save` to keep each training
+  street side's numbers one-to-one in increasing order along the road, same side
+  only, 49.0% within 50 m, 85.7% within 150 m). Add `--save` to keep each training
   address's pick (methods `ml` and `ml_order`) in
   `address_inference.ml_predictions` (one run per town), which the
   owner-only Account > Training data tab (`ui/desktop`'s

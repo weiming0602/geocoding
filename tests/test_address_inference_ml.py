@@ -163,8 +163,10 @@ def test_order_constrained_picks_fixes_a_crossed_pair_and_picks_the_direction():
     # Road runs b3 -> b2 -> b1 (numbers increase toward b1).
     positions = {("MAIN", "b1"): 300.0, ("MAIN", "b2"): 200.0, ("MAIN", "b3"): 100.0}
     scored = pd.DataFrame([
-        ("a10", "b2", 2.0), ("a10", "b3", 1.8), ("a10", "b1", -5.0),
-        ("a20", "b2", 2.0), ("a20", "b1", 1.0), ("a20", "b3", -5.0),
-    ], columns=["address_id", "source_id", "score"])
+        ("a10", "b2", 2.0, True), ("a10", "b3", 1.8, True), ("a10", "b1", -5.0, True),
+        ("a20", "b2", 2.0, True), ("a20", "b1", 1.0, True), ("a20", "b3", -5.0, True),
+        ("a20", "b9", 9.0, False),  # across the road: never taken
+    ], columns=["address_id", "source_id", "score", "same_side"])
+    positions[("MAIN", "b9")] = 250.0
     picks = order.order_constrained_picks(address_df, scored, positions, {"a10": "b2", "a20": "b2"})
     assert picks in ({"a10": "b3", "a20": "b2"}, {"a10": "b2", "a20": "b1"})

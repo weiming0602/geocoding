@@ -82,11 +82,29 @@ def probabilities(scored_df) -> pd.Series:
     return e / e.groupby(scored_df["address_id"]).transform("sum")
 
 
-def order_constrained_picks(address_df, scored_df, positions, fallback) -> dict:
+# Weight of "the number's place among the side's numbers matches the
+# building's place among the side's buildings" next to the ranker's
+# probability (see order_constrained_picks).
+RANK_WEIGHT = 0.0
+
+
+def order_constrained_picks(address_df, scored_df, positions, fallback,
+                            rank_weight=RANK_WEIGHT, same_side_only=True) -> dict:
     """{address_id: source_id}. `fallback` (the ranker's own picks) covers
-    addresses the ordering step leaves unmatched or can't place."""
+    addresses the ordering step leaves unmatched or can't place.
+
+    same_side_only: a number only takes a building on the side whose TIGER
+    range holds its parity (the candidate's same_side feature).
+    rank_weight: TIGER ranges often run far past the real numbers (Freeport's
+    Arrowhead Ridge Road: range 1-99, real numbers 1-10 over the whole
+    road), which drags every interpolation-based probability toward the
+    start of the street. Knowing the side's actual numbers, the k-th of n
+    numbers should sit about k/n of the way through the side's buildings
+    in road order -- this adds that agreement to each pair's score."""
     picks = dict(fallback)
     scored = scored_df.assign(p=probabilities(scored_df))
+    if same_side_only:
+        scored = scored[scored["same_side"].astype(bool)]
     addr = address_df[address_df["scorable"]].assign(parity=lambda d: d["number"] % 2)
     number_of = dict(zip(addr["id"], addr["number"]))
     by_address = defaultdict(list)
@@ -104,10 +122,15 @@ def order_constrained_picks(address_df, scored_df, positions, fallback) -> dict:
         if len(buildings) < 2:
             continue
         numbers = sorted(group["number"].unique())
+        k, m = len(numbers), len(buildings)
+        number_frac = np.arange(k) / (k - 1) if k > 1 else np.array([0.5])
+        building_frac = np.arange(m) / (m - 1)
+        rank_fit = 1 - np.abs(number_frac[:, None] - building_frac[None, :])
         best = None
         for direction in (1, -1):
             order = sorted(buildings, key=lambda b: direction * positions[(street, b)])
-            P = np.array([[np.mean(prob[(n, b)]) if (n, b) in prob else 0.0 for b in order] for n in numbers])
+            P = np.array([[np.mean(prob[(n, b)]) if (n, b) in prob else np.nan for b in order] for n in numbers])
+            P = np.where(np.isnan(P), 0.0, P + rank_weight * rank_fit)
             total, match = monotone_assign(P)
             if best is None or total > best[0]:
                 best = (total, {numbers[i]: order[j] for i, j in match.items()})
