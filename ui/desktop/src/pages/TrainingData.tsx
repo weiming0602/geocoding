@@ -27,6 +27,8 @@ const STATUS_LABELS: Record<TrainingStatus, string> = {
 const METHOD_LABELS: Record<TrainingMethod, string> = {
   ml_order: 'ML + road order',
   ml: 'ML alone',
+  ml_order_e911roads: 'E911 roads: ML + road order',
+  ml_e911roads: 'E911 roads: ML alone',
   ml_order_auto: 'Auto list ranges: ML + road order',
   ml_auto: 'Auto list ranges: ML alone',
   ml_order_list: 'List ranges: ML + road order',
@@ -37,6 +39,8 @@ const METHOD_LABELS: Record<TrainingMethod, string> = {
 const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   ml_order: 'ml',
   ml: 'ml',
+  ml_order_e911roads: 'ml_e911roads',
+  ml_e911roads: 'ml_e911roads',
   ml_order_auto: 'ml_auto',
   ml_auto: 'ml_auto',
   ml_order_list: 'ml_list',
@@ -187,7 +191,8 @@ export default function TrainingData() {
         TIGER's house-number ranges replaced by the real E911 numbers' range on each segment side (what a
         correctly-numbered road file would give). "List ranges" uses only the address list's own min..max per
         street side, never TIGER's numbers; "Auto" does that only where TIGER's range looks like a placeholder
-        for sequentially-numbered houses. Owner only, not linked for visitors.
+        for sequentially-numbered houses. "E911 roads" uses Maine's E911 road centerlines instead of TIGER (restricted
+        source, internal verification only). Owner only, not linked for visitors.
       </p>
 
       {!passcode && (

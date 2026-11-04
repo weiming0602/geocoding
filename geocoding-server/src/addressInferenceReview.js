@@ -20,15 +20,18 @@ const UNDEFINED_TABLE = '42P01';
 // *_list / *_auto: evaluate --ranges list|auto (the address list's own
 // min..max per street side instead of TIGER's range; auto only where
 // TIGER's range looks like a placeholder for sequential numbers).
+// *_e911roads: Maine E911 road centerlines instead of TIGER (a RESTRICTED
+// source -- loaded by the owner for internal verification only; this
+// owner-only page is the only place it shows).
 const METHODS = [
   'ml_order', 'ml',
+  'ml_order_e911roads', 'ml_e911roads',
   'ml_order_auto', 'ml_auto',
   'ml_order_list', 'ml_list',
   'ml_order_ranges', 'ml_ranges',
 ];
 // What "changed by road order" compares each method against.
 const BASE_METHOD = Object.fromEntries(METHODS.map((m) => [m, m.replace('ml_order', 'ml')]));
-BASE_METHOD.ml_order = 'ml';
 
 async function listReviewTowns(db) {
   const { rows } = await db.query(
