@@ -52,7 +52,10 @@ read-write).
   `pip install -r address_inference/requirements.txt`; Freeport: within
   50 m 24.5% -> 46.6%; `address_inference/order.py` then assigns each
   street side's numbers one-to-one in increasing order along the road, same side
-  only, every number placed, 48.4% within 50 m, 85.5% within 150 m). `--ranges list|auto`
+  only, every number placed, main roads first, no building 25 m nearer another
+  road, houses past a dead end sided by the street's overall direction: 41.5%
+  right building, 50.1% within 50 m, 86.5% within 150 m). Training is
+  deterministic: query rows are ordered and ties broken by id. `--ranges list|auto`
   places numbers by the address list's own min..max per street side instead of
   TIGER's range (auto: only for placeholder ranges with sequential numbers);
   both lose to TIGER town-wide in Freeport, auto fixes Arrowhead Ridge Rd. Add `--save` to keep each training

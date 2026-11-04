@@ -52,6 +52,12 @@ ROAD_CLASS_RANK = {
     "S1730": 3, "S1740": 3, "Private": 3,
 }
 UNKNOWN_CLASS_RANK = 4
+# A building that another street is at least this many meters closer to
+# is off limits to this street in the assignment (None = no limit): the
+# corner house of 173 Flying Point Road is 35 m from Flying Point and 77 m
+# from Arrowhead Ridge Road, so Arrowhead's 4 can't take it.
+OTHER_ROAD_CLOSER_M = 25
+
 # A street only claims a building it's this sure of (the ranker's
 # probability for that pair): a wrong claim on a main road would otherwise
 # push every number on the side street off by one (165 Flying Point Road
@@ -91,31 +97,57 @@ def load_positions(dsn, region, town) -> dict:
     return {(street, source_id): along for street, source_id, along in rows}
 
 
-def monotone_assign(P):
-    """P[i, j]: probability that number i (ascending) is building j (in road
-    order). Returns (total, {i: j}) maximizing the summed probability over
-    strictly increasing one-to-one matchings; a number may stay unmatched."""
+# Neighboring numbers may share one building (duplexes, small multi-unit
+# houses: 349 of Freeport's 3,731 numbers, in 152 buildings) at this cost.
+# Strict one-number-per-building pushed every later number on that side
+# off by one.
+SHARE_PENALTY = float("inf")
+
+
+def monotone_assign(P, share_penalty=None):
+    """P[i, j]: score for number i (ascending) on building j (in road
+    order). Returns (total, {i: j}) maximizing the summed score over
+    assignments where buildings never go backwards along the road; a number
+    may stay unmatched, and a number may take the same building as the
+    number before it for SHARE_PENALTY (None = SHARE_PENALTY; use inf for
+    strictly one number per building)."""
+    penalty = SHARE_PENALTY if share_penalty is None else share_penalty
     k, m = P.shape
+    NEG = -np.inf
+    # D[i, j]: best for numbers < i using buildings < j.
+    # M[i, j]: best for numbers < i with number i-1 on building j-1.
     D = np.zeros((k + 1, m + 1))
-    back = np.zeros((k + 1, m + 1), dtype=np.int8)
+    M = np.full((k + 1, m + 1), NEG)
+    back_d = np.zeros((k + 1, m + 1), dtype=np.int8)  # 0 skip number, 1 skip building, 2 from M
+    back_m = np.zeros((k + 1, m + 1), dtype=np.int8)  # 0 new building, 1 share with number before
     for i in range(1, k + 1):
         for j in range(m + 1):
-            best, how = D[i - 1, j], 0  # number i unmatched
+            if j > 0:
+                new = D[i - 1, j - 1] + P[i - 1, j - 1]
+                share = M[i - 1, j] + P[i - 1, j - 1] - penalty if np.isfinite(penalty) else NEG
+                M[i, j], back_m[i, j] = (share, 1) if share > new else (new, 0)
+            best, how = D[i - 1, j], 0
             if j > 0 and D[i, j - 1] > best:
-                best, how = D[i, j - 1], 1  # building j unused
-            if j > 0 and D[i - 1, j - 1] + P[i - 1, j - 1] > best:
-                best, how = D[i - 1, j - 1] + P[i - 1, j - 1], 2
-            D[i, j], back[i, j] = best, how
-    out, i, j = {}, k, m
+                best, how = D[i, j - 1], 1
+            if M[i, j] > best:
+                best, how = M[i, j], 2
+            D[i, j], back_d[i, j] = best, how
+    out, i, j, in_m = {}, k, m, False
     while i > 0:
-        how = back[i, j]
+        if in_m:
+            out[i - 1] = j - 1
+            if back_m[i, j] == 1:
+                i -= 1  # number before shares building j-1: stay in M
+            else:
+                i, j, in_m = i - 1, j - 1, False
+            continue
+        how = back_d[i, j]
         if how == 0:
             i -= 1
         elif how == 1:
             j -= 1
         else:
-            out[i - 1] = j - 1
-            i, j = i - 1, j - 1
+            in_m = True
     return D[k, m], out
 
 
@@ -135,7 +167,7 @@ MATCH_BONUS = 0.3
 
 def order_constrained_picks(address_df, scored_df, positions, fallback,
                             rank_weight=RANK_WEIGHT, same_side_only=True, street_order=None,
-                            claim_min_p=None) -> dict:
+                            claim_min_p=None, other_road_closer_m=None) -> dict:
     """{address_id: source_id}. `fallback` (the ranker's own picks) covers
     addresses the ordering step leaves unmatched or can't place.
 
@@ -154,7 +186,14 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     scored = scored_df.assign(p=probabilities(scored_df))
     if same_side_only:
         scored = scored[scored["same_side"].astype(bool)]
+    limit = OTHER_ROAD_CLOSER_M if other_road_closer_m is None else other_road_closer_m
+    if limit is not None and "dist_vs_nearest_road" in scored.columns:
+        scored = scored[~(scored["dist_vs_nearest_road"] >= limit)]
     addr = address_df[address_df["scorable"]].assign(parity=lambda d: d["number"] % 2)
+    # A number with several address points (units, outlets, a complex
+    # spread over buildings -- downtown Main Street) isn't one house: its
+    # points can sit in different buildings, so it stays out of the
+    # one-building-per-number assignment and keeps the ranker's own picks.
     number_of = dict(zip(addr["id"], addr["number"]))
     by_address = defaultdict(list)
     for row in scored[["address_id", "source_id", "p"]].itertuples(index=False):

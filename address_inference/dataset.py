@@ -49,6 +49,7 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) tb ON true
 WHERE a.town = %(town)s AND a.state_abbr = %(state)s AND a.address_number > 0
+ORDER BY a.site_uid
 """
 
 SEGMENTS_SQL = """
@@ -64,6 +65,7 @@ SELECT sms.label_street, st.tlid, st.lfromadd, st.ltoadd, st.rfromadd, st.rtoadd
 FROM address_inference.street_match_segments sms
 JOIN streets st ON st.tlid = sms.tlid
 WHERE sms.region_id = %(region)s AND sms.town = %(town)s
+ORDER BY sms.label_street, st.tlid
 """
 
 # Every building attached to a matched street's segments, with its own
@@ -80,6 +82,7 @@ JOIN address_inference.building_segments nearest
   ON nearest.state_fips = bs.state_fips AND nearest.source = bs.source
  AND nearest.source_id = bs.source_id AND nearest.rank = 1
 WHERE sms.region_id = %(region)s AND sms.town = %(town)s
+ORDER BY sms.label_street, bs.source_id, bs.tlid, nearest.tlid
 """
 
 
@@ -90,6 +93,24 @@ WHERE sms.region_id = %(region)s AND sms.town = %(town)s
 # where E911 and TIGER lines often stop short of the last house
 # (Arrowhead Ridge Road's 9 is ~100 m past E911's line).
 BEYOND_END_MAX_ANGLE_DEG = 45
+
+
+# How a house past a dead end gets its side:
+#   "either"    -- it counts for both sides (the ordering and scores decide);
+#   "axis"      -- its side of the straight line from the segment's start
+#                  to its end (the street's overall direction, not the
+#                  last few meters of the line);
+#   "neighbors" -- the side of its two nearest same-street houses that
+#                  aren't past the end.
+DEAD_END_SIDE = "axis"
+
+
+def side_of_chord(points, lat, lon) -> str:
+    """'L' or 'R' of the straight line from the first to the last point."""
+    (ax, ay), (bx, by) = points[0], points[-1]
+    k = np.cos(np.radians(ay))
+    cross = (bx - ax) * k * (lat - ay) - (by - ay) * (lon - ax) * k
+    return "L" if cross > 0 else "R"
 
 
 def beyond_end(points, t, lat, lon) -> bool:
@@ -137,7 +158,9 @@ def covering_range(number: int, segments):
                 continue  # wrong parity for this side's range
             fraction = 0.5 if start == end else (number - start) / (end - start)
             span = abs(end - start)
-            if best is None or span < best[3]:
+            # Tightest range wins; equal spans go to the lowest tlid, so the
+            # answer never depends on the order segments arrive in.
+            if best is None or (span, str(seg["tlid"])) < (best[3], str(best[0]["tlid"])):
                 best = (seg, side, fraction, span)
     return best
 
@@ -279,21 +302,50 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
     on_side = sorted(
         (c for cands in by_building.values() for c in cands
          if c["tlid"] == cover_seg["tlid"] and c["side"] == side and not c["at_end"]),
-        key=lambda c: c["t"],
+        key=lambda c: (c["t"], c["source_id"]),
     )
     rank_frac = {c["source_id"]: (i + 0.5) / len(on_side) for i, c in enumerate(on_side)}
     implied_addresses = span / 2 + 1
 
-    rows = []
+    # Pass 1: each building's nearest segment of this street, and whether
+    # it's past a dead end.
+    info = {}
     for source_id, cands in by_building.items():
-        best = min(cands, key=lambda c: c["dist_m"])  # this building's nearest segment OF THIS STREET
+        # This building's nearest segment OF THIS STREET. A building by the
+        # joint of two segments is equally near both: prefer the one it sits
+        # alongside over one it only touches at an end, then the lowest tlid.
+        best = min(cands, key=lambda c: (round(c["dist_m"], 2), bool(c["at_end"]), str(c["tlid"])))
         on_cover = next((c for c in cands if c["tlid"] == cover_seg["tlid"]), None)
-        # Past the street's end (no attachment to it alongside a segment):
-        # either side can hold it.
         dead_start, dead_end = dead_by_tlid.get(best["tlid"], (False, False))
         at_dead_end = (best["t"] == 0 and dead_start) or (best["t"] == 1 and dead_end)
         past_end = all(c["at_end"] for c in cands) and at_dead_end and beyond_end(
             points_by_tlid.get(best["tlid"], []), best["t"], best["lat"], best["lon"])
+        own_side = on_cover["side"] if on_cover else best["side"]
+        info[source_id] = (best, on_cover, past_end, own_side)
+
+    def dead_end_side(source_id):
+        best, on_cover, _, own_side = info[source_id]
+        if DEAD_END_SIDE == "axis":
+            pts = points_by_tlid.get(cover_seg["tlid"] if on_cover else best["tlid"], [])
+            return side_of_chord(pts, best["lat"], best["lon"]) if len(pts) >= 2 else own_side
+        if DEAD_END_SIDE == "neighbors":
+            others = sorted(
+                (float(haversine_m(best["lat"], best["lon"], b["lat"], b["lon"])), sd)
+                for sid, (b, _oc, pe, sd) in info.items() if sid != source_id and not pe and sd)
+            sides = [sd for _, sd in others[:2]]
+            return max(set(sides), key=sides.count) if sides else own_side
+        return None  # "either"
+
+    rows = []
+    for source_id, cands in by_building.items():
+        best, on_cover, past_end, own_side = info[source_id]
+        if past_end:
+            # Past the street's dead end: the line's last few meters can't
+            # say which side it's on (DEAD_END_SIDE).
+            decided = dead_end_side(source_id)
+            same_side = True if decided is None else decided == side
+        else:
+            same_side = own_side == side
         d_m0 = float(haversine_m(addr["m0_lat"], addr["m0_lon"], best["lat"], best["lon"]))
         rows.append({
             "address_id": addr["id"],
@@ -304,7 +356,7 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
             # --- features ---
             "d_m0": d_m0,
             "on_cover_segment": on_cover is not None,
-            "same_side": past_end or ((on_cover["side"] == side) if on_cover else (best["side"] == side)),
+            "same_side": same_side,
             "beyond_end": past_end,
             "dt": abs(on_cover["t"] - fraction) * cover_seg["length_m"] if on_cover else np.nan,
             # Raw "how far along" vs "how many numbers along" from the range's

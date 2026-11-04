@@ -44,7 +44,10 @@ MODEL_PARAMS = dict(
 def cross_validated_scores(candidate_df):
     """candidate_df plus an out-of-fold ranker `score` per row, and the
     per-feature importance (gain) summed over folds."""
-    df = candidate_df.sort_values(["address_id", "d_m0"]).reset_index(drop=True)
+    # A total order (source_id breaks ties): the database returns rows in
+    # no fixed order, and LightGBM's bagging depends on row order -- without
+    # this, the same data gave results that differed run to run.
+    df = candidate_df.sort_values(["address_id", "d_m0", "source_id"], kind="stable").reset_index(drop=True)
     X = df[dataset.FEATURES].astype(float)
     df["score"] = np.nan
     importance = np.zeros(len(dataset.FEATURES))

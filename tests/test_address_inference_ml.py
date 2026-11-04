@@ -244,7 +244,8 @@ def test_beyond_end_is_ahead_of_the_road_not_beside_it():
     assert not dataset.beyond_end(pts, 0.5, 43.8501, -70.0940)  # not at an end at all
 
 
-def test_a_house_past_the_dead_end_counts_for_either_side():
+def test_a_house_past_the_dead_end_counts_for_either_side(monkeypatch):
+    monkeypatch.setattr(dataset, "DEAD_END_SIDE", "either")
     # h_end sits ~80 m past the east end, digitized slightly to the RIGHT
     # (south) -- but the left (odd) side's number may still take it.
     rows = candidate_rows() + [("MAIN STREET", "h_end", "1", "R", 1.0, True, 80, 150, "Residential",
@@ -253,3 +254,32 @@ def test_a_house_past_the_dead_end_counts_for_either_side():
     row = cand.set_index("source_id")
     assert row.at["h_end", "beyond_end"] and row.at["h_end", "same_side"]
     assert not row.at["s1", "beyond_end"] and not row.at["s1", "same_side"]
+
+
+
+def test_axis_rule_sides_a_dead_end_house_by_the_streets_overall_direction(monkeypatch):
+    monkeypatch.setattr(dataset, "DEAD_END_SIDE", "axis")
+    rows = candidate_rows() + [
+        # past the east end, north of the road's start->end line: left (odd)
+        ("MAIN STREET", "n_end", "1", "R", 1.0, True, 80, 150, "Residential", "Single Family Dwelling", None,
+         43.85005, -70.0940, "1", 80),
+        # past the east end, south of it: right (even)
+        ("MAIN STREET", "s_end", "1", "L", 1.0, True, 80, 150, "Residential", "Single Family Dwelling", None,
+         43.84995, -70.0940, "1", 80),
+    ]
+    _, cand = dataset.build([("e1", 99, "MAIN STREET", "exact", 43.85005, -70.0940, "n_end")], [SEGMENT], rows)
+    row = cand.set_index("source_id")
+    assert row.at["n_end", "same_side"] and not row.at["s_end", "same_side"]  # 99 is odd: left side
+
+
+def test_order_takes_no_building_much_nearer_another_road():
+    from address_inference import order
+    address_df = pd.DataFrame([{"id": "a4", "number": 4, "street": "SIDE", "scorable": True}])
+    positions = {("SIDE", "corner"): 1.0, ("SIDE", "own"): 50.0}
+    scored = pd.DataFrame([
+        ("a4", "corner", 3.0, True, 42.0), ("a4", "own", 2.0, True, 0.0),
+    ], columns=["address_id", "source_id", "score", "same_side", "dist_vs_nearest_road"])
+    picks = order.order_constrained_picks(address_df, scored, positions, {"a4": "corner"})
+    assert picks["a4"] == "own"  # the corner house is 42 m nearer another road
+    kept = order.order_constrained_picks(address_df, scored, positions, {"a4": "corner"}, other_road_closer_m=60)
+    assert kept["a4"] == "corner"
