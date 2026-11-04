@@ -197,8 +197,11 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     picks = dataset.baseline_picks(candidate_df)
     scored, importance = cross_validated_scores(candidate_df)
     picks["ML"] = top_picks(scored)
+    # Main roads first: a building a more important street confidently takes
+    # is off limits to the streets after it (order.CLAIM_MIN_P).
+    street_order = order.street_priority(address_df, order.load_street_classes(dsn, region, town))
     picks["ML+order"] = order.order_constrained_picks(
-        address_df, scored, order.load_positions(dsn, region, town), picks["ML"])
+        address_df, scored, order.load_positions(dsn, region, town), picks["ML"], street_order=street_order)
 
     table = [summarize("M0 interpolation (today)", score_method(address_df, candidate_df, None))]
     for name, label in (("M1", "M1 snap to building"), ("M2", "M2 rank order"),

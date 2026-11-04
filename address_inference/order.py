@@ -39,6 +39,50 @@ WHERE ST_GeometryType(l.g) = 'ST_LineString'
 """
 
 
+# Streets are processed from the most important road down, and a building
+# one street's numbers take can't be taken by a later street: a corner
+# house addressed on the main road (173 Flying Point Road) stops being a
+# candidate for the side street (Arrowhead Ridge Road). Rank by road class
+# -- TIGER MTFCC codes or E911 RDCLASS names -- then by how many addresses
+# the street has (TIGER marks nearly every town street S1400).
+ROAD_CLASS_RANK = {
+    "S1100": 0, "Primary": 0,
+    "S1200": 1, "Secondary": 1,
+    "S1400": 2, "Local": 2,
+    "S1730": 3, "S1740": 3, "Private": 3,
+}
+UNKNOWN_CLASS_RANK = 4
+# A street only claims a building it's this sure of (the ranker's
+# probability for that pair): a wrong claim on a main road would otherwise
+# push every number on the side street off by one (165 Flying Point Road
+# taking an Arrowhead Ridge Road house).
+CLAIM_MIN_P = 0.3
+
+STREET_CLASS_SQL = """
+SELECT sms.label_street, array_agg(DISTINCT s.mtfcc)
+FROM address_inference.street_match_segments sms
+JOIN streets s ON s.tlid = sms.tlid
+WHERE sms.region_id = %(region)s AND sms.town = %(town)s
+GROUP BY sms.label_street
+"""
+
+
+def load_street_classes(dsn, region, town) -> dict:
+    """{street: best (lowest) class rank among its matched segments}."""
+    params = {"region": region.id, "town": town}
+    with psycopg.connect(dsn) as conn:
+        rows = conn.execute(STREET_CLASS_SQL, params).fetchall()
+    return {street: min((ROAD_CLASS_RANK.get(c, UNKNOWN_CLASS_RANK) for c in classes), default=UNKNOWN_CLASS_RANK)
+            for street, classes in rows}
+
+
+def street_priority(address_df, street_classes) -> list:
+    """Streets in processing order: road class, then most addresses first."""
+    counts = address_df[address_df["scorable"]].groupby("street").size()
+    return sorted(counts.index,
+                  key=lambda st: (street_classes.get(st, UNKNOWN_CLASS_RANK), -counts[st], st))
+
+
 def load_positions(dsn, region, town) -> dict:
     """{(street, source_id): meters along the street}."""
     params = {"region": region.id, "town": town, "state_fips": region.state_fips}
@@ -90,7 +134,8 @@ MATCH_BONUS = 0.3
 
 
 def order_constrained_picks(address_df, scored_df, positions, fallback,
-                            rank_weight=RANK_WEIGHT, same_side_only=True) -> dict:
+                            rank_weight=RANK_WEIGHT, same_side_only=True, street_order=None,
+                            claim_min_p=None) -> dict:
     """{address_id: source_id}. `fallback` (the ranker's own picks) covers
     addresses the ordering step leaves unmatched or can't place.
 
@@ -101,7 +146,10 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     road), which drags every interpolation-based probability toward the
     start of the street. Knowing the side's actual numbers, the k-th of n
     numbers should sit about k/n of the way through the side's buildings
-    in road order -- this adds that agreement to each pair's score."""
+    in road order -- this adds that agreement to each pair's score.
+    street_order: streets in processing order (street_priority); a building
+    an earlier street took is off limits to later ones. None = each street
+    on its own, as before."""
     picks = dict(fallback)
     scored = scored_df.assign(p=probabilities(scored_df))
     if same_side_only:
@@ -112,20 +160,29 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     for row in scored[["address_id", "source_id", "p"]].itertuples(index=False):
         by_address[row.address_id].append((row.source_id, row.p))
 
-    for (street, _parity), group in addr.groupby(["street", "parity"]):
+    groups = dict(tuple(addr.groupby(["street", "parity"])))
+    if street_order is not None:
+        rank = {st: i for i, st in enumerate(street_order)}
+        keys = sorted(groups, key=lambda key: (rank.get(key[0], len(rank)), key))
+    else:
+        keys = sorted(groups)
+    claimed = set()
+
+    for street, _parity in keys:
+        group = groups[(street, _parity)]
         # Shared addresses (units in one complex) are one number: average.
         prob = defaultdict(list)
         for address_id in group["id"]:
             for source_id, p in by_address.get(address_id, []):
-                if (street, source_id) in positions:
+                if (street, source_id) in positions and source_id not in claimed:
                     prob[(number_of[address_id], source_id)].append(p)
         buildings = sorted({b for _, b in prob})
-        if len(buildings) < 2:
+        if not buildings:
             continue
         numbers = sorted(group["number"].unique())
         k, m = len(numbers), len(buildings)
         number_frac = np.arange(k) / (k - 1) if k > 1 else np.array([0.5])
-        building_frac = np.arange(m) / (m - 1)
+        building_frac = np.arange(m) / (m - 1) if m > 1 else np.array([0.5])
         rank_fit = 1 - np.abs(number_frac[:, None] - building_frac[None, :])
         best = None
         for direction in (1, -1):
@@ -141,4 +198,7 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         for address_id, number in zip(group["id"], group["number"]):
             if number in best[1]:
                 picks[address_id] = best[1][number]
+        if street_order is not None:
+            min_p = CLAIM_MIN_P if claim_min_p is None else claim_min_p
+            claimed.update(b for n, b in best[1].items() if np.mean(prob[(n, b)]) >= min_p)
     return picks

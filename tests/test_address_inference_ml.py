@@ -206,3 +206,27 @@ def test_auto_ranges_only_override_a_placeholder_range_for_sequential_numbers():
     assert dataset.list_range_number(71, [11, 41, 71], segs, min_inflation=2.0) == 71
     # TIGER close to the list (1..99 vs 1..79): kept.
     assert dataset.list_range_number(79, list(range(1, 80, 2)), segs, min_inflation=2.0) == 79
+
+
+def test_main_road_first_claims_a_confident_building_from_the_side_street():
+    from address_inference import order
+    address_df = pd.DataFrame([
+        {"id": "main173", "number": 173, "street": "MAIN", "scorable": True},
+        {"id": "side4", "number": 4, "street": "SIDE", "scorable": True},
+    ])
+    positions = {("MAIN", "corner"): 10.0, ("MAIN", "other"): 90.0,
+                 ("SIDE", "corner"): 5.0, ("SIDE", "house4"): 60.0}
+    scored = pd.DataFrame([
+        ("main173", "corner", 5.0, True), ("main173", "other", 0.0, True),
+        ("side4", "corner", 3.0, True), ("side4", "house4", 2.0, True),
+    ], columns=["address_id", "source_id", "score", "same_side"])
+    fallback = {"main173": "corner", "side4": "corner"}
+    alone = order.order_constrained_picks(address_df, scored, positions, fallback)
+    assert alone["side4"] == "corner"  # both streets take the corner house
+    prio = order.street_priority(address_df, {"MAIN": 2, "SIDE": 3})
+    assert prio == ["MAIN", "SIDE"]
+    first = order.order_constrained_picks(address_df, scored, positions, fallback, street_order=prio)
+    assert first == {"main173": "corner", "side4": "house4"}
+    # Not confident enough to claim: the side street keeps its own choice.
+    timid = order.order_constrained_picks(address_df, scored, positions, fallback, street_order=prio, claim_min_p=1.01)
+    assert timid["side4"] == "corner"
