@@ -168,8 +168,8 @@ def prediction_rows(region_id, town, method, address_df, candidate_df, picks, ru
     return rows
 
 
-def save_predictions(dsn, region_id, town, rows):
-    """Replaces this town's rows: one run per town is kept."""
+def save_predictions(dsn, region_id, town, rows, methods):
+    """Replaces this town's rows for `methods`: one run per town and method."""
     with psycopg.connect(dsn) as conn:
         # Derived data: a table from before the `method` column is just rebuilt.
         has_method = conn.execute(
@@ -178,8 +178,8 @@ def save_predictions(dsn, region_id, town, rows):
         if not has_method:
             conn.execute("DROP TABLE IF EXISTS address_inference.ml_predictions")
         conn.execute(CREATE_PREDICTIONS_SQL)
-        conn.execute("DELETE FROM address_inference.ml_predictions WHERE region_id = %s AND town = %s",
-                     (region_id, town))
+        conn.execute("DELETE FROM address_inference.ml_predictions WHERE region_id = %s AND town = %s "
+                     "AND method = ANY(%s)", (region_id, town, methods))
         with conn.cursor() as cur:
             cur.executemany(
                 "INSERT INTO address_inference.ml_predictions VALUES "
@@ -188,8 +188,8 @@ def save_predictions(dsn, region_id, town, rows):
             )
 
 
-def evaluate(dsn, region, town, save=False):
-    address_df, candidate_df = dataset.build(*dataset.load(dsn, region, town))
+def evaluate(dsn, region, town, save=False, ranges="tiger"):
+    address_df, candidate_df = dataset.build(*dataset.load(dsn, region, town), ranges=ranges)
     scorable = address_df[address_df["scorable"]]
     with_truth = scorable["true_building"].notna()
     in_candidates = set(candidate_df.loc[candidate_df["label"] == 1, "address_id"])
@@ -215,9 +215,10 @@ def evaluate(dsn, region, town, save=False):
     }
     if save:
         rows = []
+        suffix = "" if ranges == "tiger" else f"_{ranges}"
         for name, method in SAVED_METHODS.items():
-            rows += prediction_rows(region.id, town, method, address_df, candidate_df, picks[name], date.today())
-        save_predictions(dsn, region.id, town, rows)
+            rows += prediction_rows(region.id, town, method + suffix, address_df, candidate_df, picks[name], date.today())
+        save_predictions(dsn, region.id, town, rows, [m + suffix for m in SAVED_METHODS.values()])
     return pd.DataFrame(table), coverage, importance
 
 
@@ -246,8 +247,12 @@ def main():
     parser.add_argument("--save", action="store_true",
                         help="keep each address's ML pick in address_inference.ml_predictions "
                              "(mapped by the owner dashboard's Training data tab)")
+    parser.add_argument("--ranges", choices=("tiger", "list", "auto"), default="tiger",
+                        help="where a number's place along the street comes from: TIGER's address ranges, "
+                             "or the list's own min..max per street side (saved as methods *_list)")
     args = parser.parse_args()
-    table, coverage, importance = evaluate(args.dsn, load_region(args.region), args.town, save=args.save)
+    table, coverage, importance = evaluate(args.dsn, load_region(args.region), args.town, save=args.save,
+                                           ranges=args.ranges)
     print(report_markdown(args.town, table, coverage, importance))
 
 

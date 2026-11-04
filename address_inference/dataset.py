@@ -119,9 +119,67 @@ def load(dsn, region, town: str):
     return addresses, segments, candidates
 
 
-def build(addresses, segments, candidates):
+def tiger_span(segments, parity):
+    """(lowest, highest) TIGER number on any range that can hold `parity`
+    across a street's segments, or None."""
+    ends = []
+    for seg in segments:
+        for lo_key, hi_key in (("lfromadd", "ltoadd"), ("rfromadd", "rtoadd")):
+            start, end = _int_or_none(seg[lo_key]), _int_or_none(seg[hi_key])
+            if start is None or end is None:
+                continue
+            if start % 2 == end % 2 and start % 2 != parity:
+                continue
+            ends += [start, end]
+    return (min(ends), max(ends)) if ends else None
+
+
+# ranges='auto': the list's scale replaces TIGER's only when TIGER's range
+# on that street side runs at least this many times past the list's
+# highest number -- a placeholder range like Arrowhead Ridge Road's 1-99
+# for real numbers 1-9. Where TIGER's ranges track the real numbers
+# (Flying Point Road: 55 segments, 153-155, 157-161, ...), they're kept.
+AUTO_INFLATION = 2.0
+# ...and only when the side's numbers are SEQUENTIAL (subdivision-style
+# 1, 3, 5, 7, 9: few gaps), not distance-based (Brickyard Cove's 12, 22,
+# 42, 44). Distance-based numbers mark position along the road, so TIGER's
+# wide range can be right even when the houses stop early. Density = how
+# many of the parity's slots between min and max are taken.
+AUTO_MIN_DENSITY = 0.7
+
+
+def list_range_number(number, side_numbers, segments, min_inflation=None):
+    """`number` moved onto TIGER's numbering by its place in the LIST's own
+    min..max for its side (parity): the list sets the scale, TIGER only
+    says which segment comes first and which side holds the parity. With
+    fewer than two distinct numbers on the side there's no scale: the
+    number is used as-is (TIGER's range)."""
+    lo, hi = side_numbers[0], side_numbers[-1]
+    span = tiger_span(segments, number % 2)
+    if hi == lo or span is None:
+        return number
+    t_lo, t_hi = span
+    if min_inflation is not None:
+        density = len(side_numbers) / ((hi - lo) / 2 + 1)
+        if t_hi < min_inflation * hi or density < AUTO_MIN_DENSITY:
+            return number  # TIGER's range is believable here
+    eq = t_lo + (number - lo) / (hi - lo) * (t_hi - t_lo)
+    eq = int(round(eq))
+    if eq % 2 != number % 2:  # keep the parity so covering_range finds the right side
+        eq += 1 if eq < t_hi else -1
+    return min(max(eq, t_lo), t_hi)
+
+
+def build(addresses, segments, candidates, ranges="tiger"):
     """Returns (address_df, candidate_df). Pure: takes the rows load()
-    returns, so it's testable without a database."""
+    returns, so it's testable without a database.
+
+    ranges='tiger': a number's place along the street comes from TIGER's
+    address ranges. ranges='auto': the list's scale only where TIGER's
+    range looks like a placeholder (AUTO_INFLATION). ranges='list': from its place among the list's own
+    numbers on that street side (min..max of `addresses`) -- TIGER's
+    numbers, often far wider than the real ones (Arrowhead Ridge Road:
+    1-99 vs 1-9), are never used for scale."""
     seg_keys = ("label_street", "tlid", "lfromadd", "ltoadd", "rfromadd", "rtoadd", "geometry", "length_m")
     segs_by_street = defaultdict(list)
     for row in segments:
@@ -136,11 +194,21 @@ def build(addresses, segments, candidates):
         cand = dict(zip(cand_keys, row))
         cands_by_street[cand["label_street"]].append(cand)
 
+    side_numbers = defaultdict(set)
+    for _, number, street, *_rest in addresses:
+        side_numbers[(street, number % 2)].add(number)
+    side_numbers = {key: sorted(nums) for key, nums in side_numbers.items()}
+
     address_rows, cand_rows = [], []
     for site_uid, number, street, method, lat, lon, true_id in addresses:
         street_segs = segs_by_street.get(street, [])
-        cover = covering_range(number, street_segs)
-        addr = {"id": site_uid, "number": number, "street": street, "match_method": method, "true_lat": lat, "true_lon": lon,
+        if ranges == "tiger":
+            range_number = number
+        else:
+            range_number = list_range_number(number, side_numbers[(street, number % 2)], street_segs,
+                                             AUTO_INFLATION if ranges == "auto" else None)
+        cover = covering_range(range_number, street_segs)
+        addr = {"id": site_uid, "number": number, "range_number": range_number, "street": street, "match_method": method, "true_lat": lat, "true_lon": lon,
                 "true_building": true_id, "scorable": cover is not None}
         if cover is None:
             address_rows.append(addr)
@@ -199,9 +267,9 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
             # start: lets the model learn the local numbering density instead
             # of assuming the range is spread evenly over the segment (M0).
             "pos_m": on_cover["t"] * cover_seg["length_m"] if on_cover else np.nan,
-            "numbers_from_start": abs(addr["number"] - range_start),
-            "meters_per_number": (on_cover["t"] * cover_seg["length_m"] / abs(addr["number"] - range_start)
-                                  if on_cover and addr["number"] != range_start else np.nan),
+            "numbers_from_start": abs(addr["range_number"] - range_start),
+            "meters_per_number": (on_cover["t"] * cover_seg["length_m"] / abs(addr["range_number"] - range_start)
+                                  if on_cover and addr["range_number"] != range_start else np.nan),
             "rank_gap": abs(rank_frac[source_id] - fraction) if source_id in rank_frac else np.nan,
             "buildings_on_side": len(on_side),
             "implied_addresses": implied_addresses,

@@ -27,12 +27,20 @@ const STATUS_LABELS: Record<TrainingStatus, string> = {
 const METHOD_LABELS: Record<TrainingMethod, string> = {
   ml_order: 'ML + road order',
   ml: 'ML alone',
+  ml_order_auto: 'Auto list ranges: ML + road order',
+  ml_auto: 'Auto list ranges: ML alone',
+  ml_order_list: 'List ranges: ML + road order',
+  ml_list: 'List ranges: ML alone',
   ml_order_ranges: 'Correct ranges: ML + road order',
   ml_ranges: 'Correct ranges: ML alone',
 };
 const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   ml_order: 'ml',
   ml: 'ml',
+  ml_order_auto: 'ml_auto',
+  ml_auto: 'ml_auto',
+  ml_order_list: 'ml_list',
+  ml_list: 'ml_list',
   ml_order_ranges: 'ml_ranges',
   ml_ranges: 'ml_ranges',
 };
@@ -177,7 +185,9 @@ export default function TrainingData() {
         whether it picked the building E911 says is that address. "ML + road order" keeps one building per number
         and numbers increasing along the road, per street and side. "Correct ranges" is an upper-bound experiment:
         TIGER's house-number ranges replaced by the real E911 numbers' range on each segment side (what a
-        correctly-numbered road file would give). Owner only, not linked for visitors.
+        correctly-numbered road file would give). "List ranges" uses only the address list's own min..max per
+        street side, never TIGER's numbers; "Auto" does that only where TIGER's range looks like a placeholder
+        for sequentially-numbered houses. Owner only, not linked for visitors.
       </p>
 
       {!passcode && (

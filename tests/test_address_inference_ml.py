@@ -170,3 +170,39 @@ def test_order_constrained_picks_fixes_a_crossed_pair_and_picks_the_direction():
     positions[("MAIN", "b9")] = 250.0
     picks = order.order_constrained_picks(address_df, scored, positions, {"a10": "b2", "a20": "b2"})
     assert picks in ({"a10": "b3", "a20": "b2"}, {"a10": "b2", "a20": "b1"})
+
+
+# --- list ranges ---------------------------------------------------------------
+
+
+def test_list_range_number_uses_the_lists_scale_not_tigers():
+    # TIGER says 1..99 on the left; the real odd numbers are 1..9. 9 is the
+    # last real house, so it belongs at the far end (TIGER's 99), 5 halfway.
+    segs = [seg_dict()]
+    nums = [1, 3, 5, 7, 9]
+    assert dataset.list_range_number(9, nums, segs) == 99
+    assert dataset.list_range_number(1, nums, segs) == 1
+    assert dataset.list_range_number(5, nums, segs) == 51  # halfway (50), nearest odd
+    # Even side: TIGER 2..98, real 4..10.
+    assert dataset.list_range_number(10, [4, 6, 8, 10], segs) == 98
+    # One number on the side: no scale, TIGER's own range is used.
+    assert dataset.list_range_number(7, [7], segs) == 7
+
+
+def test_build_with_list_ranges_puts_the_last_house_at_the_end():
+    addresses = [("e1", 1, "MAIN STREET", "exact", 43.8502, -70.103, "h1"),
+                 ("e9", 9, "MAIN STREET", "exact", 43.8502, -70.097, "h3")]
+    tiger, _ = dataset.build(addresses, [SEGMENT], candidate_rows())
+    listed, _ = dataset.build(addresses, [SEGMENT], candidate_rows(), ranges="list")
+    f = lambda df: df.set_index("id").at["e9", "f"]
+    assert f(tiger) == pytest.approx(8 / 98) and f(listed) == pytest.approx(1.0)
+
+
+def test_auto_ranges_only_override_a_placeholder_range_for_sequential_numbers():
+    segs = [seg_dict()]  # TIGER 1..99 / 2..98
+    # Sequential 1..9 (no gaps), TIGER 11x higher: placeholder -> list scale.
+    assert dataset.list_range_number(9, [1, 3, 5, 7, 9], segs, min_inflation=2.0) == 99
+    # Distance-based 11, 41, 71 (big gaps): TIGER's range is kept.
+    assert dataset.list_range_number(71, [11, 41, 71], segs, min_inflation=2.0) == 71
+    # TIGER close to the list (1..99 vs 1..79): kept.
+    assert dataset.list_range_number(79, list(range(1, 80, 2)), segs, min_inflation=2.0) == 79
