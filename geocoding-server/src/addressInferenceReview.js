@@ -12,15 +12,28 @@ const { NotFoundError } = require('./errors');
 
 const UNDEFINED_TABLE = '42P01';
 // Saved by evaluate --save: the ranker alone, and the ranker + road order
-// (address_inference/order.py). Any other value falls back to the default.
-const METHODS = ['ml_order', 'ml'];
+// (address_inference/order.py). The *_ranges pair is an upper-bound
+// experiment: the same pipeline with each segment's TIGER number range
+// replaced by the min..max of the real E911 numbers along it (what a
+// correctly-numbered road file would give) -- copied in by hand, not
+// something evaluate produces. Any other value falls back to the default.
+const METHODS = ['ml_order', 'ml', 'ml_order_ranges', 'ml_ranges'];
+// What "changed by road order" compares each method against.
+const BASE_METHOD = { ml_order: 'ml', ml: 'ml', ml_order_ranges: 'ml_ranges', ml_ranges: 'ml_ranges' };
 
 async function listReviewTowns(db) {
   const { rows } = await db.query(
-    `SELECT region_id, town, max(run_date)::text AS run_date, count(DISTINCT address_id)::int AS addresses
+    `SELECT region_id, town, max(run_date)::text AS run_date, count(DISTINCT address_id)::int AS addresses,
+            array_agg(DISTINCT method) AS methods
      FROM address_inference.ml_predictions GROUP BY region_id, town ORDER BY town`
   );
-  return rows.map((r) => ({ region: r.region_id, town: r.town, runDate: r.run_date, addresses: r.addresses }));
+  return rows.map((r) => ({
+    region: r.region_id,
+    town: r.town,
+    runDate: r.run_date,
+    addresses: r.addresses,
+    methods: r.methods,
+  }));
 }
 
 async function getAddressInferenceReview(db, town, method) {
@@ -38,11 +51,11 @@ async function getAddressInferenceReview(db, town, method) {
               base.status AS ml_status, base.picked_building AS ml_pick
        FROM address_inference.ml_predictions p
        LEFT JOIN address_inference.ml_predictions base
-         ON base.region_id = p.region_id AND base.town = p.town AND base.method = 'ml'
+         ON base.region_id = p.region_id AND base.town = p.town AND base.method = $4
         AND base.address_id = p.address_id
        WHERE p.region_id = $1 AND p.town = $2 AND p.method = $3
        ORDER BY p.street, p.address_number`,
-      [selected.region, selected.town, selectedMethod]
+      [selected.region, selected.town, selectedMethod, BASE_METHOD[selectedMethod]]
     );
 
     // Every footprint around the town's addresses: grey context, so the
@@ -63,12 +76,13 @@ async function getAddressInferenceReview(db, town, method) {
     for (const r of rows) summary[r.status] = (summary[r.status] ?? 0) + 1;
 
     return {
-      towns,
+      towns: towns.map(({ methods, ...t }) => t),
       town: selected.town,
       region: selected.region,
       runDate: selected.runDate,
       method: selectedMethod,
-      methods: METHODS,
+      // Only the methods this town actually has rows for.
+      methods: METHODS.filter((m) => selected.methods.includes(m)),
       summary,
       addresses: rows.map((r) => ({
         id: r.address_id,

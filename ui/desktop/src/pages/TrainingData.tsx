@@ -27,7 +27,16 @@ const STATUS_LABELS: Record<TrainingStatus, string> = {
 const METHOD_LABELS: Record<TrainingMethod, string> = {
   ml_order: 'ML + road order',
   ml: 'ML alone',
+  ml_order_ranges: 'Correct ranges: ML + road order',
+  ml_ranges: 'Correct ranges: ML alone',
 };
+const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
+  ml_order: 'ml',
+  ml: 'ml',
+  ml_order_ranges: 'ml_ranges',
+  ml_ranges: 'ml_ranges',
+};
+const isOrderMethod = (m: TrainingMethod) => BASE_METHOD[m] !== m;
 const STATUS_ORDER: TrainingStatus[] = ['wrong', 'missed', 'right', 'no_building'];
 const LIST_LIMIT = 200;
 
@@ -149,6 +158,14 @@ export default function TrainingData() {
   );
 
   const total = data?.addresses.length ?? 0;
+  // Same base as evaluate's report: right/wrong/missed are shares of the
+  // addresses that HAVE a building at their E911 point (a label);
+  // "no building" is a share of all addresses.
+  const labelled = total - (data?.summary.no_building ?? 0);
+  const share = (status: TrainingStatus, n: number) => {
+    const base = status === 'no_building' ? total : labelled;
+    return base ? `${((100 * n) / base).toFixed(1)}%` : '';
+  };
 
   return (
     <div>
@@ -158,7 +175,9 @@ export default function TrainingData() {
         Building-address experiment: every point is a Maine E911 address the ML ranker trained and was tested on
         (cross-validated by street, so each pick comes from a model that never saw that street). The color shows
         whether it picked the building E911 says is that address. "ML + road order" keeps one building per number
-        and numbers increasing along the road, per street and side. Owner only, not linked for visitors.
+        and numbers increasing along the road, per street and side. "Correct ranges" is an upper-bound experiment:
+        TIGER's house-number ranges replaced by the real E911 numbers' range on each segment side (what a
+        correctly-numbered road file would give). Owner only, not linked for visitors.
       </p>
 
       {!passcode && (
@@ -210,14 +229,14 @@ export default function TrainingData() {
               {total.toLocaleString()} addresses · run {data.runDate}
               {loading ? ' · refreshing…' : ''}
             </span>
-            <div style={{ display: 'flex', gap: 'var(--space-2)' }} role="group" aria-label="Method">
+            <div style={{ display: 'flex', gap: 'var(--space-2)', flexWrap: 'wrap' }} role="group" aria-label="Method">
               {(data.methods ?? ['ml_order', 'ml']).map((m) => (
                 <button
                   key={m}
                   className={`btn ${method === m ? 'btn-primary' : 'btn-secondary'}`}
                   onClick={() => {
                     setMethod(m);
-                    if (m === 'ml') setChangedOnly(false);
+                    if (!isOrderMethod(m)) setChangedOnly(false);
                   }}
                   disabled={loading}
                 >
@@ -226,7 +245,7 @@ export default function TrainingData() {
               ))}
             </div>
           </div>
-          {data.method === 'ml_order' && (
+          {isOrderMethod(data.method) && (
             <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 'var(--space-3)' }}>
               <input type="checkbox" checked={changedOnly} onChange={(e) => setChangedOnly(e.target.checked)} />
               <span>
@@ -263,7 +282,7 @@ export default function TrainingData() {
                   <div style={{ fontFamily: 'var(--font-heading)', fontSize: 22, fontVariantNumeric: 'tabular-nums' }}>
                     {n.toLocaleString()}{' '}
                     <span className="text-muted" style={{ fontSize: 14 }}>
-                      {total ? `${((100 * n) / total).toFixed(1)}%` : ''}
+                      {share(status, n)}
                     </span>
                   </div>
                 </label>
@@ -307,10 +326,10 @@ export default function TrainingData() {
           {selected && (
             <div className="card elev-sm" style={{ marginTop: 'var(--space-3)' }}>
               <div>{describe(selected)}</div>
-              {data.method === 'ml_order' && (
+              {isOrderMethod(data.method) && (
                 <div style={{ fontSize: 13, marginTop: 4 }}>
                   {selected.changedFromMl
-                    ? `Road order changed the pick. ML alone: ${STATUS_LABELS[selected.mlStatus].toLowerCase()}.`
+                    ? `Road order changed the pick. Without it: ${STATUS_LABELS[selected.mlStatus].toLowerCase()}.`
                     : 'Same pick as ML alone.'}
                 </div>
               )}
@@ -359,7 +378,7 @@ export default function TrainingData() {
                   <th>Address</th>
                   <th>Result</th>
                   <th>Off by</th>
-                  {data.method === 'ml_order' && <th>ML alone</th>}
+                  {isOrderMethod(data.method) && <th>Without road order</th>}
                   <th>Candidates</th>
                 </tr>
               </thead>
@@ -385,7 +404,7 @@ export default function TrainingData() {
                       {STATUS_LABELS[a.status]}
                     </td>
                     <td style={{ fontVariantNumeric: 'tabular-nums' }}>{a.errorMeters.toLocaleString()} m</td>
-                    {data.method === 'ml_order' && (
+                    {isOrderMethod(data.method) && (
                       <td className="text-muted">{a.changedFromMl ? STATUS_LABELS[a.mlStatus] : 'same pick'}</td>
                     )}
                     <td style={{ fontVariantNumeric: 'tabular-nums' }}>{a.candidates}</td>

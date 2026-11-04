@@ -553,7 +553,9 @@ export type TrainingAddress = {
 
 // 'ml' = the ranker alone; 'ml_order' = ranker + road order, one building
 // per number, numbers increasing along the road (address_inference/order.py).
-export type TrainingMethod = 'ml' | 'ml_order';
+// The *_ranges pair: same pipeline, TIGER ranges replaced by the real E911
+// numbers' min..max per segment side -- an upper-bound experiment.
+export type TrainingMethod = 'ml' | 'ml_order' | 'ml_ranges' | 'ml_order_ranges';
 
 export type TrainingTown = { region: string; town: string; runDate: string; addresses: number };
 
