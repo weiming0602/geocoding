@@ -134,6 +134,16 @@ TOWNHOUSE_MIN_DENSITY = 0.8
 # numbers), number i's property gets this bonus, and the ranker picks the
 # building inside it. 0 = off.
 PROPERTY_SLOT_BONUS = 0.1  # stronger hurts: widest gaps often aren't lot lines
+# Owner's rule, size + count together: on a rural side (median lot of its
+# home buildings >= RURAL_MIN_LOT_M2) with more home buildings than numbers,
+# the extra ones are the smallest -- but only those at least
+# EXTRA_SIZE_FACTOR times smaller than the side's median building count as
+# extras (sheds, garages). The smallest buildings alone are real houses
+# about half the time (camps, cottages); at 2x smaller, a quarter; at 3x, a
+# sixth. They get EXTRA_SMALL_PENALTY (inf = left out; firm was worse); None = off.
+EXTRA_SMALL_PENALTY = 0.3
+EXTRA_SIZE_FACTOR = 2.0
+RURAL_MIN_LOT_M2 = 4000
 
 
 # A building holds at most this many numbers of one parity (owner's rule:
@@ -310,7 +320,7 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
                             claim_min_p=None, other_road_closer_m=None,
                             townhouse_ratio=None, townhouse_share_penalty=None,
                             joint_townhouses=True, property_slot_bonus=None, accessory_max_ratio=None,
-                            use_range_direction=True) -> dict:
+                            use_range_direction=True, extra_small_penalty=None) -> dict:
     """{address_id: source_id}. `fallback` (the ranker's own picks) covers
     addresses the ordering step leaves unmatched or can't place.
 
@@ -361,6 +371,11 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     # direction. Short streets where the ranker is unsure otherwise flipped
     # (Brickyard Cove: 12 at the far end, 44 at the start).
     direction_of = _range_directions(addr, scored_df, positions) if use_range_direction else {}
+    extra_penalty = EXTRA_SMALL_PENALTY if extra_small_penalty is None else extra_small_penalty
+    size_of = dict(zip(scored_df["source_id"], scored_df["sqmeters"].fillna(0))) if "sqmeters" in scored_df.columns else {}
+    lot_of = (dict(zip(scored_df["source_id"], scored_df["parcel_area_m2"]))
+              if "parcel_area_m2" in scored_df.columns else {})
+    lot_of = {b: v for b, v in lot_of.items() if v == v}  # drop NaN (no parcel)
     groups = dict(tuple(addr.groupby(["street", "parity"])))
     if street_order is not None:
         rank = {st: i for i, st in enumerate(street_order)}
@@ -445,7 +460,16 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
             if townhouses:
                 slot = (np.arange(k) * len(order)) // k  # number i's building, dealt out evenly in road order
                 P = P + TOWNHOUSE_SLOT_BONUS * (np.arange(len(order))[None, :] == slot[:, None])
-            elif property_bonus and 2 <= k < len(home_buildings):
+            if extra_penalty and not townhouses and k < len(home_buildings):
+                lots = [lot_of.get(b) for b in home_buildings if lot_of.get(b) is not None]
+                if lots and np.median(lots) >= RURAL_MIN_LOT_M2:
+                    median_size = np.median([size_of.get(b, 0) for b in home_buildings])
+                    smallest = sorted(home_buildings, key=lambda b: (size_of.get(b, 0), b))[: len(home_buildings) - k]
+                    extras = {b for b in smallest if size_of.get(b, 0) * EXTRA_SIZE_FACTOR <= median_size}
+                    if extras:
+                        extra = np.array([b in extras for b in order])
+                        P = P - (1e9 if np.isinf(extra_penalty) else extra_penalty) * extra[None, :]
+            if not townhouses and property_bonus and 2 <= k < len(home_buildings):
                 homes_in_order = [b for b in order if (street, b) in home]
                 along = np.array([positions[(street, b)] * direction for b in homes_in_order])
                 cuts = sorted(np.argsort(np.diff(along))[::-1][: k - 1] + 1)  # widest gaps

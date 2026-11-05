@@ -378,3 +378,17 @@ def test_order_keeps_a_shed_out_and_follows_the_ranges_direction():
                                    "parcel_size_ratio", "d_m0", "dist_vs_nearest_road"])
     picks = order.order_constrained_picks(address_df, scored, positions, {})
     assert picks == {"a12": "house12", "a30": "house30", "a44": "house44"}
+
+
+def test_rural_extra_building_much_smaller_than_the_side_gives_way():
+    from address_inference import order
+    # One number, two home buildings on big rural lots: a 60 m2 outbuilding
+    # nearer the interpolated point and the 250 m2 house. The ranker slightly
+    # prefers the outbuilding; at 4x smaller than the side's median it gives way.
+    address_df = pd.DataFrame([{"id": "a5", "number": 5, "street": "RR", "scorable": True}])
+    positions = {("RR", "out"): 100.0, ("RR", "house"): 140.0}
+    scored = pd.DataFrame([("a5", "out", 1.1, True, 60.0, 9000.0, 0.0), ("a5", "house", 1.0, True, 250.0, 9000.0, 0.0)],
+                          columns=["address_id", "source_id", "score", "same_side", "sqmeters", "parcel_area_m2",
+                                   "dist_vs_nearest_road"])
+    assert order.order_constrained_picks(address_df, scored, positions, {}, extra_small_penalty=0)["a5"] == "out"
+    assert order.order_constrained_picks(address_df, scored, positions, {})["a5"] == "house"
