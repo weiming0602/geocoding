@@ -331,3 +331,19 @@ def test_townhouse_street_puts_an_odd_number_in_an_even_side_building():
     assert {n: picks.get(f"a{n}") for n in layout} == layout
     separate = order.order_constrained_picks(address_df, scored, positions, {}, joint_townhouses=False)
     assert separate.get("a19") != "b1"  # side by side, 19 can't join 18 and 20
+
+
+
+# --- parcels -----------------------------------------------------------------------
+
+
+def test_parcel_features_compare_frontage_on_this_street_with_others():
+    parcels = {"buildings": {"back": {"parcel": "p15", "area": 2933.0, "buildings": 2, "largest": False}},
+               "frontage": {"p15": {"summer1": 68.0, "village1": 32.0, "village2": 7.0}}}
+    f = dataset._parcel_features("back", {"summer1"}, parcels)
+    assert f["parcel_frontage_this"] == 68 and f["parcel_frontage_other"] == 39
+    assert f["parcel_frontage_share"] == pytest.approx(68 / 107)
+    assert f["parcel_buildings"] == 2 and f["parcel_largest"] == 0.0
+    missing = dataset._parcel_features("nowhere", {"summer1"}, parcels)
+    assert all(np.isnan(v) for v in missing.values())
+    assert np.isnan(dataset._parcel_features("back", {"summer1"}, None)["parcel_area_m2"])

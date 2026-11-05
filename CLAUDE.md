@@ -71,7 +71,11 @@ read-write).
   "dbname=geocoding" me --town Freeport` loads each E911 point's unit ("Unit
   14" -- one number can be a whole complex) and placement ("Geocoding" =
   estimated along the road, not on a building) from the public points layer;
-  the Training data tab shows both.
+  the Training data tab shows both. `python -m address_inference.parcels "dbname=geocoding" me
+  --town Freeport` loads tax parcels (DATA_SOURCES.md §5), links buildings to
+  lots and measures each lot's frontage per street segment: parcel features
+  add ~2 points right building (TIGER 44.0%, E911 roads 64.2%), and "right
+  property" uses the parcel.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

@@ -165,6 +165,39 @@ def covering_range(number: int, segments):
     return best
 
 
+# Each candidate building's tax parcel (address_inference.parcels): the
+# lot's frontage on each street segment, how many buildings share the lot,
+# and which is the biggest. Empty when parcels aren't loaded.
+PARCELS_SQL = """
+SELECT bp.source_id, bp.parcel_id, ST_Area(p.geom::geography),
+       count(*) OVER (PARTITION BY bp.parcel_id),
+       s.sqmeters = max(s.sqmeters) OVER (PARTITION BY bp.parcel_id)
+FROM address_inference.building_parcels bp
+JOIN address_inference.parcels p ON p.parcel_id = bp.parcel_id AND p.state_fips = bp.state_fips
+JOIN address_inference.structures s ON s.state_fips = bp.state_fips AND s.source_id = bp.source_id
+WHERE bp.state_fips = %(state_fips)s AND p.town = %(town)s
+ORDER BY bp.source_id
+"""
+FRONTAGE_SQL = """
+SELECT pf.parcel_id, pf.tlid, pf.frontage_m
+FROM address_inference.parcel_frontage pf
+JOIN address_inference.parcels p ON p.parcel_id = pf.parcel_id
+WHERE p.town = %(town)s AND p.state_fips = %(state_fips)s
+ORDER BY pf.parcel_id, pf.tlid
+"""
+
+
+def load_parcels(conn, params) -> dict | None:
+    if conn.execute("SELECT to_regclass('address_inference.building_parcels') IS NULL").fetchone()[0]:
+        return None
+    buildings = {sid: {"parcel": pid, "area": area, "buildings": n, "largest": bool(largest)}
+                 for sid, pid, area, n, largest in conn.execute(PARCELS_SQL, params).fetchall()}
+    frontage = defaultdict(dict)
+    for pid, tlid, m in conn.execute(FRONTAGE_SQL, params).fetchall():
+        frontage[pid][tlid] = m
+    return {"buildings": buildings, "frontage": dict(frontage)} if buildings else None
+
+
 def load(dsn, region, town: str):
     params = {"region": region.id, "town": town, "state": region.state_abbr,
               "state_fips": region.state_fips, "radius": TRUE_BUILDING_RADIUS_M}
@@ -172,7 +205,8 @@ def load(dsn, region, town: str):
         addresses = conn.execute(ADDRESSES_SQL, params).fetchall()
         segments = conn.execute(SEGMENTS_SQL, params).fetchall()
         candidates = conn.execute(CANDIDATES_SQL, params).fetchall()
-    return addresses, segments, candidates
+        parcels = load_parcels(conn, params)
+    return addresses, segments, candidates, parcels
 
 
 def tiger_span(segments, parity):
@@ -226,7 +260,7 @@ def list_range_number(number, side_numbers, segments, min_inflation=None):
     return min(max(eq, t_lo), t_hi)
 
 
-def build(addresses, segments, candidates, ranges="tiger"):
+def build(addresses, segments, candidates, parcels=None, ranges="tiger"):
     """Returns (address_df, candidate_df). Pure: takes the rows load()
     returns, so it's testable without a database.
 
@@ -275,7 +309,8 @@ def build(addresses, segments, candidates, ranges="tiger"):
                                                 "left" if side == "L" else "right")
         addr.update(m0_lat=m0_lat, m0_lon=m0_lon, cover_tlid=seg["tlid"], cover_side=side, f=fraction)
         address_rows.append(addr)
-        cand_rows.extend(_candidates_for(addr, seg, side, fraction, span, street_segs, cands_by_street[street]))
+        cand_rows.extend(_candidates_for(addr, seg, side, fraction, span, street_segs, cands_by_street[street],
+                                         parcels))
 
     address_df = pd.DataFrame(address_rows)
     candidate_df = pd.DataFrame(cand_rows)
@@ -284,7 +319,24 @@ def build(addresses, segments, candidates, ranges="tiger"):
     return address_df, candidate_df
 
 
-def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_cands):
+def _parcel_features(source_id, street_tlids, parcels) -> dict:
+    """The building's lot: frontage (m) on this street's segments vs. on
+    other streets', the share on this street, buildings on the lot, and
+    whether this is the lot's biggest. NaN without a parcel."""
+    info = parcels["buildings"].get(source_id) if parcels else None
+    if info is None:
+        return {"parcel_frontage_this": np.nan, "parcel_frontage_other": np.nan, "parcel_frontage_share": np.nan,
+                "parcel_buildings": np.nan, "parcel_largest": np.nan, "parcel_area_m2": np.nan}
+    front = parcels["frontage"].get(info["parcel"], {})
+    this = sum(m for tlid, m in front.items() if tlid in street_tlids)
+    other = sum(m for tlid, m in front.items() if tlid not in street_tlids)
+    return {"parcel_frontage_this": this, "parcel_frontage_other": other,
+            "parcel_frontage_share": this / (this + other) if this + other > 0 else np.nan,
+            "parcel_buildings": info["buildings"], "parcel_largest": float(info["largest"]),
+            "parcel_area_m2": info["area"]}
+
+
+def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_cands, parcels=None):
     range_start = int(cover_seg["lfromadd" if side == "L" else "rfromadd"])
     street_tlids = {s["tlid"] for s in street_segs}
     points_by_tlid = {s["tlid"]: s["points"] for s in street_segs}
@@ -379,6 +431,7 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
             "outbldg_flag": bool(best["outbldg"]),
             "segment_length_m": cover_seg["length_m"],
             "match_exact": addr["match_method"] == "exact",
+            **_parcel_features(source_id, street_tlids, parcels),
         })
 
     rows.sort(key=lambda r: r["d_m0"])
@@ -401,6 +454,8 @@ FEATURES = [
     "implied_addresses", "pos_m", "numbers_from_start", "meters_per_number", "dist_road", "at_end", "nearest_road_is_street", "dist_vs_nearest_road",
     "sqmeters", "residential", "single_family", "outbldg_flag", "bigger_in_front", "segment_length_m",
     "match_exact", "beyond_end",
+    "parcel_frontage_this", "parcel_frontage_other", "parcel_frontage_share", "parcel_buildings",
+    "parcel_largest", "parcel_area_m2",
 ]
 
 

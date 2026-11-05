@@ -199,7 +199,9 @@ def save_predictions(dsn, region_id, town, rows, methods):
 
 
 def evaluate(dsn, region, town, save=False, ranges="tiger"):
-    address_df, candidate_df = dataset.build(*dataset.load(dsn, region, town), ranges=ranges)
+    loaded = dataset.load(dsn, region, town)
+    parcels = loaded[3]
+    address_df, candidate_df = dataset.build(*loaded, ranges=ranges)
     scorable = address_df[address_df["scorable"]]
     with_truth = scorable["true_building"].notna()
     in_candidates = set(candidate_df.loc[candidate_df["label"] == 1, "address_id"])
@@ -215,6 +217,10 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
 
     property_of = order.load_properties(
         dsn, region, set(candidate_df["source_id"]) | set(address_df["true_building"].dropna()))
+    # A tax parcel is the real property: buildings on one lot are one
+    # property (parcels.py); the 12 m grouping covers buildings without one.
+    if parcels:
+        property_of.update({sid: "parcel:" + info["parcel"] for sid, info in parcels["buildings"].items()})
     table = [summarize("M0 interpolation (today)", score_method(address_df, candidate_df, None, property_of))]
     for name, label in (("M1", "M1 snap to building"), ("M2", "M2 rank order"),
                         ("M3", "M3 rank order, no outbuildings"), ("ML", "ML ranker (LightGBM)"),

@@ -296,6 +296,9 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     scored = scored_df.assign(p=probabilities(scored_df))
     limit = OTHER_ROAD_CLOSER_M if other_road_closer_m is None else other_road_closer_m
     if limit is not None and "dist_vs_nearest_road" in scored.columns:
+        # Parcel frontage doesn't override this: tried, and corner lots
+        # front both roads (173 Flying Point Road's lot has more frontage on
+        # Arrowhead Ridge Road) -- it cost 0.3-0.7 points.
         scored = scored[~(scored["dist_vs_nearest_road"] >= limit)]
     both_sides = scored  # townhouse streets match both parities together
     if same_side_only:

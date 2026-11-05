@@ -131,6 +131,28 @@ geocoding request. Current as of August 2026.
   loaded with `python -m address_inference.load_footprints
   "dbname=geocoding" me --town Freeport`.
 
+### 5. Maine GeoLibrary — tax parcels (experiment only)
+
+- **What it is:** "Maine Parcels Organized Towns", the statewide tax
+  parcel layer the Maine GeoLibrary assembles from towns' voluntary
+  submissions (FeatureServer `Maine_Parcels_Organized_Towns`, item
+  `346131b710a645ffb624f448a9cba6d4`): each lot's boundary, map/block/lot,
+  and the assessor's property address (`PROP_LOC`, e.g. "15 SUMMER
+  STREET").
+- **Why it matters:** the building-address experiment uses the lot
+  geometry to tell which street a building belongs to (the street its lot
+  fronts, even when another road is nearer), which buildings form one
+  property (a house and its barn), and which buildings make up a complex
+  (2 Village View's units). `PROP_LOC` is stored but not used as a model
+  input: it nearly answers the question, so it gets its own separately
+  scored mode. **Not used by geocoding today.**
+- **License:** "Access: Public. Use: User assumes risk." (item license
+  info, checked 2026-11-05) -- no use restriction stated.
+- **Coverage / currency:** town by town, whenever a town submits; check
+  `FMUPDAT`. Freeport: 4,356 parcels, submitted by the town, 2022.
+  Loaded with `python -m address_inference.parcels "dbname=geocoding" me
+  --town Freeport`.
+
 ## How the data gets in (and stays current)
 
 | Script | What it does |
