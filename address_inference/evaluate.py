@@ -237,8 +237,15 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     # Main roads first: a building a more important street confidently takes
     # is off limits to the streets after it (order.CLAIM_MIN_P).
     street_order = order.street_priority(address_df, order.load_street_classes(dsn, region, town))
-    picks["ML+order"] = order.order_constrained_picks(
-        address_df, scored, order.load_positions(dsn, region, town), picks["ML"], street_order=street_order)
+    positions = order.load_positions(dsn, region, town)
+    if parcels:
+        # Each ordinary multi-building tax lot is one place along the road.
+        parcel_of = {sid: info["parcel"] for sid, info in parcels["buildings"].items()}
+        picks["ML+order"] = order.lot_picks(address_df, scored, positions, picks["ML"], parcel_of,
+                                            street_order=street_order)
+    else:
+        picks["ML+order"] = order.order_constrained_picks(address_df, scored, positions, picks["ML"],
+                                                          street_order=street_order)
 
     property_of = order.load_properties(
         dsn, region, set(candidate_df["source_id"]) | set(address_df["true_building"].dropna()))

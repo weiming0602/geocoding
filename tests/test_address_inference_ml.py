@@ -392,3 +392,20 @@ def test_rural_extra_building_much_smaller_than_the_side_gives_way():
                                    "dist_vs_nearest_road"])
     assert order.order_constrained_picks(address_df, scored, positions, {}, extra_small_penalty=0)["a5"] == "out"
     assert order.order_constrained_picks(address_df, scored, positions, {})["a5"] == "house"
+
+
+def test_a_two_house_lot_is_one_place_so_numbers_dont_shift():
+    from address_inference import order
+    # Brickyard Cove: lot 42 has a front house (pos 315) and the E911 house
+    # (pos 397); 22's house is at 336. As separate places 22 takes lot 42's
+    # front house; as one lot (mean 356) 22 keeps its own.
+    address_df = pd.DataFrame([{"id": f"a{n}", "number": n, "street": "BC", "scorable": True} for n in (22, 42)])
+    positions = {("BC", "front42"): 315.0, ("BC", "house22"): 336.0, ("BC", "back42"): 397.0}
+    rows = [("a22", "front42", 2.0), ("a22", "house22", 1.0), ("a22", "back42", 0.0),
+            ("a42", "back42", 2.0), ("a42", "front42", 1.5), ("a42", "house22", 0.5)]
+    scored = pd.DataFrame([(aid, b, sc, True, 0.0) for aid, b, sc in rows],
+                          columns=["address_id", "source_id", "score", "same_side", "dist_vs_nearest_road"])
+    apart = order.order_constrained_picks(address_df, scored, positions, {})
+    assert apart["a22"] == "front42"
+    lots = order.lot_picks(address_df, scored, positions, {}, {"front42": "lot42", "back42": "lot42", "house22": "lot22"})
+    assert lots == {"a22": "house22", "a42": "back42"}

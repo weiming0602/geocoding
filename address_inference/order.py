@@ -533,3 +533,40 @@ def load_properties(dsn, region, building_ids, gap_m=None) -> dict:
         for source_id in ids:
             out[source_id] = pid
     return out
+
+
+LOT_MAX_BUILDINGS = 3
+
+
+def lot_picks(address_df, scored_df, positions, fallback, parcel_of, **kwargs) -> dict:
+    """order_constrained_picks with each multi-building TAX LOT as one place
+    along the road (owner's matrix rule: lots are numbered in order, not
+    buildings). Lot 42 Brickyard Cove has two houses, one in front of 22's
+    house along the road and one past it; as separate places, 22 took the
+    front one and every later number shifted. A lot's position is the
+    mean of its buildings'; its probability for an address the sum of
+    theirs; the building finally picked is the one the ranker liked best.
+    parcel_of: {source_id: parcel id}; buildings without one stay single."""
+    df = scored_df.assign(p=probabilities(scored_df))
+    lot_size = defaultdict(int)
+    for pid in parcel_of.values():
+        lot_size[pid] += 1
+    # Ordinary lots only: a condo or apartment parcel (Harvest Ridge Road's
+    # townhouses, 2 Village View) holds many numbered buildings.
+    key = {b: ("lot:" + pid if 1 < lot_size[pid] <= LOT_MAX_BUILDINGS else b) for b, pid in parcel_of.items()}
+    df["place"] = df["source_id"].map(lambda b: key.get(b, b))
+    df = df.sort_values(["address_id", "place", "p"], ascending=[True, True, False], kind="stable")
+    agg_spec = {"p_sum": ("p", "sum"), "best": ("source_id", "first"), "same_side": ("same_side", "first")}
+    for col, how in (("dist_vs_nearest_road", "min"), ("d_m0", "min"), ("sqmeters", "max"),
+                     ("parcel_size_ratio", "max"), ("parcel_buildings", "min"), ("parcel_area_m2", "max")):
+        if col in df.columns:
+            agg_spec[col] = (col, how)
+    agg = df.groupby(["address_id", "place"], sort=False).agg(**agg_spec).reset_index()
+    best_building = {(a, pl): b for a, pl, b in zip(agg["address_id"], agg["place"], agg["best"])}
+    scored_place = agg.rename(columns={"place": "source_id"}).assign(score=lambda d: np.log(d["p_sum"].clip(lower=1e-12)))
+    lists = defaultdict(list)
+    for (street, b), along in positions.items():
+        lists[(street, key.get(b, b))].append(along)
+    positions_place = {k: float(np.mean(v)) for k, v in lists.items()}
+    picked = order_constrained_picks(address_df, scored_place, positions_place, fallback, **kwargs)
+    return {a: best_building.get((a, v), v) for a, v in picked.items()}
