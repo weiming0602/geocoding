@@ -121,6 +121,12 @@ TOWNHOUSE_SLOT_BONUS = 1.0
 # of the parity's slots between its lowest and highest number are taken):
 # townhouse rows are numbered 26, 28, 30, 32...; rural roads jump.
 TOWNHOUSE_MIN_DENSITY = 0.8
+# More home buildings than numbers on a side (owner's rule): the extra
+# buildings belong to someone's property. The side's home buildings are
+# split, in road order, at the k-1 widest gaps into k properties (k =
+# numbers), number i's property gets this bonus, and the ranker picks the
+# building inside it. 0 = off.
+PROPERTY_SLOT_BONUS = 0.1  # stronger hurts: widest gaps often aren't lot lines
 
 
 # A building holds at most this many numbers of one parity (owner's rule:
@@ -268,7 +274,7 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
                             rank_weight=RANK_WEIGHT, same_side_only=True, street_order=None,
                             claim_min_p=None, other_road_closer_m=None,
                             townhouse_ratio=None, townhouse_share_penalty=None,
-                            joint_townhouses=True) -> dict:
+                            joint_townhouses=True, property_slot_bonus=None) -> dict:
     """{address_id: source_id}. `fallback` (the ranker's own picks) covers
     addresses the ordering step leaves unmatched or can't place.
 
@@ -284,6 +290,7 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     an earlier street took is off limits to later ones. None = each street
     on its own, as before."""
     picks = dict(fallback)
+    property_bonus = PROPERTY_SLOT_BONUS if property_slot_bonus is None else property_slot_bonus
     townhouse_ratio = TOWNHOUSE_RATIO if townhouse_ratio is None else townhouse_ratio
     townhouse_share_penalty = TOWNHOUSE_SHARE_PENALTY if townhouse_share_penalty is None else townhouse_share_penalty
     scored = scored_df.assign(p=probabilities(scored_df))
@@ -388,6 +395,13 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
             if townhouses:
                 slot = (np.arange(k) * len(order)) // k  # number i's building, dealt out evenly in road order
                 P = P + TOWNHOUSE_SLOT_BONUS * (np.arange(len(order))[None, :] == slot[:, None])
+            elif property_bonus and 2 <= k < len(home_buildings):
+                homes_in_order = [b for b in order if (street, b) in home]
+                along = np.array([positions[(street, b)] * direction for b in homes_in_order])
+                cuts = sorted(np.argsort(np.diff(along))[::-1][: k - 1] + 1)  # widest gaps
+                group_of = {b: int(np.searchsorted(cuts, idx, side="right")) for idx, b in enumerate(homes_in_order)}
+                in_slot = np.array([[group_of.get(b, -1) == i for b in order] for i in range(k)])
+                P = P + property_bonus * in_slot
             # MATCH_BONUS: placing a number always beats leaving it out, so
             # every number gets a building in road order when the side has
             # enough; a non-candidate pair is never allowed.
@@ -403,3 +417,45 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
             min_p = CLAIM_MIN_P if claim_min_p is None else claim_min_p
             claimed.update(b for n, b in best[1].items() if np.mean(prob[(n, b)]) >= min_p)
     return picks
+
+
+# --- properties -------------------------------------------------------------
+# A rural property is often a house plus a barn or garage a few meters away
+# (Grovers Crossing's 1: 62 and 76 m2 buildings, 10.7 m apart) -- one
+# number, not two. Buildings within PROPERTY_GAP_M of each other form one
+# property when the group is small; bigger chains are village blocks and
+# stay single buildings. Used to score "right property" next to "right
+# building" (handing numbers out per property instead of per building was
+# tried and didn't help).
+PROPERTY_GAP_M = 12
+PROPERTY_MAX_BUILDINGS = 3
+
+PROPERTIES_SQL = """
+WITH b AS (
+    SELECT source_id, geom FROM address_inference.structures
+    WHERE state_fips = %(state_fips)s AND source_id = ANY(%(ids)s)
+), c AS (
+    SELECT source_id, ST_ClusterDBSCAN(ST_Transform(geom, 26919), %(gap)s, 1) OVER () AS cid FROM b
+)
+SELECT source_id, cid, count(*) OVER (PARTITION BY cid) FROM c
+"""
+
+
+def load_properties(dsn, region, building_ids, gap_m=None) -> dict:
+    """{source_id: property id} for buildings in small groups (2..
+    PROPERTY_MAX_BUILDINGS within gap_m of each other); others map to
+    themselves. Distances in UTM 19N (EPSG:26919), Maine's zone."""
+    gap = PROPERTY_GAP_M if gap_m is None else gap_m
+    params = {"state_fips": region.state_fips, "ids": list(building_ids), "gap": gap}
+    with psycopg.connect(dsn) as conn:
+        rows = conn.execute(PROPERTIES_SQL, params).fetchall()
+    members = defaultdict(list)
+    for source_id, cid, size in rows:
+        if 2 <= size <= PROPERTY_MAX_BUILDINGS:
+            members[cid].append(source_id)
+    out = {}
+    for ids in members.values():
+        pid = "P:" + min(ids)
+        for source_id in ids:
+            out[source_id] = pid
+    return out

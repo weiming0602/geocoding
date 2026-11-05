@@ -77,9 +77,13 @@ def cross_validated_picks(candidate_df):
     return top_picks(scored), importance
 
 
-def score_method(address_df, candidate_df, picks):
-    """Error (m) and right-building flag per scorable address. An address
-    with no pick (no candidate buildings) falls back to its M0 point."""
+def score_method(address_df, candidate_df, picks, property_of=None):
+    """Error (m), right-building and right-property flags per scorable
+    address. An address with no pick (no candidate buildings) falls back to
+    its M0 point. Right property: the pick is the E911 building or another
+    building of the same small group (order.load_properties) -- a house's
+    barn or garage."""
+    prop = (lambda b: property_of.get(b, b)) if property_of else (lambda b: b)
     coords = candidate_df.drop_duplicates("source_id").set_index("source_id")[["lat", "lon"]]
     rows = []
     for a in address_df[address_df["scorable"]].itertuples():
@@ -88,6 +92,8 @@ def score_method(address_df, candidate_df, picks):
         rows.append({
             "error_m": float(dataset.haversine_m(a.true_lat, a.true_lon, lat, lon)),
             "right_building": pick is not None and pick == a.true_building,
+            "right_property": pick is not None and isinstance(a.true_building, str)
+                              and prop(pick) == prop(a.true_building),
             "has_true_building": isinstance(a.true_building, str),
         })
     return pd.DataFrame(rows)
@@ -103,6 +109,7 @@ def summarize(name, scored):
         "median m": errors.median(),
         "p90 m": errors.quantile(0.9),
         "right building": with_truth["right_building"].mean() if len(with_truth) else np.nan,
+        "right property": with_truth["right_property"].mean() if len(with_truth) else np.nan,
     }
 
 
@@ -206,11 +213,13 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     picks["ML+order"] = order.order_constrained_picks(
         address_df, scored, order.load_positions(dsn, region, town), picks["ML"], street_order=street_order)
 
-    table = [summarize("M0 interpolation (today)", score_method(address_df, candidate_df, None))]
+    property_of = order.load_properties(
+        dsn, region, set(candidate_df["source_id"]) | set(address_df["true_building"].dropna()))
+    table = [summarize("M0 interpolation (today)", score_method(address_df, candidate_df, None, property_of))]
     for name, label in (("M1", "M1 snap to building"), ("M2", "M2 rank order"),
                         ("M3", "M3 rank order, no outbuildings"), ("ML", "ML ranker (LightGBM)"),
                         ("ML+order", "ML + road order (one-to-one)")):
-        table.append(summarize(label, score_method(address_df, candidate_df, picks[name])))
+        table.append(summarize(label, score_method(address_df, candidate_df, picks[name], property_of)))
 
     coverage = {
         "E911 addresses on matched streets": len(address_df),
@@ -230,11 +239,12 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
 
 def report_markdown(town, table, coverage, importance) -> str:
     fmt = table.copy()
-    for col in ("<= 25 m", "<= 50 m", "<= 150 m", "right building"):
+    for col in ("<= 25 m", "<= 50 m", "<= 150 m", "right building", "right property"):
         fmt[col] = fmt[col].map(lambda v: "–" if pd.isna(v) else f"{v:.1%}")
     for col in ("median m", "p90 m"):
         fmt[col] = fmt[col].map(lambda v: f"{v:,.0f}")
     fmt.loc[0, "right building"] = "–"
+    fmt.loc[0, "right property"] = "–"
     lines = [f"# {town}: building-address methods vs. E911 ({date.today().isoformat()})", ""]
     lines += [f"- {k}: {v:,}" for k, v in coverage.items()]
     header = "| " + " | ".join(fmt.columns) + " |"
