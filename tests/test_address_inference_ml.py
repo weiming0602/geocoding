@@ -312,3 +312,22 @@ def test_townhouse_side_deals_numbers_out_two_per_building_in_road_order():
     scored = pd.DataFrame(rows, columns=["address_id", "source_id", "score", "same_side", "dist_vs_nearest_road"])
     picks = order.order_constrained_picks(address_df, scored, positions, {})
     assert [picks[f"a{n}"] for n in nums] == ["b1", "b1", "b2", "b2", "b3", "b3", "b4", "b4"]
+
+
+def test_townhouse_street_puts_an_odd_number_in_an_even_side_building():
+    from address_inference import order
+    # Harvest Ridge Road in miniature, buildings in road order: right b1
+    # (18, 19, 20), left b2 (21, 23), right b3 (24, 26), right b4 (28, 30).
+    layout = {18: "b1", 19: "b1", 20: "b1", 21: "b2", 23: "b2", 24: "b3", 26: "b3", 28: "b4", 30: "b4"}
+    side = {"b1": 0, "b3": 0, "b4": 0, "b2": 1}  # parity whose side the building is on
+    address_df = pd.DataFrame([{"id": f"a{n}", "number": n, "street": "HR", "scorable": True} for n in layout])
+    positions = {("HR", b): 100.0 + 50 * i for i, b in enumerate(("b1", "b2", "b3", "b4"))}
+    rows = []
+    for n, truth in layout.items():
+        for b in side:
+            rows.append((f"a{n}", b, 1.0 if b == truth else 0.5, side[b] == n % 2, 0.0))
+    scored = pd.DataFrame(rows, columns=["address_id", "source_id", "score", "same_side", "dist_vs_nearest_road"])
+    picks = order.order_constrained_picks(address_df, scored, positions, {})
+    assert {n: picks.get(f"a{n}") for n in layout} == layout
+    separate = order.order_constrained_picks(address_df, scored, positions, {}, joint_townhouses=False)
+    assert separate.get("a19") != "b1"  # side by side, 19 can't join 18 and 20

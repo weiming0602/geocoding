@@ -173,6 +173,83 @@ def monotone_assign(P, share_penalty=None, max_per_building=None):
     return D[k, m], out
 
 
+# Townhouse buildings: a run of 1-3 consecutive numbers, at most two of one
+# parity (owner's rule: 26-28-31, 30-32-33; never 26-28-30-32). A number on
+# the far side's parity is only allowed as the building's minority.
+TOWNHOUSE_MAX_NUMBERS = 3
+TOWNHOUSE_JOINT_RATIO = 1.5
+TOWNHOUSE_MAX_SAME_PARITY = 2
+
+
+def _assign_townhouse_street(street, rows, p_both, side_of, positions, home, claimed, share_penalty):
+    """{number: (building, probability)} for one townhouse street, both
+    parities together: numbers in increasing order walk the street's home
+    buildings (either side) in road order, each building taking a run of
+    1-3 numbers, dealt out in equal shares (TOWNHOUSE_SLOT_BONUS)."""
+    numbers = sorted(rows["number"].unique())
+    ids_by_number = defaultdict(list)
+    for address_id, number in zip(rows["id"], rows["number"]):
+        ids_by_number[number].append(address_id)
+    prob, same = defaultdict(list), {}
+    for number, ids in ids_by_number.items():
+        for address_id in ids:
+            for b, p in p_both.get(address_id, []):
+                if (street, b) in positions and (street, b) in home and b not in claimed:
+                    prob[(number, b)].append(p)
+                    same[(number, b)] = side_of.get((address_id, b), False)
+    buildings = sorted({b for _, b in prob})
+    if not buildings:
+        return {}
+    k, m = len(numbers), len(buildings)
+    best = None
+    for direction in (1, -1):
+        order = sorted(buildings, key=lambda b: direction * positions[(street, b)])
+        slot = (np.arange(k) * m) // k
+        # D[i][j]: best for the first i numbers using the first j buildings.
+        D = np.full((k + 1, m + 1), -np.inf)
+        D[0, :] = 0.0
+        back = {}
+        for i in range(1, k + 1):
+            for j in range(m + 1):
+                cand = [(D[i - 1, j], ("skip_n",))]
+                if j > 0:
+                    cand.append((D[i, j - 1], ("skip_b",)))
+                    b = order[j - 1]
+                    for size in range(1, TOWNHOUSE_MAX_NUMBERS + 1):
+                        if size > i:
+                            break
+                        run = numbers[i - size:i]
+                        if any((n, b) not in prob for n in run):
+                            continue
+                        parities = [n % 2 for n in run]
+                        if max(parities.count(0), parities.count(1)) > TOWNHOUSE_MAX_SAME_PARITY:
+                            continue
+                        n_same = sum(same[(n, b)] for n in run)
+                        if n_same * 2 <= size:  # far-side numbers must be the minority
+                            continue
+                        score = sum(np.mean(prob[(n, b)]) + MATCH_BONUS
+                                    + TOWNHOUSE_SLOT_BONUS * (slot[numbers.index(n)] == j - 1) for n in run)
+                        score -= share_penalty * (size - 1)
+                        cand.append((D[i - size, j - 1] + score, ("run", size)))
+                value, how = max(cand, key=lambda c: c[0])
+                D[i, j], back[(i, j)] = value, how
+        out, i, j = {}, k, m
+        while i > 0 and (i, j) in back:
+            how = back[(i, j)]
+            if how[0] == "skip_n":
+                i -= 1
+            elif how[0] == "skip_b":
+                j -= 1
+            else:
+                b = order[j - 1]
+                for n in numbers[i - how[1]:i]:
+                    out[n] = (b, float(np.mean(prob[(n, b)])))
+                i, j = i - how[1], j - 1
+        if best is None or D[k, m] > best[0]:
+            best = (D[k, m], out)
+    return best[1]
+
+
 def probabilities(scored_df) -> pd.Series:
     """Softmax of the ranker's scores within each address."""
     shifted = scored_df["score"] - scored_df.groupby("address_id")["score"].transform("max")
@@ -190,7 +267,8 @@ MATCH_BONUS = 0.3
 def order_constrained_picks(address_df, scored_df, positions, fallback,
                             rank_weight=RANK_WEIGHT, same_side_only=True, street_order=None,
                             claim_min_p=None, other_road_closer_m=None,
-                            townhouse_ratio=None, townhouse_share_penalty=None) -> dict:
+                            townhouse_ratio=None, townhouse_share_penalty=None,
+                            joint_townhouses=True) -> dict:
     """{address_id: source_id}. `fallback` (the ranker's own picks) covers
     addresses the ordering step leaves unmatched or can't place.
 
@@ -209,16 +287,13 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     townhouse_ratio = TOWNHOUSE_RATIO if townhouse_ratio is None else townhouse_ratio
     townhouse_share_penalty = TOWNHOUSE_SHARE_PENALTY if townhouse_share_penalty is None else townhouse_share_penalty
     scored = scored_df.assign(p=probabilities(scored_df))
-    if same_side_only:
-        scored = scored[scored["same_side"].astype(bool)]
     limit = OTHER_ROAD_CLOSER_M if other_road_closer_m is None else other_road_closer_m
     if limit is not None and "dist_vs_nearest_road" in scored.columns:
         scored = scored[~(scored["dist_vs_nearest_road"] >= limit)]
+    both_sides = scored  # townhouse streets match both parities together
+    if same_side_only:
+        scored = scored[scored["same_side"].astype(bool)]
     addr = address_df[address_df["scorable"]].assign(parity=lambda d: d["number"] % 2)
-    # A number with several address points (units, outlets, a complex
-    # spread over buildings -- downtown Main Street) isn't one house: its
-    # points can sit in different buildings, so it stays out of the
-    # one-building-per-number assignment and keeps the ranker's own picks.
     number_of = dict(zip(addr["id"], addr["number"]))
     by_address = defaultdict(list)
     for row in scored[["address_id", "source_id", "p"]].itertuples(index=False):
@@ -238,7 +313,53 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         keys = sorted(groups)
     claimed = set()
 
+    # Townhouse streets (either side qualifies, see below) take both
+    # parities in one pass: a building can hold 18-19-20 or 26-28-31.
+    joint_streets = set()
+    if joint_townhouses:
+        p_all = defaultdict(set)
+        for r in both_sides[["address_id", "source_id"]].itertuples(index=False):
+            p_all[r.address_id].add(r.source_id)
+        for street, rows in addr.groupby("street"):
+            # A side looks like townhouses (as for one-side townhouse mode)...
+            side_ok = False
+            for _parity, group in rows.groupby("parity"):
+                nums = sorted(group["number"].unique())
+                blds = {b for aid in group["id"] for b, _ in by_address.get(aid, []) if (street, b) in positions}
+                homes = [b for b in blds if (street, b) in home]
+                dens = len(nums) / ((nums[-1] - nums[0]) / 2 + 1) if len(nums) > 1 else 0.0
+                side_ok |= bool(homes) and len(nums) >= townhouse_ratio * len(homes) and dens >= TOWNHOUSE_MIN_DENSITY
+            # ...AND the whole street has several numbers per home building
+            # (Harvest Ridge Road: 15 numbers, 7 buildings), unlike a street
+            # of houses numbered 1, 2, 3, 4... across both sides.
+            homes_all = {b for aid in rows["id"] for b in p_all.get(aid, ()) if (street, b) in home and (street, b) in positions}
+            # Numbers with several address points (units; School Street) are
+            # complexes, not townhouse rows: left to the per-side pass.
+            repeated = rows["number"].duplicated().any()
+            if side_ok and not repeated and homes_all and rows["number"].nunique() >= TOWNHOUSE_JOINT_RATIO * len(homes_all):
+                joint_streets.add(street)
+        side_of = {(r.address_id, r.source_id): bool(r.same_side)
+                   for r in both_sides[["address_id", "source_id", "same_side"]].itertuples(index=False)}
+        p_both = defaultdict(list)
+        for r in both_sides[["address_id", "source_id", "p"]].itertuples(index=False):
+            p_both[r.address_id].append((r.source_id, r.p))
+    done_joint = set()
+
     for street, _parity in keys:
+        if street in joint_streets:
+            if street in done_joint:
+                continue
+            done_joint.add(street)
+            street_rows = addr[addr["street"] == street]
+            assigned = _assign_townhouse_street(street, street_rows, p_both, side_of, positions, home,
+                                                claimed, townhouse_share_penalty)
+            for address_id, number in zip(street_rows["id"], street_rows["number"]):
+                if number in assigned:
+                    picks[address_id] = assigned[number][0]
+            if street_order is not None:
+                min_p = CLAIM_MIN_P if claim_min_p is None else claim_min_p
+                claimed.update(b for b, p in assigned.values() if p >= min_p)
+            continue
         group = groups[(street, _parity)]
         # Shared addresses (units in one complex) are one number: average.
         prob = defaultdict(list)
