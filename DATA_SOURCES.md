@@ -153,6 +153,21 @@ geocoding request. Current as of August 2026.
   Loaded with `python -m address_inference.parcels "dbname=geocoding" me
   --town Freeport`.
 
+### 6. US Census Bureau TIGER/Line — coastline and bays (experiment only)
+
+- **What it is:** two more TIGER/Line layers. The national "Coastline"
+  file (outer ocean edge only: for Freeport it runs 10.5 km out, past the
+  Casco Bay islands), and each county's "Area Hydrography" (AREAWATER),
+  whose bay/estuary/sound (MTFCC H2051) and ocean (H2053) polygons trace
+  the real shoreline, coves included.
+- **Why it matters:** the building-address experiment numbers deep lots
+  in columns along the road only on dead ends that stop near the water
+  (Brickyard Cove's end is 62-76 m from it). Loaded with `python -m
+  address_inference.coastline "dbname=geocoding" me
+  tl_2025_us_coastline.shp --areawater tl_2025_23005_areawater.shp`.
+  **Not used by geocoding today.**
+- **License:** public domain, same as the street data.
+
 ## How the data gets in (and stays current)
 
 | Script | What it does |

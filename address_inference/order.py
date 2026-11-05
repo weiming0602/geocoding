@@ -128,18 +128,55 @@ ORDER BY t.street, bp.source_id
 """
 
 
-def load_positions(dsn, region, town, by_lot=True) -> dict:
-    """{(street, source_id): meters along the street}. With by_lot, a
-    building on a tax lot that fronts the street takes the lot's frontage
-    position (LOT_POSITIONS_SQL) instead of its own projection."""
+# Owner's rule: the lot-column numbering (deep lots numbered across, in
+# columns along the road) belongs to dead ends that run down to the water,
+# like Brickyard Cove (its end is 62-76 m from the shore), not to ordinary
+# streets. A street qualifies when an end touches no other road and lies
+# within COASTAL_END_M of the shoreline (address_inference.coastline).
+COASTAL_END_M = 150
+COASTAL_DEAD_ENDS_SQL = f"""
+WITH lines AS (
+    SELECT sms.label_street AS street, ST_LineMerge(ST_Union(s.geom)) AS g
+    FROM address_inference.street_match_segments sms
+    JOIN streets s ON s.tlid = sms.tlid
+    WHERE sms.region_id = %(region)s AND sms.town = %(town)s
+    GROUP BY sms.label_street
+), ends AS (
+    SELECT street, g, ST_StartPoint(g) AS p, ST_LineInterpolatePoint(g, 0.01) AS inner_p FROM lines
+    WHERE ST_GeometryType(g) = 'ST_LineString'
+    UNION ALL
+    SELECT street, g, ST_EndPoint(g), ST_LineInterpolatePoint(g, 0.99) FROM lines
+    WHERE ST_GeometryType(g) = 'ST_LineString'
+)
+SELECT DISTINCT e.street FROM ends e
+WHERE NOT EXISTS (SELECT 1 FROM streets o WHERE o.geom && ST_Expand(e.p, 0.0001)
+                    AND ST_DWithin(o.geom::geography, e.p::geography, 2)
+                    AND NOT ST_DWithin(o.geom::geography, e.inner_p::geography, 1))
+  AND EXISTS (SELECT 1 FROM address_inference.coastline c
+               WHERE c.geom && ST_Expand(e.p, 0.003) AND ST_DWithin(c.geom::geography, e.p::geography, {COASTAL_END_M}))
+"""
+
+
+def coastal_dead_ends(conn, params) -> set:
+    if conn.execute("SELECT to_regclass('address_inference.coastline') IS NULL").fetchone()[0]:
+        return set()
+    return {street for (street,) in conn.execute(COASTAL_DEAD_ENDS_SQL, params).fetchall()}
+
+
+def load_positions(dsn, region, town, by_lot="coastal") -> dict:
+    """{(street, source_id): meters along the street}. by_lot: on which
+    streets a building on an ordinary tax lot that fronts the street takes
+    the lot's frontage position (LOT_POSITIONS_SQL) instead of its own
+    projection -- "coastal" (dead ends near the shore), True (all), False."""
     params = {"region": region.id, "town": town, "state_fips": region.state_fips}
     with psycopg.connect(dsn) as conn:
         rows = conn.execute(POSITIONS_SQL, params).fetchall()
         out = {(street, source_id): along for street, source_id, along in rows}
         if by_lot and not conn.execute("SELECT to_regclass('address_inference.building_parcels') IS NULL").fetchone()[0]:
+            only = coastal_dead_ends(conn, params) if by_lot == "coastal" else None
             sql = LOT_POSITIONS_SQL.replace("{max_buildings}", str(LOT_MAX_BUILDINGS))
             for street, source_id, along in conn.execute(sql, params).fetchall():
-                if (street, source_id) in out:
+                if (street, source_id) in out and (only is None or street in only):
                     out[(street, source_id)] = along
     return out
 
