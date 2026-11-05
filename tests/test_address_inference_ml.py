@@ -283,3 +283,32 @@ def test_order_takes_no_building_much_nearer_another_road():
     assert picks["a4"] == "own"  # the corner house is 42 m nearer another road
     kept = order.order_constrained_picks(address_df, scored, positions, {"a4": "corner"}, other_road_closer_m=60)
     assert kept["a4"] == "corner"
+
+
+def test_monotone_assign_caps_a_building_at_two_numbers():
+    from address_inference import order
+    P = np.array([[0.9, 0.0], [0.9, 0.1], [0.9, 0.2]])
+    _, two = order.monotone_assign(P, share_penalty=0.1, max_per_building=2)
+    assert two == {0: 0, 1: 0, 2: 1}
+    _, strict = order.monotone_assign(P, share_penalty=np.inf)
+    assert sorted(strict.values()) == [0, 1]  # one number per building, one left over
+
+
+def test_townhouse_side_deals_numbers_out_two_per_building_in_road_order():
+    from address_inference import order
+    # 8 sequential even numbers, 4 townhouse buildings in road order; the
+    # ranker's scores all lean one building too early (houses start well
+    # into the road), as on Harvest Ridge Road.
+    nums = [26, 28, 30, 32, 34, 36, 38, 40]
+    blds = ["b1", "b2", "b3", "b4"]
+    address_df = pd.DataFrame([{"id": f"a{n}", "number": n, "street": "HR", "scorable": True} for n in nums])
+    positions = {("HR", b): 100.0 * (i + 1) for i, b in enumerate(blds)}
+    rows = []
+    for i, n in enumerate(nums):
+        right = i // 2
+        early = max(0, right - 1)
+        for j, b in enumerate(blds):
+            rows.append((f"a{n}", b, 2.0 if j == early else (1.0 if j == right else 0.0), True, 0.0))
+    scored = pd.DataFrame(rows, columns=["address_id", "source_id", "score", "same_side", "dist_vs_nearest_road"])
+    picks = order.order_constrained_picks(address_df, scored, positions, {})
+    assert [picks[f"a{n}"] for n in nums] == ["b1", "b1", "b2", "b2", "b3", "b3", "b4", "b4"]

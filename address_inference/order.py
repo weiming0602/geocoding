@@ -104,50 +104,72 @@ def load_positions(dsn, region, town) -> dict:
 SHARE_PENALTY = float("inf")
 
 
-def monotone_assign(P, share_penalty=None):
+# Townhouses (Harvest Ridge Road: 18-19-20, 23-25, 26-28 ... one building
+# each): on a street side with at least TOWNHOUSE_RATIO times as many
+# numbers as buildings whose nearest road is this street, consecutive
+# numbers may share a building, at TOWNHOUSE_SHARE_PENALTY each.
+TOWNHOUSE_RATIO = 1.5
+TOWNHOUSE_SHARE_PENALTY = 0.1
+# In townhouse mode the side's numbers are dealt out to its home buildings
+# in road order, in equal shares (12 numbers, 6 buildings: two each); a
+# number on its slot's building gets this bonus on top of the ranker's
+# probability. The ranker's own interpolation-based scores can't do this:
+# where the houses start well into the road (Harvest Ridge Road: 165 m),
+# every number is expected too early and lands one building short.
+TOWNHOUSE_SLOT_BONUS = 1.0
+# ...and only where the side's numbers run in sequence (at least this share
+# of the parity's slots between its lowest and highest number are taken):
+# townhouse rows are numbered 26, 28, 30, 32...; rural roads jump.
+TOWNHOUSE_MIN_DENSITY = 0.8
+
+
+# A building holds at most this many numbers of one parity (owner's rule:
+# a townhouse building on one side has one or two numbers; a gap in the
+# numbers is where the next building starts).
+MAX_PER_BUILDING = 2
+
+
+def monotone_assign(P, share_penalty=None, max_per_building=None):
     """P[i, j]: score for number i (ascending) on building j (in road
     order). Returns (total, {i: j}) maximizing the summed score over
     assignments where buildings never go backwards along the road; a number
-    may stay unmatched, and a number may take the same building as the
-    number before it for SHARE_PENALTY (None = SHARE_PENALTY; use inf for
-    strictly one number per building)."""
+    may stay unmatched, and up to `max_per_building` consecutive numbers
+    may share a building, each extra one costing `share_penalty` (None =
+    SHARE_PENALTY; inf = strictly one number per building)."""
     penalty = SHARE_PENALTY if share_penalty is None else share_penalty
+    cap = (MAX_PER_BUILDING if max_per_building is None else max_per_building) if np.isfinite(penalty) else 1
     k, m = P.shape
     NEG = -np.inf
     # D[i, j]: best for numbers < i using buildings < j.
-    # M[i, j]: best for numbers < i with number i-1 on building j-1.
+    # M[c, i, j]: best for numbers < i with number i-1 the (c+1)-th number on building j-1.
     D = np.zeros((k + 1, m + 1))
-    M = np.full((k + 1, m + 1), NEG)
-    back_d = np.zeros((k + 1, m + 1), dtype=np.int8)  # 0 skip number, 1 skip building, 2 from M
-    back_m = np.zeros((k + 1, m + 1), dtype=np.int8)  # 0 new building, 1 share with number before
+    M = np.full((cap, k + 1, m + 1), NEG)
+    back_d = np.zeros((k + 1, m + 1), dtype=np.int8)  # 0 skip number, 1 skip building, 2+c from M[c]
     for i in range(1, k + 1):
+        for j in range(1, m + 1):
+            M[0, i, j] = D[i - 1, j - 1] + P[i - 1, j - 1]
+            for c in range(1, cap):
+                M[c, i, j] = M[c - 1, i - 1, j] + P[i - 1, j - 1] - penalty
         for j in range(m + 1):
-            if j > 0:
-                new = D[i - 1, j - 1] + P[i - 1, j - 1]
-                share = M[i - 1, j] + P[i - 1, j - 1] - penalty if np.isfinite(penalty) else NEG
-                M[i, j], back_m[i, j] = (share, 1) if share > new else (new, 0)
             best, how = D[i - 1, j], 0
             if j > 0 and D[i, j - 1] > best:
                 best, how = D[i, j - 1], 1
-            if M[i, j] > best:
-                best, how = M[i, j], 2
+            for c in range(cap):
+                if M[c, i, j] > best:
+                    best, how = M[c, i, j], 2 + c
             D[i, j], back_d[i, j] = best, how
-    out, i, j, in_m = {}, k, m, False
+    out, i, j = {}, k, m
     while i > 0:
-        if in_m:
-            out[i - 1] = j - 1
-            if back_m[i, j] == 1:
-                i -= 1  # number before shares building j-1: stay in M
-            else:
-                i, j, in_m = i - 1, j - 1, False
-            continue
         how = back_d[i, j]
         if how == 0:
             i -= 1
         elif how == 1:
             j -= 1
         else:
-            in_m = True
+            c = how - 2  # numbers i-1-c .. i-1 all on building j-1
+            for step in range(c + 1):
+                out[i - 1 - step] = j - 1
+            i, j = i - 1 - c, j - 1
     return D[k, m], out
 
 
@@ -167,7 +189,8 @@ MATCH_BONUS = 0.3
 
 def order_constrained_picks(address_df, scored_df, positions, fallback,
                             rank_weight=RANK_WEIGHT, same_side_only=True, street_order=None,
-                            claim_min_p=None, other_road_closer_m=None) -> dict:
+                            claim_min_p=None, other_road_closer_m=None,
+                            townhouse_ratio=None, townhouse_share_penalty=None) -> dict:
     """{address_id: source_id}. `fallback` (the ranker's own picks) covers
     addresses the ordering step leaves unmatched or can't place.
 
@@ -183,6 +206,8 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     an earlier street took is off limits to later ones. None = each street
     on its own, as before."""
     picks = dict(fallback)
+    townhouse_ratio = TOWNHOUSE_RATIO if townhouse_ratio is None else townhouse_ratio
+    townhouse_share_penalty = TOWNHOUSE_SHARE_PENALTY if townhouse_share_penalty is None else townhouse_share_penalty
     scored = scored_df.assign(p=probabilities(scored_df))
     if same_side_only:
         scored = scored[scored["same_side"].astype(bool)]
@@ -198,6 +223,12 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     by_address = defaultdict(list)
     for row in scored[["address_id", "source_id", "p"]].itertuples(index=False):
         by_address[row.address_id].append((row.source_id, row.p))
+    # Buildings whose nearest road is the address's own street ("home").
+    street_of = dict(zip(addr["id"], addr["street"]))
+    home = set()
+    if "dist_vs_nearest_road" in scored.columns:
+        for row in scored.loc[scored["dist_vs_nearest_road"] < 1, ["address_id", "source_id"]].itertuples(index=False):
+            home.add((street_of.get(row.address_id), row.source_id))
 
     groups = dict(tuple(addr.groupby(["street", "parity"])))
     if street_order is not None:
@@ -223,15 +254,25 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         number_frac = np.arange(k) / (k - 1) if k > 1 else np.array([0.5])
         building_frac = np.arange(m) / (m - 1) if m > 1 else np.array([0.5])
         rank_fit = 1 - np.abs(number_frac[:, None] - building_frac[None, :])
+        home_buildings = [b for b in buildings if (street, b) in home]
+        density = k / ((numbers[-1] - numbers[0]) / 2 + 1) if k > 1 else 0.0
+        townhouses = (len(home_buildings) > 0 and k >= townhouse_ratio * len(home_buildings)
+                      and density >= TOWNHOUSE_MIN_DENSITY)
+        share = townhouse_share_penalty if townhouses else None
+        candidates = home_buildings if townhouses else buildings
         best = None
         for direction in (1, -1):
-            order = sorted(buildings, key=lambda b: direction * positions[(street, b)])
+            order = sorted(candidates, key=lambda b: direction * positions[(street, b)])
             P = np.array([[np.mean(prob[(n, b)]) if (n, b) in prob else np.nan for b in order] for n in numbers])
+            if townhouses:
+                slot = (np.arange(k) * len(order)) // k  # number i's building, dealt out evenly in road order
+                P = P + TOWNHOUSE_SLOT_BONUS * (np.arange(len(order))[None, :] == slot[:, None])
             # MATCH_BONUS: placing a number always beats leaving it out, so
             # every number gets a building in road order when the side has
             # enough; a non-candidate pair is never allowed.
-            P = np.where(np.isnan(P), -1e9, P + rank_weight * rank_fit + MATCH_BONUS)
-            total, match = monotone_assign(P)
+            fit = rank_weight * rank_fit if not townhouses else 0.0
+            P = np.where(np.isnan(P), -1e9, P + fit + MATCH_BONUS)
+            total, match = monotone_assign(P, share_penalty=share)
             if best is None or total > best[0]:
                 best = (total, {numbers[i]: order[j] for i, j in match.items()})
         for address_id, number in zip(group["id"], group["number"]):
