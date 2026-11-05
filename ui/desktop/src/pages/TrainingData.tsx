@@ -170,14 +170,32 @@ export default function TrainingData() {
   );
 
   const total = data?.addresses.length ?? 0;
-  // Same base as evaluate's report: right/wrong/missed are shares of the
-  // addresses that HAVE a building at their E911 point (a label);
-  // "no building" is a share of all addresses.
-  const labelled = total - (data?.summary.no_building ?? 0);
-  const share = (status: TrainingStatus, n: number) => {
-    const base = status === 'no_building' ? total : labelled;
-    return base ? `${((100 * n) / base).toFixed(1)}%` : '';
-  };
+  // Same base as evaluate's report: each street number counts once (141
+  // Main Street's 563 E911 points weigh as one address), and right/wrong/
+  // missed are shares of the numbers whose points HAVE a building at the
+  // E911 point; "no building" is a share of all of them. The big number on
+  // each card is still the count of E911 points.
+  const weightedShare = useMemo(() => {
+    const perNumber = new Map<string, number>();
+    for (const a of data?.addresses ?? []) {
+      const key = `${a.street}|${a.number}`;
+      perNumber.set(key, (perNumber.get(key) ?? 0) + 1);
+    }
+    const sums: Record<string, number> = {};
+    let all = 0;
+    let labelledWeight = 0;
+    for (const a of data?.addresses ?? []) {
+      const w = 1 / (perNumber.get(`${a.street}|${a.number}`) ?? 1);
+      sums[a.status] = (sums[a.status] ?? 0) + w;
+      all += w;
+      if (a.status !== 'no_building') labelledWeight += w;
+    }
+    return (status: TrainingStatus) => {
+      const base = status === 'no_building' ? all : labelledWeight;
+      return base ? `${((100 * (sums[status] ?? 0)) / base).toFixed(1)}%` : '';
+    };
+  }, [data]);
+  const share = (status: TrainingStatus) => weightedShare(status);
 
   return (
     <div>
@@ -297,7 +315,7 @@ export default function TrainingData() {
                   <div style={{ fontFamily: 'var(--font-heading)', fontSize: 22, fontVariantNumeric: 'tabular-nums' }}>
                     {n.toLocaleString()}{' '}
                     <span className="text-muted" style={{ fontSize: 14 }}>
-                      {share(status, n)}
+                      {share(status)} of numbers
                     </span>
                   </div>
                 </label>
