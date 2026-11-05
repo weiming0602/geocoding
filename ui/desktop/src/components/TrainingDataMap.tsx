@@ -90,8 +90,12 @@ function links(addresses: TrainingAddress[]): GeoJSON.FeatureCollection {
   };
 }
 
+export function addressLabel(a: TrainingAddress): string {
+  return `${a.number} ${a.street}${a.unit ? `, ${a.unit}` : ''}`;
+}
+
 export function describe(a: TrainingAddress): string {
-  const where = `${a.number} ${a.street}`;
+  const where = addressLabel(a);
   switch (a.status) {
     case 'right':
       return `${where}: right building (${a.errorMeters} m from the E911 point)`;

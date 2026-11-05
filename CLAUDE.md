@@ -67,7 +67,11 @@ read-write).
   the E911 building vs. the picked one. The tab shows only in a browser
   that has unlocked `/owner`; the endpoint 404s where the experiment never
   ran (the droplets). Regions are TOML files in
-  `address_inference/regions/`.
+  `address_inference/regions/`. `python -m address_inference.e911_details
+  "dbname=geocoding" me --town Freeport` loads each E911 point's unit ("Unit
+  14" -- one number can be a whole complex) and placement ("Geocoding" =
+  estimated along the road, not on a building) from the public points layer;
+  the Training data tab shows both.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

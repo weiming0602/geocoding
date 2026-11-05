@@ -9,7 +9,7 @@ import type {
 } from '../../../shared/api/types';
 import AccountTabs, { ADMIN_PASSCODE_STORAGE_KEY } from '../components/AccountTabs';
 import PageHeader from '../components/PageHeader';
-import TrainingDataMap, { BUILDING_COLORS, STATUS_COLORS, describe } from '../components/TrainingDataMap';
+import TrainingDataMap, { BUILDING_COLORS, STATUS_COLORS, addressLabel, describe } from '../components/TrainingDataMap';
 
 // Owner-only: the building-address ML experiment's training data on a map
 // (address_inference/ -- see docs/superpowers/specs/2026-11-02-building-
@@ -146,7 +146,7 @@ export default function TrainingData() {
     return data.addresses
       .filter((a) => visible.has(a.status))
       .filter((a) => !changedOnly || a.changedFromMl)
-      .filter((a) => !needle || `${a.number} ${a.street}`.includes(needle))
+      .filter((a) => !needle || addressLabel(a).toUpperCase().includes(needle))
       .sort((a, b) => b.errorMeters - a.errorMeters);
   }, [data, visible, search, changedOnly]);
 
@@ -348,6 +348,12 @@ export default function TrainingData() {
                     : 'Same pick as ML alone.'}
                 </div>
               )}
+              {selected.placement && (
+                <div className="text-muted" style={{ fontSize: 13, marginTop: 4 }}>
+                  E911 placement: {selected.placement}
+                  {!selected.placement.startsWith('Structure') ? ' (not placed on a building)' : ''}
+                </div>
+              )}
               <div className="text-muted" style={{ fontSize: 13, marginTop: 4 }}>
                 E911 building: {selected.trueBuilding ?? 'none'}
                 {selected.trueBuilding && sqmeters.get(selected.trueBuilding) != null
@@ -381,7 +387,7 @@ export default function TrainingData() {
             <input
               className="input"
               style={{ maxWidth: 260 }}
-              placeholder="Filter by street, e.g. MAIN ST"
+              placeholder="Filter, e.g. MAIN ST or UNIT 14"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
@@ -412,7 +418,12 @@ export default function TrainingData() {
                     }}
                   >
                     <td>
-                      {a.number} {a.street}
+                      {addressLabel(a)}
+                      {a.placement && !a.placement.startsWith('Structure') && (
+                        <span className="tag tag-neutral" style={{ marginLeft: 6 }} title="How E911 placed this point">
+                          {a.placement}
+                        </span>
+                      )}
                     </td>
                     <td>
                       <Swatch color={STATUS_COLORS[a.status]} />

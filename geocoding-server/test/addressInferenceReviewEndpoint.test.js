@@ -20,6 +20,8 @@ async function seedPredictions(pool) {
       ('me', 'Freeport', 'ml', 'a2', 14, 'MAIN ST', 43.858, -70.103, 43.8581, -70.1031, 'b2', 'b3', 43.859, -70.103, 111.4, 'wrong', 30, '2026-11-03'),
       ('me', 'Freeport', 'ml_order', 'a1', 12, 'MAIN ST', 43.857, -70.103, 43.8571, -70.1031, 'b1', 'b1', 43.857, -70.103, 4.2, 'right', 30, '2026-11-03'),
       ('me', 'Freeport', 'ml_order', 'a2', 14, 'MAIN ST', 43.858, -70.103, 43.8581, -70.1031, 'b2', 'b2', 43.858, -70.103, 3.0, 'right', 30, '2026-11-03')`);
+  await pool.query(`CREATE TABLE address_inference.e911_point_details (site_uid TEXT, town TEXT, unit TEXT, placement TEXT)`);
+  await pool.query(`INSERT INTO address_inference.e911_point_details VALUES ('a2', 'Freeport', 'Unit 14', 'Structure - Interior Unit')`);
   await pool.query(`
     CREATE TABLE address_inference.structures (source_id TEXT, sqmeters DOUBLE PRECISION, geom geometry(MultiPolygon, 4326))`);
   await pool.query(`
@@ -96,6 +98,9 @@ test('GET /admin/address-inference/review defaults to ML + road order and flags 
         const a2 = body.addresses.find((a) => a.id === 'a2');
         assert.equal(a2.changedFromMl, true);
         assert.equal(a2.mlStatus, 'wrong');
+        assert.equal(a2.unit, 'Unit 14');
+        assert.equal(a2.placement, 'Structure - Interior Unit');
+        assert.equal(body.addresses.find((a) => a.id === 'a1').unit, null);
         assert.equal(body.addresses.find((a) => a.id === 'a1').changedFromMl, false);
       }),
     { seedStreets: false, geoOptions: { postgis: true }, geoSeed: seedPredictions }

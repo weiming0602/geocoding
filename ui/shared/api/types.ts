@@ -536,6 +536,10 @@ export type TrainingStatus = 'right' | 'wrong' | 'missed' | 'no_building';
 export type TrainingAddress = {
   id: string;
   number: number;
+  // E911's unit ("Unit 14") when one number covers several units, and how
+  // the state placed the point ("Structure - Rooftop", "Geocoding", ...).
+  unit: string | null;
+  placement: string | null;
   street: string;
   e911: { latitude: number; longitude: number };
   interpolated: { latitude: number; longitude: number };

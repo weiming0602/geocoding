@@ -57,11 +57,19 @@ async function getAddressInferenceReview(db, town, method) {
 
     // ml_status/ml_pick: what the ranker alone did, so the page can show
     // where road order changed the pick.
+    // Unit and placement (address_inference.e911_details) when loaded.
+    const { rows: [{ has_details }] } = await db.query(
+      "SELECT to_regclass('address_inference.e911_point_details') IS NOT NULL AS has_details"
+    );
+    const details = has_details
+      ? 'LEFT JOIN address_inference.e911_point_details d ON d.site_uid = p.address_id'
+      : 'LEFT JOIN (SELECT NULL::text AS site_uid, NULL::text AS unit, NULL::text AS placement) d ON false';
     const { rows } = await db.query(
       `SELECT p.address_id, p.address_number, p.street, p.e911_lat, p.e911_lon, p.m0_lat, p.m0_lon,
               p.true_building, p.picked_building, p.picked_lat, p.picked_lon, p.error_m, p.status, p.candidates,
-              base.status AS ml_status, base.picked_building AS ml_pick
+              base.status AS ml_status, base.picked_building AS ml_pick, d.unit, d.placement
        FROM address_inference.ml_predictions p
+       ${details}
        LEFT JOIN address_inference.ml_predictions base
          ON base.region_id = p.region_id AND base.town = p.town AND base.method = $4
         AND base.address_id = p.address_id
@@ -99,6 +107,8 @@ async function getAddressInferenceReview(db, town, method) {
       addresses: rows.map((r) => ({
         id: r.address_id,
         number: r.address_number,
+        unit: r.unit ?? null,
+        placement: r.placement ?? null,
         street: r.street,
         e911: { latitude: r.e911_lat, longitude: r.e911_lon },
         interpolated: { latitude: r.m0_lat, longitude: r.m0_lon },
