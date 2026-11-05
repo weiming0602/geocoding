@@ -96,12 +96,52 @@ def street_priority(address_df, street_classes) -> list:
                   key=lambda st: (street_classes.get(st, UNKNOWN_CLASS_RANK), -counts[st], st))
 
 
-def load_positions(dsn, region, town) -> dict:
-    """{(street, source_id): meters along the street}."""
+# Where each tax lot touches each street: the middle of the street's
+# stretch within LOT_FRONTAGE_M of the lot. Lots, not houses, are numbered
+# in order (the owner's matrix rule): Brickyard Cove's lots front the road
+# at 77, 190, 300 and 371 m -- 12, 22, 42, 44 in order -- while 22's house,
+# deep behind lot 42, projects to 336 m, after lot 42's front house (315 m).
+LOT_FRONTAGE_M = 15
+LOT_POSITIONS_SQL = f"""
+WITH lines AS (
+    SELECT sms.label_street AS street, ST_LineMerge(ST_Union(s.geom)) AS g
+    FROM address_inference.street_match_segments sms
+    JOIN streets s ON s.tlid = sms.tlid
+    WHERE sms.region_id = %(region)s AND sms.town = %(town)s
+    GROUP BY sms.label_street
+), touch AS (
+    SELECT l.street, p.parcel_id,
+           ST_LineLocatePoint(l.g, ST_Centroid(ST_Intersection(l.g, ST_Buffer(p.geom::geography, {LOT_FRONTAGE_M})::geometry)))
+             * ST_Length(l.g::geography) AS along
+    FROM lines l
+    JOIN address_inference.parcels p
+      ON p.state_fips = %(state_fips)s AND p.town = %(town)s AND p.geom && ST_Expand(l.g, 0.0003)
+     AND ST_DWithin(p.geom::geography, l.g::geography, {LOT_FRONTAGE_M})
+    WHERE ST_GeometryType(l.g) = 'ST_LineString'
+)
+SELECT t.street, bp.source_id, t.along
+FROM touch t JOIN address_inference.building_parcels bp ON bp.parcel_id = t.parcel_id
+WHERE t.along IS NOT NULL
+  -- ordinary lots only: a condo parcel's buildings keep their own positions
+  AND (SELECT count(*) FROM address_inference.building_parcels b2 WHERE b2.parcel_id = t.parcel_id) <= {{max_buildings}}
+ORDER BY t.street, bp.source_id
+"""
+
+
+def load_positions(dsn, region, town, by_lot=True) -> dict:
+    """{(street, source_id): meters along the street}. With by_lot, a
+    building on a tax lot that fronts the street takes the lot's frontage
+    position (LOT_POSITIONS_SQL) instead of its own projection."""
     params = {"region": region.id, "town": town, "state_fips": region.state_fips}
     with psycopg.connect(dsn) as conn:
         rows = conn.execute(POSITIONS_SQL, params).fetchall()
-    return {(street, source_id): along for street, source_id, along in rows}
+        out = {(street, source_id): along for street, source_id, along in rows}
+        if by_lot and not conn.execute("SELECT to_regclass('address_inference.building_parcels') IS NULL").fetchone()[0]:
+            sql = LOT_POSITIONS_SQL.replace("{max_buildings}", str(LOT_MAX_BUILDINGS))
+            for street, source_id, along in conn.execute(sql, params).fetchall():
+                if (street, source_id) in out:
+                    out[(street, source_id)] = along
+    return out
 
 
 # Neighboring numbers may share one building (duplexes, small multi-unit
