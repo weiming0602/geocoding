@@ -409,3 +409,20 @@ def test_a_two_house_lot_is_one_place_so_numbers_dont_shift():
     assert apart["a22"] == "front42"
     lots = order.lot_picks(address_df, scored, positions, {}, {"front42": "lot42", "back42": "lot42", "house22": "lot22"})
     assert lots == {"a22": "house22", "a42": "back42"}
+
+
+def test_a_big_complex_keeps_its_own_pick_and_its_building():
+    from address_inference import order
+    # 141 has 60 points on building c; road order alone would hand c to 135
+    # (which scores it higher) and push 141 along to d.
+    rows = [{"id": "a135", "number": 135, "street": "MAIN", "scorable": True}]
+    rows += [{"id": f"u{i}", "number": 141, "street": "MAIN", "scorable": True} for i in range(60)]
+    address_df = pd.DataFrame(rows)
+    positions = {("MAIN", "b"): 10.0, ("MAIN", "c"): 20.0, ("MAIN", "d"): 30.0}
+    sc = [("a135", "c", 2.0), ("a135", "b", 1.0)] + [(f"u{i}", b, s) for i in range(60) for b, s in (("c", 1.5), ("d", 1.4))]
+    scored = pd.DataFrame([(a, b, s, True) for a, b, s in sc], columns=["address_id", "source_id", "score", "same_side"])
+    fallback = {"a135": "c", **{f"u{i}": "c" for i in range(60)}}
+    picks = order.order_constrained_picks(address_df, scored, positions, fallback)
+    assert picks["u0"] == "c" and picks["a135"] == "b"
+    unlocked = order.order_constrained_picks(address_df, scored, positions, fallback, lock_min_points=0)
+    assert unlocked["u0"] == "d"

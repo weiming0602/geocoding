@@ -65,6 +65,13 @@ OTHER_ROAD_CLOSER_M = 25
 # Cove's 45 m2 shed next to its 297 m2 house).
 ACCESSORY_MAX_RATIO = 0.2
 
+# A number with at least this many E911 points is a big complex (141 Main
+# Street: 563 points, one building). It keeps the ranker's own pick and
+# that building is off limits to the street's other numbers, so one
+# doubtful building earlier on the street can't shift it along with every
+# ordinary house (None = off).
+LOCK_MIN_POINTS = 50
+
 # A street only claims a building it's this sure of (the ranker's
 # probability for that pair): a wrong claim on a main road would otherwise
 # push every number on the side street off by one (165 Flying Point Road
@@ -397,7 +404,7 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
                             claim_min_p=None, other_road_closer_m=None,
                             townhouse_ratio=None, townhouse_share_penalty=None,
                             joint_townhouses=True, property_slot_bonus=None, accessory_max_ratio=None,
-                            use_range_direction=True, extra_small_penalty=None) -> dict:
+                            use_range_direction=True, extra_small_penalty=None, lock_min_points=None) -> dict:
     """{address_id: source_id}. `fallback` (the ranker's own picks) covers
     addresses the ordering step leaves unmatched or can't place.
 
@@ -431,6 +438,16 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     if same_side_only:
         scored = scored[scored["same_side"].astype(bool)]
     addr = address_df[address_df["scorable"]].assign(parity=lambda d: d["number"] % 2)
+    lock = LOCK_MIN_POINTS if lock_min_points is None else lock_min_points
+    locked_buildings = defaultdict(set)  # street -> buildings held by locked complexes
+    if lock:
+        points = addr.groupby(["street", "number"])["id"].transform("size")
+        big = addr[points >= lock]
+        for address_id, street in zip(big["id"], big["street"]):
+            b = fallback.get(address_id)
+            if b is not None:
+                locked_buildings[street].add(b)
+        addr = addr[points < lock]  # the rest of the street is assigned around them
     number_of = dict(zip(addr["id"], addr["number"]))
     by_address = defaultdict(list)
     for row in scored[["address_id", "source_id", "p"]].itertuples(index=False):
@@ -514,7 +531,8 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         prob = defaultdict(list)
         for address_id in group["id"]:
             for source_id, p in by_address.get(address_id, []):
-                if (street, source_id) in positions and source_id not in claimed:
+                if ((street, source_id) in positions and source_id not in claimed
+                        and source_id not in locked_buildings.get(street, ())):
                     prob[(number_of[address_id], source_id)].append(p)
         buildings = sorted({b for _, b in prob})
         if not buildings:
