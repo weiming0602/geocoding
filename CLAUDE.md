@@ -74,8 +74,11 @@ read-write).
   the Training data tab shows both. `python -m address_inference.parcels "dbname=geocoding" me
   --town Freeport` loads tax parcels (DATA_SOURCES.md §5), links buildings to
   lots and measures each lot's frontage per street segment: parcel features
-  add ~2 points right building (TIGER 44.0%, E911 roads 64.2%), and "right
-  property" uses the parcel.
+  add ~2 points right building, and "right property" uses the parcel. Scores
+  count each street number once (141 Main Street alone has 563 E911 points);
+  ML + road order, Freeport: TIGER 50.2% right building / 59.0% within 50 m,
+  E911 roads 61.5% / 72.1%. Road order keeps sheds (<20% of their lot's
+  biggest building) out and takes each street's direction from its ranges.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

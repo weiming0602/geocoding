@@ -171,7 +171,8 @@ def covering_range(number: int, segments):
 PARCELS_SQL = """
 SELECT bp.source_id, bp.parcel_id, ST_Area(p.geom::geography),
        count(*) OVER (PARTITION BY bp.parcel_id),
-       s.sqmeters = max(s.sqmeters) OVER (PARTITION BY bp.parcel_id)
+       s.sqmeters = max(s.sqmeters) OVER (PARTITION BY bp.parcel_id),
+       s.sqmeters / nullif(max(s.sqmeters) OVER (PARTITION BY bp.parcel_id), 0)
 FROM address_inference.building_parcels bp
 JOIN address_inference.parcels p ON p.parcel_id = bp.parcel_id AND p.state_fips = bp.state_fips
 JOIN address_inference.structures s ON s.state_fips = bp.state_fips AND s.source_id = bp.source_id
@@ -190,8 +191,9 @@ ORDER BY pf.parcel_id, pf.tlid
 def load_parcels(conn, params) -> dict | None:
     if conn.execute("SELECT to_regclass('address_inference.building_parcels') IS NULL").fetchone()[0]:
         return None
-    buildings = {sid: {"parcel": pid, "area": area, "buildings": n, "largest": bool(largest)}
-                 for sid, pid, area, n, largest in conn.execute(PARCELS_SQL, params).fetchall()}
+    buildings = {sid: {"parcel": pid, "area": area, "buildings": n, "largest": bool(largest),
+                       "size_ratio": ratio}
+                 for sid, pid, area, n, largest, ratio in conn.execute(PARCELS_SQL, params).fetchall()}
     frontage = defaultdict(dict)
     for pid, tlid, m in conn.execute(FRONTAGE_SQL, params).fetchall():
         frontage[pid][tlid] = m
@@ -326,14 +328,18 @@ def _parcel_features(source_id, street_tlids, parcels) -> dict:
     info = parcels["buildings"].get(source_id) if parcels else None
     if info is None:
         return {"parcel_frontage_this": np.nan, "parcel_frontage_other": np.nan, "parcel_frontage_share": np.nan,
-                "parcel_buildings": np.nan, "parcel_largest": np.nan, "parcel_area_m2": np.nan}
+                "parcel_buildings": np.nan, "parcel_largest": np.nan, "parcel_area_m2": np.nan,
+                "parcel_size_ratio": np.nan}
     front = parcels["frontage"].get(info["parcel"], {})
     this = sum(m for tlid, m in front.items() if tlid in street_tlids)
     other = sum(m for tlid, m in front.items() if tlid not in street_tlids)
     return {"parcel_frontage_this": this, "parcel_frontage_other": other,
             "parcel_frontage_share": this / (this + other) if this + other > 0 else np.nan,
             "parcel_buildings": info["buildings"], "parcel_largest": float(info["largest"]),
-            "parcel_area_m2": info["area"]}
+            "parcel_area_m2": info["area"],
+            # This building's size vs. the lot's biggest: a shed is a small
+            # fraction (12 Brickyard Cove's lot: 297 m2 house, 45 m2 shed).
+            "parcel_size_ratio": info.get("size_ratio", np.nan) if info.get("size_ratio") is not None else np.nan}
 
 
 def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_cands, parcels=None):
@@ -455,7 +461,7 @@ FEATURES = [
     "sqmeters", "residential", "single_family", "outbldg_flag", "bigger_in_front", "segment_length_m",
     "match_exact", "beyond_end",
     "parcel_frontage_this", "parcel_frontage_other", "parcel_frontage_share", "parcel_buildings",
-    "parcel_largest", "parcel_area_m2",
+    "parcel_largest", "parcel_area_m2", "parcel_size_ratio",
 ]
 
 

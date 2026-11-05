@@ -347,3 +347,34 @@ def test_parcel_features_compare_frontage_on_this_street_with_others():
     missing = dataset._parcel_features("nowhere", {"summer1"}, parcels)
     assert all(np.isnan(v) for v in missing.values())
     assert np.isnan(dataset._parcel_features("back", {"summer1"}, None)["parcel_area_m2"])
+
+
+def test_summary_counts_each_street_number_once():
+    # 563 points of "141 Main" all wrong, one right single-family house:
+    # per point that's 0.2% right; per address number, 50%.
+    scored = pd.DataFrame(
+        [{"street": "MAIN", "number": 141, "error_m": 200.0, "right_building": False, "right_property": False,
+          "has_true_building": True}] * 563
+        + [{"street": "ELM", "number": 7, "error_m": 5.0, "right_building": True, "right_property": True,
+            "has_true_building": True}])
+    s = evaluate.summarize("x", scored)
+    assert s["right building"] == pytest.approx(0.5) and s["right building (per point)"] == pytest.approx(1 / 564)
+    assert s["numbers"] == 2
+
+
+def test_order_keeps_a_shed_out_and_follows_the_ranges_direction():
+    from address_inference import order
+    # 12's lot: house (pos 100) and a shed at 15% of its size (pos 60);
+    # 44's house at pos 400. The ranges run low -> high with position.
+    address_df = pd.DataFrame([{"id": "a12", "number": 12, "street": "BC", "scorable": True},
+                               {"id": "a44", "number": 44, "street": "BC", "scorable": True},
+                               {"id": "a30", "number": 30, "street": "BC", "scorable": True}])
+    positions = {("BC", "house12"): 100.0, ("BC", "shed"): 60.0, ("BC", "house30"): 250.0, ("BC", "house44"): 400.0}
+    rows = [("a12", "shed", 2.0, 2, 0.15, 0.0), ("a12", "house12", 1.9, 2, 1.0, 10.0),
+            ("a30", "house30", 2.0, 1, 1.0, 0.0), ("a30", "house12", 0.5, 2, 1.0, 120.0),
+            ("a44", "house12", 2.5, 2, 1.0, 290.0), ("a44", "house44", 2.0, 1, 1.0, 0.0)]
+    scored = pd.DataFrame([(aid, b, sc, True, nb, ratio, d, 0.0) for aid, b, sc, nb, ratio, d in rows],
+                          columns=["address_id", "source_id", "score", "same_side", "parcel_buildings",
+                                   "parcel_size_ratio", "d_m0", "dist_vs_nearest_road"])
+    picks = order.order_constrained_picks(address_df, scored, positions, {})
+    assert picks == {"a12": "house12", "a30": "house30", "a44": "house44"}

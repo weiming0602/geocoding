@@ -90,6 +90,7 @@ def score_method(address_df, candidate_df, picks, property_of=None):
         pick = picks.get(a.id) if picks is not None else None
         lat, lon = (coords.at[pick, "lat"], coords.at[pick, "lon"]) if pick is not None else (a.m0_lat, a.m0_lon)
         rows.append({
+            "street": a.street, "number": a.number,
             "error_m": float(dataset.haversine_m(a.true_lat, a.true_lon, lat, lon)),
             "right_building": pick is not None and pick == a.true_building,
             "right_property": pick is not None and isinstance(a.true_building, str)
@@ -99,17 +100,41 @@ def score_method(address_df, candidate_df, picks, property_of=None):
     return pd.DataFrame(rows)
 
 
+def _weights(df):
+    """1 / points sharing the address's street + number: every street number
+    counts once. 141 Main Street has 563 E911 points on one building -- 11%
+    of Freeport's points; counted per point, whether road order happened to
+    pick that one building swung the town-wide score by ~11 points."""
+    return 1.0 / df.groupby(["street", "number"])["error_m"].transform("size")
+
+
+def _wmean(values, weights):
+    return float(np.average(values, weights=weights)) if len(values) else np.nan
+
+
+def _wquantile(values, weights, q):
+    order_ = np.argsort(values.to_numpy())
+    v, w = values.to_numpy()[order_], weights.to_numpy()[order_]
+    return float(v[np.searchsorted(np.cumsum(w) / w.sum(), q)])
+
+
 def summarize(name, scored):
+    """Every street number counts once (see _weights); "right building
+    (per point)" is the old unweighted figure, for comparison."""
+    w = _weights(scored)
     errors = scored["error_m"]
     with_truth = scored[scored["has_true_building"]]
+    wt = w[scored["has_true_building"]]
     return {
         "method": name,
         "n": len(scored),
-        **{f"<= {t} m": (errors <= t).mean() for t in TIERS},
-        "median m": errors.median(),
-        "p90 m": errors.quantile(0.9),
-        "right building": with_truth["right_building"].mean() if len(with_truth) else np.nan,
-        "right property": with_truth["right_property"].mean() if len(with_truth) else np.nan,
+        "numbers": int(scored.groupby(["street", "number"]).ngroups),
+        **{f"<= {t} m": _wmean(errors <= t, w) for t in TIERS},
+        "median m": _wquantile(errors, w, 0.5),
+        "p90 m": _wquantile(errors, w, 0.9),
+        "right building": _wmean(with_truth["right_building"], wt),
+        "right property": _wmean(with_truth["right_property"], wt),
+        "right building (per point)": with_truth["right_building"].mean() if len(with_truth) else np.nan,
     }
 
 
@@ -245,12 +270,13 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
 
 def report_markdown(town, table, coverage, importance) -> str:
     fmt = table.copy()
-    for col in ("<= 25 m", "<= 50 m", "<= 150 m", "right building", "right property"):
+    for col in ("<= 25 m", "<= 50 m", "<= 150 m", "right building", "right property", "right building (per point)"):
         fmt[col] = fmt[col].map(lambda v: "–" if pd.isna(v) else f"{v:.1%}")
     for col in ("median m", "p90 m"):
         fmt[col] = fmt[col].map(lambda v: f"{v:,.0f}")
     fmt.loc[0, "right building"] = "–"
     fmt.loc[0, "right property"] = "–"
+    fmt.loc[0, "right building (per point)"] = "–"
     lines = [f"# {town}: building-address methods vs. E911 ({date.today().isoformat()})", ""]
     lines += [f"- {k}: {v:,}" for k, v in coverage.items()]
     header = "| " + " | ".join(fmt.columns) + " |"

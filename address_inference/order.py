@@ -58,6 +58,13 @@ UNKNOWN_CLASS_RANK = 4
 # from Arrowhead Ridge Road, so Arrowhead's 4 can't take it.
 OTHER_ROAD_CLOSER_M = 25
 
+# A building under this share (0.2) of the biggest building on its tax lot is an
+# accessory -- shed, garage -- and takes no number in the assignment (None =
+# no limit). E911 addresses only 15% of them in Freeport; left in, one could
+# take a number and push the street's other numbers along (12 Brickyard
+# Cove's 45 m2 shed next to its 297 m2 house).
+ACCESSORY_MAX_RATIO = 0.2
+
 # A street only claims a building it's this sure of (the ranker's
 # probability for that pair): a wrong claim on a main road would otherwise
 # push every number on the side street off by one (165 Flying Point Road
@@ -187,7 +194,8 @@ TOWNHOUSE_JOINT_RATIO = 1.5
 TOWNHOUSE_MAX_SAME_PARITY = 2
 
 
-def _assign_townhouse_street(street, rows, p_both, side_of, positions, home, claimed, share_penalty):
+def _assign_townhouse_street(street, rows, p_both, side_of, positions, home, claimed, share_penalty,
+                             directions=(1, -1)):
     """{number: (building, probability)} for one townhouse street, both
     parities together: numbers in increasing order walk the street's home
     buildings (either side) in road order, each building taking a run of
@@ -208,7 +216,7 @@ def _assign_townhouse_street(street, rows, p_both, side_of, positions, home, cla
         return {}
     k, m = len(numbers), len(buildings)
     best = None
-    for direction in (1, -1):
+    for direction in directions:
         order = sorted(buildings, key=lambda b: direction * positions[(street, b)])
         slot = (np.arange(k) * m) // k
         # D[i][j]: best for the first i numbers using the first j buildings.
@@ -256,6 +264,33 @@ def _assign_townhouse_street(street, rows, p_both, side_of, positions, home, cla
     return best[1]
 
 
+# The range direction is trusted when number and position agree at least
+# this well (rank correlation); otherwise both directions are tried.
+DIRECTION_MIN_CORR = 0.5
+
+
+def _range_directions(addr, scored_df, positions) -> dict:
+    """{street: (direction,)} where the ranges clearly say which way the
+    numbers run: +1 = numbers grow with position along the street."""
+    if "d_m0" not in scored_df.columns:
+        return {}
+    nearest = scored_df.loc[scored_df.groupby("address_id")["d_m0"].idxmin(), ["address_id", "source_id"]]
+    near_of = dict(zip(nearest["address_id"], nearest["source_id"]))
+    out = {}
+    for street, rows in addr.groupby("street"):
+        pairs = [(n, positions.get((street, near_of.get(aid)))) for aid, n in zip(rows["id"], rows["number"])]
+        pairs = [(n, p) for n, p in pairs if p is not None]
+        if len(pairs) < 3:
+            continue
+        nums, pos = (pd.Series(v, dtype=float) for v in zip(*pairs))
+        if nums.nunique() < 2 or pos.nunique() < 2:
+            continue
+        corr = nums.rank().corr(pos.rank())
+        if abs(corr) >= DIRECTION_MIN_CORR:
+            out[street] = (1 if corr > 0 else -1,)
+    return out
+
+
 def probabilities(scored_df) -> pd.Series:
     """Softmax of the ranker's scores within each address."""
     shifted = scored_df["score"] - scored_df.groupby("address_id")["score"].transform("max")
@@ -274,7 +309,8 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
                             rank_weight=RANK_WEIGHT, same_side_only=True, street_order=None,
                             claim_min_p=None, other_road_closer_m=None,
                             townhouse_ratio=None, townhouse_share_penalty=None,
-                            joint_townhouses=True, property_slot_bonus=None) -> dict:
+                            joint_townhouses=True, property_slot_bonus=None, accessory_max_ratio=None,
+                            use_range_direction=True) -> dict:
     """{address_id: source_id}. `fallback` (the ranker's own picks) covers
     addresses the ordering step leaves unmatched or can't place.
 
@@ -300,6 +336,10 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         # front both roads (173 Flying Point Road's lot has more frontage on
         # Arrowhead Ridge Road) -- it cost 0.3-0.7 points.
         scored = scored[~(scored["dist_vs_nearest_road"] >= limit)]
+    accessory = ACCESSORY_MAX_RATIO if accessory_max_ratio is None else accessory_max_ratio
+    if accessory is not None and "parcel_size_ratio" in scored.columns:
+        shed = (scored["parcel_buildings"].fillna(1) >= 2) & (scored["parcel_size_ratio"] < accessory)
+        scored = scored[~shed]
     both_sides = scored  # townhouse streets match both parities together
     if same_side_only:
         scored = scored[scored["same_side"].astype(bool)]
@@ -315,6 +355,12 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         for row in scored.loc[scored["dist_vs_nearest_road"] < 1, ["address_id", "source_id"]].itertuples(index=False):
             home.add((street_of.get(row.address_id), row.source_id))
 
+    # Which way numbers run along each street, from the ranges themselves:
+    # each address's interpolated point (M0) sits where the ranges put it,
+    # so the buildings nearest those points, in number order, show the
+    # direction. Short streets where the ranker is unsure otherwise flipped
+    # (Brickyard Cove: 12 at the far end, 44 at the start).
+    direction_of = _range_directions(addr, scored_df, positions) if use_range_direction else {}
     groups = dict(tuple(addr.groupby(["street", "parity"])))
     if street_order is not None:
         rank = {st: i for i, st in enumerate(street_order)}
@@ -362,7 +408,8 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
             done_joint.add(street)
             street_rows = addr[addr["street"] == street]
             assigned = _assign_townhouse_street(street, street_rows, p_both, side_of, positions, home,
-                                                claimed, townhouse_share_penalty)
+                                                claimed, townhouse_share_penalty,
+                                                direction_of.get(street, (1, -1)))
             for address_id, number in zip(street_rows["id"], street_rows["number"]):
                 if number in assigned:
                     picks[address_id] = assigned[number][0]
@@ -392,7 +439,7 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         share = townhouse_share_penalty if townhouses else None
         candidates = home_buildings if townhouses else buildings
         best = None
-        for direction in (1, -1):
+        for direction in direction_of.get(street, (1, -1)):
             order = sorted(candidates, key=lambda b: direction * positions[(street, b)])
             P = np.array([[np.mean(prob[(n, b)]) if (n, b) in prob else np.nan for b in order] for n in numbers])
             if townhouses:
