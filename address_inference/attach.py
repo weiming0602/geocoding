@@ -62,6 +62,16 @@ CREATE TABLE IF NOT EXISTS address_inference.building_segments (
 CREATE INDEX IF NOT EXISTS idx_ai_building_segments_tlid ON address_inference.building_segments (tlid);
 """
 
+# A building on a deep lot is also attached to every street its tax lot
+# fronts, however far back it sits: 48 Flying Point Road's house is more
+# than 200 m from Flying Point Road (its nearest road is Johns Road, 131 m),
+# but its lot (parcels.py: "48 FLYING POINT ROAD") runs out to Flying Point.
+FRONTAGE_CLAUSE = """UNION
+        SELECT st.* FROM address_inference.building_parcels bp
+        JOIN address_inference.parcel_frontage pf ON pf.parcel_id = bp.parcel_id
+        JOIN streets st ON st.tlid = pf.tlid
+        WHERE bp.state_fips = b.state_fips AND bp.source_id = b.source_id"""
+
 # %(scope)s is replaced (not bound) with one of the SCOPE_* clauses below.
 DELETE_SQL = """
 DELETE FROM address_inference.building_segments bs
@@ -88,15 +98,18 @@ CROSS JOIN LATERAL (
                 WHEN 1 THEN 'L' WHEN -1 THEN 'R' END AS side,
            coalesce(st.lfromadd, '') <> '' AS has_left,
            coalesce(st.rfromadd, '') <> '' AS has_right
-    FROM streets st
+    FROM (
+        SELECT st.* FROM streets st
+        WHERE st.geom && ST_Expand(b.inner_point, {PREFILTER_DEGREES})
+          AND ST_DWithin(st.geom::geography, b.inner_point::geography, {ATTACH_RADIUS_M})
+        {{frontage}}
+    ) st
     CROSS JOIN LATERAL (SELECT ST_LineLocatePoint(st.geom, b.inner_point) AS t) loc
     CROSS JOIN LATERAL (
         SELECT ST_LineInterpolatePoint(st.geom, greatest(loc.t - {TANGENT_FRACTION}, 0)) AS p1,
                ST_LineInterpolatePoint(st.geom, least(loc.t + {TANGENT_FRACTION}, 1)) AS p2
     ) tan
-    WHERE st.geom && ST_Expand(b.inner_point, {PREFILTER_DEGREES})
-      AND ST_DWithin(st.geom::geography, b.inner_point::geography, {ATTACH_RADIUS_M})
-      AND (coalesce(st.lfromadd, '') <> '' OR coalesce(st.rfromadd, '') <> '')
+    WHERE (coalesce(st.lfromadd, '') <> '' OR coalesce(st.rfromadd, '') <> '')
 ) c
 WHERE b.state_fips = %(state_fips)s AND {{scope}}
 """
@@ -117,7 +130,10 @@ def ensure_tables(conn, state_fips: str) -> None:
 
 def _attach_scope(conn, scope_sql: str, params: dict) -> int:
     conn.execute(DELETE_SQL.format(scope=scope_sql), params)
-    return conn.execute(INSERT_SQL.format(scope=scope_sql), params).rowcount
+    has_parcels = not conn.execute(
+        "SELECT to_regclass('address_inference.parcel_frontage') IS NULL").fetchone()[0]
+    sql = INSERT_SQL.format(scope=scope_sql, frontage=FRONTAGE_CLAUSE if has_parcels else "")
+    return conn.execute(sql, params).rowcount
 
 
 def attach(dsn, region, town=None, county_fips=None, progress=print) -> int:
