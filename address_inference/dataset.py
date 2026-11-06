@@ -212,6 +212,30 @@ def load_pools(conn) -> dict:
     return {sid: d for sid, d in conn.execute(POOLS_SQL).fetchall()}
 
 
+# Where each lot meets each Stage 1b street: the middle of the street's
+# stretch within 15 m of the lot -- in practice the driveway entrance. A
+# house far back at the end of a long driveway (48 Flying Point Road: 226 m)
+# is measured from there too (d_m0_access), not only from where it sits.
+LOT_ACCESS_SQL = """
+WITH lines AS (
+    SELECT sms.label_street AS street, ST_LineMerge(ST_Union(s.geom)) AS g
+    FROM address_inference.street_match_segments sms
+    JOIN streets s ON s.tlid = sms.tlid
+    WHERE sms.region_id = %(region)s AND sms.town = %(town)s
+    GROUP BY sms.label_street
+)
+SELECT l.street, p.parcel_id, ST_Y(pt), ST_X(pt)
+FROM lines l
+JOIN address_inference.parcels p
+  ON p.state_fips = %(state_fips)s AND p.town = %(town)s AND p.geom && ST_Expand(l.g, 0.0003)
+ AND ST_DWithin(p.geom::geography, l.g::geography, 15)
+CROSS JOIN LATERAL (SELECT ST_ClosestPoint(l.g, ST_Centroid(ST_Intersection(l.g,
+                     ST_Buffer(p.geom::geography, 15)::geometry))) AS pt) x
+WHERE ST_GeometryType(l.g) = 'ST_LineString' AND NOT ST_IsEmpty(pt)
+ORDER BY l.street, p.parcel_id
+"""
+
+
 def load_parcels(conn, params) -> dict | None:
     if conn.execute("SELECT to_regclass('address_inference.building_parcels') IS NULL").fetchone()[0]:
         return None
@@ -221,7 +245,8 @@ def load_parcels(conn, params) -> dict | None:
     frontage = defaultdict(dict)
     for pid, tlid, m in conn.execute(FRONTAGE_SQL, params).fetchall():
         frontage[pid][tlid] = m
-    return {"buildings": buildings, "frontage": dict(frontage)} if buildings else None
+    access = {(street, pid): (lat, lon) for street, pid, lat, lon in conn.execute(LOT_ACCESS_SQL, params).fetchall()}
+    return {"buildings": buildings, "frontage": dict(frontage), "access": access} if buildings else None
 
 
 def load(dsn, region, town: str):
@@ -368,6 +393,16 @@ def _parcel_features(source_id, street_tlids, parcels) -> dict:
             "parcel_size_ratio": info.get("size_ratio", np.nan) if info.get("size_ratio") is not None else np.nan}
 
 
+def _access_distance(addr, source_id, d_m0, parcels) -> float:
+    """Meters from the number's interpolated point (M0) to where the
+    building's lot meets the street; d_m0 when there's no lot."""
+    info = parcels["buildings"].get(source_id) if parcels else None
+    point = parcels.get("access", {}).get((addr["street"], info["parcel"])) if info else None
+    if point is None:
+        return d_m0
+    return float(haversine_m(addr["m0_lat"], addr["m0_lon"], point[0], point[1]))
+
+
 def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_cands, parcels=None):
     range_start = int(cover_seg["lfromadd" if side == "L" else "rfromadd"])
     street_tlids = {s["tlid"] for s in street_segs}
@@ -465,6 +500,7 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
             "match_exact": addr["match_method"] == "exact",
             **_parcel_features(source_id, street_tlids, parcels),
             "pool_m": (parcels or {}).get("pools", {}).get(source_id, np.nan),
+            "d_m0_access": _access_distance(addr, source_id, d_m0, parcels),
         })
 
     rows.sort(key=lambda r: r["d_m0"])
@@ -490,6 +526,9 @@ FEATURES = [
     "parcel_frontage_this", "parcel_frontage_other", "parcel_frontage_share", "parcel_buildings",
     "parcel_largest", "parcel_area_m2", "parcel_size_ratio", "pool_m",
 ]
+# d_m0_access (distance from M0 to where the building's lot meets the
+# street) is computed but not a model input: it fixed 48 Flying Point Road
+# on E911 roads but cost 0.3-0.9 points town-wide.
 
 
 def baseline_picks(candidate_df) -> dict:

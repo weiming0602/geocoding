@@ -129,8 +129,12 @@ WITH lines AS (
      AND ST_DWithin(p.geom::geography, l.g::geography, {LOT_FRONTAGE_M})
     WHERE ST_GeometryType(l.g) = 'ST_LineString'
 )
-SELECT t.street, bp.source_id, t.along
+SELECT t.street, bp.source_id, t.along,
+       -- how far back the building sits from this street
+       ST_Distance(l.g::geography, b.inner_point::geography) AS back_m
 FROM touch t JOIN address_inference.building_parcels bp ON bp.parcel_id = t.parcel_id
+JOIN lines l ON l.street = t.street
+JOIN address_inference.structures b ON b.state_fips = bp.state_fips AND b.source_id = bp.source_id
 WHERE t.along IS NOT NULL
   -- ordinary lots only: a condo parcel's buildings keep their own positions
   AND (SELECT count(*) FROM address_inference.building_parcels b2 WHERE b2.parcel_id = t.parcel_id) <= {{max_buildings}}
@@ -144,6 +148,7 @@ ORDER BY t.street, bp.source_id
 # streets. A street qualifies when an end touches no other road and lies
 # within COASTAL_END_M of the shoreline (address_inference.coastline).
 COASTAL_END_M = 150
+DEEP_LOT_M = 50
 COASTAL_DEAD_ENDS_SQL = f"""
 WITH lines AS (
     SELECT sms.label_street AS street, ST_LineMerge(ST_Union(s.geom)) AS g
@@ -185,8 +190,14 @@ def load_positions(dsn, region, town, by_lot="coastal") -> dict:
         if by_lot and not conn.execute("SELECT to_regclass('address_inference.building_parcels') IS NULL").fetchone()[0]:
             only = coastal_dead_ends(conn, params) if by_lot == "coastal" else None
             sql = LOT_POSITIONS_SQL.replace("{max_buildings}", str(LOT_MAX_BUILDINGS))
-            for street, source_id, along in conn.execute(sql, params).fetchall():
-                if (street, source_id) in out and (only is None or street in only):
+            for street, source_id, along, back_m in conn.execute(sql, params).fetchall():
+                # Coastal dead ends (lots numbered in columns), and anywhere a
+                # house sits far back at the end of a long driveway: its
+                # number belongs where its lot -- the driveway -- meets the
+                # road (48 Flying Point Road: house 226 m back, lot meets the
+                # road ~87 m before the house projects onto it).
+                deep = back_m is not None and back_m >= DEEP_LOT_M
+                if (street, source_id) in out and (only is None or street in only or deep):
                     out[(street, source_id)] = along
     return out
 
