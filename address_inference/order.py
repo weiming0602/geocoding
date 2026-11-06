@@ -433,6 +433,9 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         # Parcel frontage doesn't override this: tried, and corner lots
         # front both roads (173 Flying Point Road's lot has more frontage on
         # Arrowhead Ridge Road) -- it cost 0.3-0.7 points.
+        # "Nearer road" means the nearest road the building's own lot touches
+        # (dataset.CANDIDATES_SQL), so a private road behind a deep lot
+        # doesn't count here.
         scored = scored[~(scored["dist_vs_nearest_road"] >= limit)]
     # A pool within POOL_HOME_M marks a home (owner's rule): never a shed,
     # never a "much smaller extra", and a small boost in the assignment.

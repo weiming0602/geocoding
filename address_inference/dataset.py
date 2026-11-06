@@ -78,9 +78,22 @@ FROM address_inference.street_match_segments sms
 JOIN address_inference.building_segments bs ON bs.tlid = sms.tlid AND bs.state_fips = %(state_fips)s
 JOIN address_inference.structures s
   ON s.state_fips = bs.state_fips AND s.source = bs.source AND s.source_id = bs.source_id
-JOIN address_inference.building_segments nearest
-  ON nearest.state_fips = bs.state_fips AND nearest.source = bs.source
- AND nearest.source_id = bs.source_id AND nearest.rank = 1
+-- The building's nearest road among those its tax lot touches (owner's
+-- rule): a road only serves the lots along it, so a closer road the lot
+-- doesn't touch doesn't pull the building off the road its lot runs out to
+-- (48 Flying Point Road's house is 94 m nearer private Johns Road, which
+-- its lot never touches). Without a lot, or a lot touching no attached
+-- road, it's simply the nearest road.
+JOIN LATERAL (
+    SELECT n.tlid, n.dist_m FROM address_inference.building_segments n
+    WHERE n.state_fips = bs.state_fips AND n.source = bs.source AND n.source_id = bs.source_id
+    ORDER BY NOT EXISTS (
+                 SELECT 1 FROM address_inference.building_parcels bp
+                 JOIN address_inference.parcel_frontage pf ON pf.parcel_id = bp.parcel_id
+                 WHERE bp.state_fips = n.state_fips AND bp.source_id = n.source_id AND pf.tlid = n.tlid),
+             n.dist_m, n.tlid
+    LIMIT 1
+) nearest ON true
 WHERE sms.region_id = %(region)s AND sms.town = %(town)s
 ORDER BY sms.label_street, bs.source_id, bs.tlid, nearest.tlid
 """
