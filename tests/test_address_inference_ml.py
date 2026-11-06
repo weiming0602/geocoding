@@ -441,3 +441,16 @@ def test_a_building_with_a_pool_is_never_a_shed():
     assert order.order_constrained_picks(address_df, no_pool, positions, {})["a59"] == "big"
     with_pool = no_pool.assign(pool_m=[8.5, np.nan])
     assert order.order_constrained_picks(address_df, with_pool, positions, {})["a59"] == "small"
+
+
+def test_driveway_rules_are_on_by_default():
+    from address_inference import order
+    # The building 40 m nearer another road would be dropped -- but its
+    # driveway clearly comes to THIS street, so by default it stays.
+    address_df = pd.DataFrame([{"id": "a48", "number": 48, "street": "FP", "scorable": True}])
+    positions = {("FP", "deep"): 10.0, ("FP", "near"): 50.0}
+    scored = pd.DataFrame([("a48", "deep", 2.0, True, 94.0, 1.0, 1.0), ("a48", "near", 1.0, True, 0.0, 3.0, 0.0)],
+                          columns=["address_id", "source_id", "score", "same_side", "dist_vs_nearest_road",
+                                   "drive_ratio", "drive_best"])
+    assert order.order_constrained_picks(address_df, scored, positions, {})["a48"] == "deep"
+    assert order.order_constrained_picks(address_df, scored, positions, {}, driveway_rules=False)["a48"] == "near"

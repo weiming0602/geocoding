@@ -26,6 +26,8 @@ import psycopg
 
 from geocoding.interpolate import interpolate_along_line, parse_linestring
 
+from .street_names import canonical
+
 MAX_CANDIDATES = 50
 TRUE_BUILDING_RADIUS_M = 30
 OFFSET_FEET = 20  # same as geocoding-server's default OFFSET_FEET
@@ -61,7 +63,8 @@ SELECT sms.label_street, st.tlid, st.lfromadd, st.ltoadd, st.rfromadd, st.rtoadd
                      AND ST_DWithin(o.geom::geography, ST_StartPoint(st.geom)::geography, 2)) AS dead_start,
        NOT EXISTS (SELECT 1 FROM streets o WHERE o.tlid <> st.tlid
                      AND o.geom && ST_Expand(ST_EndPoint(st.geom), 0.0001)
-                     AND ST_DWithin(o.geom::geography, ST_EndPoint(st.geom)::geography, 2)) AS dead_end
+                     AND ST_DWithin(o.geom::geography, ST_EndPoint(st.geom)::geography, 2)) AS dead_end,
+       st.fullname
 FROM address_inference.street_match_segments sms
 JOIN streets st ON st.tlid = sms.tlid
 WHERE sms.region_id = %(region)s AND sms.town = %(town)s
@@ -206,6 +209,20 @@ ORDER BY pf.parcel_id, pf.tlid
 POOLS_SQL = "SELECT source_id, d FROM address_inference.building_pool"
 
 
+# Which road each set-back building's driveway reaches (driveways.py): the
+# cheapest path over pavement from the building to each nearby named road.
+DRIVEWAYS_SQL = "SELECT source_id, road, cost FROM address_inference.building_driveways"
+
+
+def load_driveways(conn) -> dict:
+    if conn.execute("SELECT to_regclass('address_inference.building_driveways') IS NULL").fetchone()[0]:
+        return {}
+    out = defaultdict(dict)
+    for sid, road, cost in conn.execute(DRIVEWAYS_SQL).fetchall():
+        out[sid][road] = cost
+    return dict(out)
+
+
 def load_pools(conn) -> dict:
     if conn.execute("SELECT to_regclass('address_inference.building_pool') IS NULL").fetchone()[0]:
         return {}
@@ -259,6 +276,7 @@ def load(dsn, region, town: str):
         parcels = load_parcels(conn, params)
         if parcels is not None:
             parcels["pools"] = load_pools(conn)
+            parcels["driveways"] = load_driveways(conn)
     return addresses, segments, candidates, parcels
 
 
@@ -324,7 +342,7 @@ def build(addresses, segments, candidates, parcels=None, ranges="tiger"):
     numbers, often far wider than the real ones (Arrowhead Ridge Road:
     1-99 vs 1-9), are never used for scale."""
     seg_keys = ("label_street", "tlid", "lfromadd", "ltoadd", "rfromadd", "rtoadd", "geometry", "length_m",
-                "dead_start", "dead_end")
+                "dead_start", "dead_end", "fullname")
     segs_by_street = defaultdict(list)
     for row in segments:
         seg = dict(zip(seg_keys, row))
@@ -393,6 +411,21 @@ def _parcel_features(source_id, street_tlids, parcels) -> dict:
             "parcel_size_ratio": info.get("size_ratio", np.nan) if info.get("size_ratio") is not None else np.nan}
 
 
+def _driveway_features(source_id, street_names, parcels) -> dict:
+    """drive_ratio: the cheapest pavement path to this street vs. to the
+    easiest road (1 = this street is easiest); drive_best: this street is
+    the easiest. NaN for buildings near the road (no driveway question) or
+    when this street isn't among the building's nearby roads."""
+    costs = (parcels or {}).get("driveways", {}).get(source_id)
+    if not costs:
+        return {"drive_ratio": np.nan, "drive_best": np.nan}
+    mine = min((c for road, c in costs.items() if road in street_names), default=None)
+    if mine is None:
+        return {"drive_ratio": np.nan, "drive_best": np.nan}
+    best = min(costs.values())
+    return {"drive_ratio": mine / best if best > 0 else 1.0, "drive_best": float(mine <= best)}
+
+
 def _access_distance(addr, source_id, d_m0, parcels) -> float:
     """Meters from the number's interpolated point (M0) to where the
     building's lot meets the street; d_m0 when there's no lot."""
@@ -406,6 +439,7 @@ def _access_distance(addr, source_id, d_m0, parcels) -> float:
 def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_cands, parcels=None):
     range_start = int(cover_seg["lfromadd" if side == "L" else "rfromadd"])
     street_tlids = {s["tlid"] for s in street_segs}
+    street_names = {canonical(s.get("fullname")) for s in street_segs if s.get("fullname")}
     points_by_tlid = {s["tlid"]: s["points"] for s in street_segs}
     # Which ends are dead ends (unknown -- e.g. rows without the flags -- counts as one).
     dead_by_tlid = {s["tlid"]: (s.get("dead_start", True), s.get("dead_end", True)) for s in street_segs}
@@ -500,6 +534,7 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
             "match_exact": addr["match_method"] == "exact",
             **_parcel_features(source_id, street_tlids, parcels),
             "pool_m": (parcels or {}).get("pools", {}).get(source_id, np.nan),
+            **_driveway_features(source_id, street_names, parcels),
             "d_m0_access": _access_distance(addr, source_id, d_m0, parcels),
         })
 
@@ -526,6 +561,9 @@ FEATURES = [
     "parcel_frontage_this", "parcel_frontage_other", "parcel_frontage_share", "parcel_buildings",
     "parcel_largest", "parcel_area_m2", "parcel_size_ratio", "pool_m",
 ]
+# drive_ratio / drive_best (driveways.py) are computed for road order's
+# driveway rules but are not model inputs: as inputs they cost TIGER 1.2
+# points; as rules (order.DRIVEWAY_CLEAR_RATIO) they add a point on E911 roads.
 # d_m0_access (distance from M0 to where the building's lot meets the
 # street) is computed but not a model input: it fixed 48 Flying Point Road
 # on E911 roads but cost 0.3-0.9 points town-wide.

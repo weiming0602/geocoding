@@ -72,6 +72,11 @@ ACCESSORY_MAX_RATIO = 0.2
 # ordinary house (None = off).
 LOCK_MIN_POINTS = 50
 
+# Driveway evidence from aerial imagery (driveways.py), used as road-order
+# rules rather than model inputs: as inputs it cost TIGER 1.2 points.
+DRIVEWAY_RULES = True
+DRIVEWAY_CLEAR_RATIO = 1.5
+
 POOL_HOME_M = 15
 POOL_BONUS = 0.0
 
@@ -419,7 +424,7 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
                             townhouse_ratio=None, townhouse_share_penalty=None,
                             joint_townhouses=True, property_slot_bonus=None, accessory_max_ratio=None,
                             use_range_direction=True, extra_small_penalty=None, lock_min_points=None,
-                            pool_bonus=None) -> dict:
+                            pool_bonus=None, driveway_rules=None) -> dict:
     """{address_id: source_id}. `fallback` (the ranker's own picks) covers
     addresses the ordering step leaves unmatched or can't place.
 
@@ -435,6 +440,7 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     an earlier street took is off limits to later ones. None = each street
     on its own, as before."""
     picks = dict(fallback)
+    driveway_rules = DRIVEWAY_RULES if driveway_rules is None else driveway_rules
     property_bonus = PROPERTY_SLOT_BONUS if property_slot_bonus is None else property_slot_bonus
     townhouse_ratio = TOWNHOUSE_RATIO if townhouse_ratio is None else townhouse_ratio
     townhouse_share_penalty = TOWNHOUSE_SHARE_PENALTY if townhouse_share_penalty is None else townhouse_share_penalty
@@ -447,7 +453,17 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         # "Nearer road" means the nearest road the building's own lot touches
         # (dataset.CANDIDATES_SQL), so a private road behind a deep lot
         # doesn't count here.
-        scored = scored[~(scored["dist_vs_nearest_road"] >= limit)]
+        far = scored["dist_vs_nearest_road"] >= limit
+        # ...unless the building's driveway clearly comes to THIS street
+        # (driveways.py: this street is the cheapest road over pavement).
+        if driveway_rules and "drive_best" in scored.columns:
+            far &= ~(scored["drive_best"] == 1)
+        scored = scored[~far]
+    # A building whose driveway clearly goes to another road (that road is
+    # at least DRIVEWAY_CLEAR_RATIO times cheaper to reach over pavement)
+    # can't take this street's number.
+    if driveway_rules and "drive_ratio" in scored.columns:
+        scored = scored[~(scored["drive_ratio"] >= DRIVEWAY_CLEAR_RATIO)]
     # A pool within POOL_HOME_M marks a home (owner's rule): never a shed,
     # never a "much smaller extra", and a small boost in the assignment.
     home_pool = (scored["pool_m"] <= POOL_HOME_M) if "pool_m" in scored.columns else pd.Series(False, index=scored.index)
@@ -681,7 +697,7 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, **kwargs) -
     agg_spec = {"p_sum": ("p", "sum"), "best": ("source_id", "first"), "same_side": ("same_side", "first")}
     for col, how in (("dist_vs_nearest_road", "min"), ("d_m0", "min"), ("sqmeters", "max"),
                      ("parcel_size_ratio", "max"), ("parcel_buildings", "min"), ("parcel_area_m2", "max"),
-                     ("pool_m", "min")):
+                     ("pool_m", "min"), ("drive_ratio", "min"), ("drive_best", "max")):
         if col in df.columns:
             agg_spec[col] = (col, how)
     agg = df.groupby(["address_id", "place"], sort=False).agg(**agg_spec).reset_index()

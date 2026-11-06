@@ -168,6 +168,24 @@ geocoding request. Current as of August 2026.
   **Not used by geocoding today.**
 - **License:** public domain, same as the street data.
 
+### 7. USDA NAIP aerial imagery (experiment only)
+
+- **What it is:** the National Agriculture Imagery Program's 2018 Maine
+  flight, 0.6 m per pixel, red/green/blue + near-infrared, served by
+  Maine's image service (`gis.maine.gov/image/rest/services/NAIP/
+  orthoNaip2018/ImageServer`).
+- **Why it matters:** the building-address experiment follows each set-back
+  building's driveway over pavement (low vegetation index, bright) to the
+  road it joins (`address_inference/driveways.py`); tiles are cached once
+  under `data/naip/` (`address_inference/imagery.py`). **Not used by
+  geocoding today.**
+- **License:** "Public domain." (the service's item info, checked
+  2026-11-06). Newer NAIP years (2021, 2023) and Maine's own 2023/2024
+  regional orthophotos need a token on Maine's server; Maine Regional 2021
+  (7.5 cm, "use constraints: none") and 2022 don't cover Freeport.
+- **Coverage / currency:** statewide; 2018 imagery, so newer houses and
+  driveways are missing.
+
 ## How the data gets in (and stays current)
 
 | Script | What it does |

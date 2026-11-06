@@ -79,6 +79,12 @@ read-write).
   ML + road order, Freeport: TIGER 50.2% right building / 59.0% within 50 m,
   E911 roads 61.5% / 72.1%. Road order keeps sheds (<20% of their lot's
   biggest building) out and takes each street's direction from its ranges.
+  `python -m address_inference.driveways me --town Freeport "dbname=geocoding"
+  [more DSNs]` follows each set-back building's driveway over NAIP imagery
+  (public domain, cached in `data/naip/`, DATA_SOURCES.md §7) to the road it
+  joins; road order then drops a building whose driveway clearly (1.5x)
+  goes to another road and lets one whose driveway comes to this street
+  past the 25 m nearer-road rule.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)
