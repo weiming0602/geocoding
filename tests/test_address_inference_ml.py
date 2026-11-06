@@ -426,3 +426,18 @@ def test_a_big_complex_keeps_its_own_pick_and_its_building():
     assert picks["u0"] == "c" and picks["a135"] == "b"
     unlocked = order.order_constrained_picks(address_df, scored, positions, fallback, lock_min_points=0)
     assert unlocked["u0"] == "d"
+
+
+def test_a_building_with_a_pool_is_never_a_shed():
+    from address_inference import order
+    # 59's small building (25% of its lot's biggest) would be dropped as a
+    # shed -- unless there's a pool next to it.
+    address_df = pd.DataFrame([{"id": "a59", "number": 59, "street": "LM", "scorable": True}])
+    positions = {("LM", "small"): 10.0, ("LM", "big"): 50.0}
+    base = [("a59", "small", 2.0, True, 2, 0.15, 0.0), ("a59", "big", 1.0, True, 2, 1.0, 0.0)]
+    cols = ["address_id", "source_id", "score", "same_side", "parcel_buildings", "parcel_size_ratio",
+            "dist_vs_nearest_road"]
+    no_pool = pd.DataFrame(base, columns=cols)
+    assert order.order_constrained_picks(address_df, no_pool, positions, {})["a59"] == "big"
+    with_pool = no_pool.assign(pool_m=[8.5, np.nan])
+    assert order.order_constrained_picks(address_df, with_pool, positions, {})["a59"] == "small"

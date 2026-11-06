@@ -72,6 +72,9 @@ ACCESSORY_MAX_RATIO = 0.2
 # ordinary house (None = off).
 LOCK_MIN_POINTS = 50
 
+POOL_HOME_M = 15
+POOL_BONUS = 0.0
+
 # A street only claims a building it's this sure of (the ranker's
 # probability for that pair): a wrong claim on a main road would otherwise
 # push every number on the side street off by one (165 Flying Point Road
@@ -404,7 +407,8 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
                             claim_min_p=None, other_road_closer_m=None,
                             townhouse_ratio=None, townhouse_share_penalty=None,
                             joint_townhouses=True, property_slot_bonus=None, accessory_max_ratio=None,
-                            use_range_direction=True, extra_small_penalty=None, lock_min_points=None) -> dict:
+                            use_range_direction=True, extra_small_penalty=None, lock_min_points=None,
+                            pool_bonus=None) -> dict:
     """{address_id: source_id}. `fallback` (the ranker's own picks) covers
     addresses the ordering step leaves unmatched or can't place.
 
@@ -430,9 +434,14 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         # front both roads (173 Flying Point Road's lot has more frontage on
         # Arrowhead Ridge Road) -- it cost 0.3-0.7 points.
         scored = scored[~(scored["dist_vs_nearest_road"] >= limit)]
+    # A pool within POOL_HOME_M marks a home (owner's rule): never a shed,
+    # never a "much smaller extra", and a small boost in the assignment.
+    home_pool = (scored["pool_m"] <= POOL_HOME_M) if "pool_m" in scored.columns else pd.Series(False, index=scored.index)
+    if pool_bonus and home_pool.any():
+        scored = scored.assign(p=scored["p"] + pool_bonus * home_pool)
     accessory = ACCESSORY_MAX_RATIO if accessory_max_ratio is None else accessory_max_ratio
     if accessory is not None and "parcel_size_ratio" in scored.columns:
-        shed = (scored["parcel_buildings"].fillna(1) >= 2) & (scored["parcel_size_ratio"] < accessory)
+        shed = (scored["parcel_buildings"].fillna(1) >= 2) & (scored["parcel_size_ratio"] < accessory) & ~home_pool
         scored = scored[~shed]
     both_sides = scored  # townhouse streets match both parities together
     if same_side_only:
@@ -466,6 +475,9 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     # (Brickyard Cove: 12 at the far end, 44 at the start).
     direction_of = _range_directions(addr, scored_df, positions) if use_range_direction else {}
     extra_penalty = EXTRA_SMALL_PENALTY if extra_small_penalty is None else extra_small_penalty
+    pool_bonus = POOL_BONUS if pool_bonus is None else pool_bonus
+    pool_homes = (set(scored_df.loc[scored_df["pool_m"] <= POOL_HOME_M, "source_id"])
+                  if "pool_m" in scored_df.columns else set())
     size_of = dict(zip(scored_df["source_id"], scored_df["sqmeters"].fillna(0))) if "sqmeters" in scored_df.columns else {}
     lot_of = (dict(zip(scored_df["source_id"], scored_df["parcel_area_m2"]))
               if "parcel_area_m2" in scored_df.columns else {})
@@ -560,7 +572,8 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
                 if lots and np.median(lots) >= RURAL_MIN_LOT_M2:
                     median_size = np.median([size_of.get(b, 0) for b in home_buildings])
                     smallest = sorted(home_buildings, key=lambda b: (size_of.get(b, 0), b))[: len(home_buildings) - k]
-                    extras = {b for b in smallest if size_of.get(b, 0) * EXTRA_SIZE_FACTOR <= median_size}
+                    extras = {b for b in smallest if size_of.get(b, 0) * EXTRA_SIZE_FACTOR <= median_size
+                              and b not in pool_homes}
                     if extras:
                         extra = np.array([b in extras for b in order])
                         P = P - (1e9 if np.isinf(extra_penalty) else extra_penalty) * extra[None, :]
@@ -653,7 +666,8 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, **kwargs) -
     df = df.sort_values(["address_id", "place", "p"], ascending=[True, True, False], kind="stable")
     agg_spec = {"p_sum": ("p", "sum"), "best": ("source_id", "first"), "same_side": ("same_side", "first")}
     for col, how in (("dist_vs_nearest_road", "min"), ("d_m0", "min"), ("sqmeters", "max"),
-                     ("parcel_size_ratio", "max"), ("parcel_buildings", "min"), ("parcel_area_m2", "max")):
+                     ("parcel_size_ratio", "max"), ("parcel_buildings", "min"), ("parcel_area_m2", "max"),
+                     ("pool_m", "min")):
         if col in df.columns:
             agg_spec[col] = (col, how)
     agg = df.groupby(["address_id", "place"], sort=False).agg(**agg_spec).reset_index()

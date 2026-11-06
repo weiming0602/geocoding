@@ -188,6 +188,17 @@ ORDER BY pf.parcel_id, pf.tlid
 """
 
 
+# Optional per-building details: address_inference.building_pool (a pool
+# near the building -- a home, not a barn; owner's rule) when loaded.
+POOLS_SQL = "SELECT source_id, d FROM address_inference.building_pool"
+
+
+def load_pools(conn) -> dict:
+    if conn.execute("SELECT to_regclass('address_inference.building_pool') IS NULL").fetchone()[0]:
+        return {}
+    return {sid: d for sid, d in conn.execute(POOLS_SQL).fetchall()}
+
+
 def load_parcels(conn, params) -> dict | None:
     if conn.execute("SELECT to_regclass('address_inference.building_parcels') IS NULL").fetchone()[0]:
         return None
@@ -208,6 +219,8 @@ def load(dsn, region, town: str):
         segments = conn.execute(SEGMENTS_SQL, params).fetchall()
         candidates = conn.execute(CANDIDATES_SQL, params).fetchall()
         parcels = load_parcels(conn, params)
+        if parcels is not None:
+            parcels["pools"] = load_pools(conn)
     return addresses, segments, candidates, parcels
 
 
@@ -438,6 +451,7 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
             "segment_length_m": cover_seg["length_m"],
             "match_exact": addr["match_method"] == "exact",
             **_parcel_features(source_id, street_tlids, parcels),
+            "pool_m": (parcels or {}).get("pools", {}).get(source_id, np.nan),
         })
 
     rows.sort(key=lambda r: r["d_m0"])
@@ -461,7 +475,7 @@ FEATURES = [
     "sqmeters", "residential", "single_family", "outbldg_flag", "bigger_in_front", "segment_length_m",
     "match_exact", "beyond_end",
     "parcel_frontage_this", "parcel_frontage_other", "parcel_frontage_share", "parcel_buildings",
-    "parcel_largest", "parcel_area_m2", "parcel_size_ratio",
+    "parcel_largest", "parcel_area_m2", "parcel_size_ratio", "pool_m",
 ]
 
 
