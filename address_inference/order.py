@@ -76,6 +76,8 @@ LOCK_MIN_POINTS = 50
 # rules rather than model inputs: as inputs it cost TIGER 1.2 points.
 DRIVEWAY_RULES = True
 DRIVEWAY_CLEAR_RATIO = 1.5
+DRIVEWAY_CORNER_RATIO = 3.0
+DRIVEWAY_SET_BACK_M = 40
 
 POOL_HOME_M = 15
 POOL_BONUS = 0.0
@@ -85,6 +87,11 @@ POOL_BONUS = 0.0
 # push every number on the side street off by one (165 Flying Point Road
 # taking an Arrowhead Ridge Road house).
 CLAIM_MIN_P = 0.3
+# lot_picks: a place another street's address wants with at least this
+# probability (and more than this address does) is that street's. None = off:
+# at 0.5 TIGER 53.3% -> 53.8% (fixes 48 and 42 Flying Point Road, breaks 1
+# Carriage Road) but E911 roads 66.1% -> 65.6% -- not a consistent win.
+LOT_RESERVE_P = None
 
 STREET_CLASS_SQL = """
 SELECT sms.label_street, array_agg(DISTINCT s.mtfcc)
@@ -462,8 +469,15 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     # A building whose driveway clearly goes to another road (that road is
     # at least DRIVEWAY_CLEAR_RATIO times cheaper to reach over pavement)
     # can't take this street's number.
+    # Corner buildings (nearest road under DRIVEWAY_SET_BACK_M) sit a short
+    # lawn-crossing from both roads, so their path costs are noisier: they
+    # need a clearer margin (1 Carriage Road: 5x to Carriage Road).
     if driveway_rules and "drive_ratio" in scored.columns:
-        scored = scored[~(scored["drive_ratio"] >= DRIVEWAY_CLEAR_RATIO)]
+        ratio = pd.Series(DRIVEWAY_CLEAR_RATIO, index=scored.index)
+        if "dist_road" in scored.columns and "dist_vs_nearest_road" in scored.columns:
+            corner = (scored["dist_road"] - scored["dist_vs_nearest_road"]) < DRIVEWAY_SET_BACK_M
+            ratio[corner] = DRIVEWAY_CORNER_RATIO
+        scored = scored[~(scored["drive_ratio"] >= ratio)]
     # A pool within POOL_HOME_M marks a home (owner's rule): never a shed,
     # never a "much smaller extra", and a small boost in the assignment.
     home_pool = (scored["pool_m"] <= POOL_HOME_M) if "pool_m" in scored.columns else pd.Series(False, index=scored.index)
@@ -676,7 +690,7 @@ def load_properties(dsn, region, building_ids, gap_m=None) -> dict:
 LOT_MAX_BUILDINGS = 3
 
 
-def lot_picks(address_df, scored_df, positions, fallback, parcel_of, **kwargs) -> dict:
+def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve_p=None, **kwargs) -> dict:
     """order_constrained_picks with each multi-building TAX LOT as one place
     along the road (owner's matrix rule: lots are numbered in order, not
     buildings). Lot 42 Brickyard Cove has two houses, one in front of 22's
@@ -697,10 +711,25 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, **kwargs) -
     agg_spec = {"p_sum": ("p", "sum"), "best": ("source_id", "first"), "same_side": ("same_side", "first")}
     for col, how in (("dist_vs_nearest_road", "min"), ("d_m0", "min"), ("sqmeters", "max"),
                      ("parcel_size_ratio", "max"), ("parcel_buildings", "min"), ("parcel_area_m2", "max"),
-                     ("pool_m", "min"), ("drive_ratio", "min"), ("drive_best", "max")):
+                     ("pool_m", "min"), ("drive_ratio", "min"), ("drive_best", "max"), ("dist_road", "min")):
         if col in df.columns:
             agg_spec[col] = (col, how)
     agg = df.groupby(["address_id", "place"], sort=False).agg(**agg_spec).reset_index()
+    reserve = LOT_RESERVE_P if lot_reserve_p is None else lot_reserve_p
+    if reserve is not None:
+        # A lot belongs to the street whose address wants it most, whatever
+        # order the streets are assigned in: 48 Flying Point Road (a main
+        # road, assigned first) took the garage beside 2 Johns Road's house.
+        street_of = dict(zip(address_df["id"], address_df["street"]))
+        agg["_street"] = agg["address_id"].map(street_of)
+        by_street = agg.groupby(["place", "_street"])["p_sum"].max()
+        top = defaultdict(list)
+        for (pl, st), pmax in by_street.items():
+            top[pl].append((pmax, st))
+        def other_claim(pl, st):
+            return max((pm for pm, s2 in top[pl] if s2 != st), default=0.0)
+        rival = np.array([other_claim(pl, st) for pl, st in zip(agg["place"], agg["_street"])])
+        agg = agg[~((rival >= reserve) & (rival > agg["p_sum"].to_numpy()))].drop(columns="_street")
     best_building = {(a, pl): b for a, pl, b in zip(agg["address_id"], agg["place"], agg["best"])}
     scored_place = agg.rename(columns={"place": "source_id"}).assign(score=lambda d: np.log(d["p_sum"].clip(lower=1e-12)))
     lists = defaultdict(list)

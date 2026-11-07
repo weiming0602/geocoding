@@ -78,13 +78,14 @@ def ensure(tiles, bands=(0, 3), progress=None) -> int:
     return len(todo)
 
 
+MAX_TILES = 64  # decoded tiles kept in memory (~12 MB each)
 _tiles: dict = {}
 
 
 def _tile(ix: int, iy: int, band: int) -> np.ndarray:
     key = (ix, iy, band)
     if key not in _tiles:
-        if len(_tiles) > 64:
+        if len(_tiles) >= MAX_TILES:
             _tiles.clear()
         _tiles[key] = np.asarray(Image.open(_path(ix, iy, band)), dtype=np.float32)
     return _tiles[key]

@@ -82,9 +82,11 @@ read-write).
   `python -m address_inference.driveways me --town Freeport "dbname=geocoding"
   [more DSNs]` follows each set-back building's driveway over NAIP imagery
   (public domain, cached in `data/naip/`, DATA_SOURCES.md §7) to the road it
-  joins; road order then drops a building whose driveway clearly (1.5x)
-  goes to another road and lets one whose driveway comes to this street
-  past the 25 m nearer-road rule.
+  joins (set-back buildings 40 m+ and corner buildings with two named roads
+  within 60 m; 12 processes, ~3 min for Freeport); road order then drops a
+  building whose driveway clearly (1.5x, corners 3x) goes to another road
+  and lets one whose driveway comes to this street past the 25 m
+  nearer-road rule.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

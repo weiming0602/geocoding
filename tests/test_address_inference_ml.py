@@ -454,3 +454,17 @@ def test_driveway_rules_are_on_by_default():
                                    "drive_ratio", "drive_best"])
     assert order.order_constrained_picks(address_df, scored, positions, {})["a48"] == "deep"
     assert order.order_constrained_picks(address_df, scored, positions, {}, driveway_rules=False)["a48"] == "near"
+
+
+def test_corner_buildings_need_a_clearer_driveway():
+    from address_inference import order
+    # Both buildings' driveways favor another road 2x. The set-back one
+    # (60 m from its nearest road) is dropped; the corner one (20 m) is
+    # kept, since 2x is below the corner bar.
+    address_df = pd.DataFrame([{"id": "a1", "number": 1, "street": "C", "scorable": True}])
+    positions = {("C", "set_back"): 10.0, ("C", "corner"): 50.0}
+    cols = ["address_id", "source_id", "score", "same_side", "dist_vs_nearest_road", "dist_road", "drive_ratio", "drive_best"]
+    scored = pd.DataFrame([("a1", "set_back", 2.0, True, 0.0, 60.0, 2.0, 0.0),
+                           ("a1", "corner", 1.0, True, 0.0, 20.0, 2.0, 0.0)], columns=cols)
+    assert order.order_constrained_picks(address_df, scored, positions, {})["a1"] == "corner"
+    assert order.lot_picks(address_df, scored, positions, {}, {"set_back": "p1", "corner": "p2"})["a1"] == "corner"

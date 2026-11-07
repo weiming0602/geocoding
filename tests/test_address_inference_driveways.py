@@ -69,3 +69,20 @@ def test_driveway_features_compare_this_street_with_the_easiest_road():
     assert f["drive_ratio"] == pytest.approx(3.0) and f["drive_best"] == 0.0
     assert all(np.isnan(v) for v in dataset._driveway_features("b", {"ELM ST"}, parcels).values())
     assert all(np.isnan(v) for v in dataset._driveway_features("near_the_road", {"ASH RD"}, parcels).values())
+
+
+def test_a_road_branching_off_the_driveways_road_is_not_reached_by_the_driveway(monkeypatch):
+    # The driveway runs 150 m south to Birch Rd; Cedar Ln branches off Birch
+    # Rd 40 m east of where the driveway meets it and runs south. Getting to
+    # Cedar Ln means going along Birch Rd first -- the driveway is Birch's.
+    monkeypatch.setattr(driveways, "BRANCH_CHECK", True)
+    fake_bands(monkeypatch, [(0, 0), (0, -150)])
+    roads = {0: [("Birch Rd", line((-200, -150), (200, -150))), ("Cedar Ln", line((40, -150), (40, -260)))]}
+    costs = driveways.road_costs(LAT, LON, square(6), roads)[0]
+    assert costs.get("CEDAR LN", float("inf")) > 1.5 * costs["BIRCH RD"]
+
+
+def test_a_building_with_one_road_in_reach_skips_the_imagery(monkeypatch):
+    monkeypatch.setattr(imagery, "crop", lambda *a: (_ for _ in ()).throw(AssertionError("imagery read")))
+    roads = {0: [("Ash Rd", line((60, -200), (60, 200)))], 1: [("Ash Road", line((60, -200), (60, 200)))]}
+    assert driveways.road_costs(LAT, LON, square(6), roads) == {0: {"ASH RD": 1.0}, 1: {"ASH RD": 1.0}}
