@@ -489,3 +489,22 @@ def test_a_lot_goes_to_the_street_that_wants_it_most_unless_its_driveway_says_ot
     picks = order.lot_picks(address_df, pd.DataFrame(rows, columns=cols), positions, {}, parcel_of,
                             street_order=["MAIN ST", "SIDE RD"])
     assert picks["m48"] == "garage"
+
+
+def test_the_house_at_the_end_of_a_visible_lane_is_the_home_and_takes_the_number():
+    from address_inference import order
+    # Owner's rule: a long lane seen in the imagery leads to a home, not a
+    # barn. Lot L has a building 60 m from the road and a house 220 m back
+    # at the end of its lane: the ranker likes the front building, but the
+    # lane's end takes the number.
+    address_df = pd.DataFrame([{"id": "a48", "number": 48, "street": "FP", "scorable": True}])
+    positions = {("FP", "front"): 10.0, ("FP", "lane_house"): 12.0}
+    cols = ["address_id", "source_id", "score", "same_side", "drive_best", "drive_off_m", "dist_road"]
+    rows = [("a48", "front", 2.0, True, 1.0, 1.0, 60.0), ("a48", "lane_house", 1.0, True, 1.0, 3.0, 220.0)]
+    parcel_of = {"front": "L", "lane_house": "L"}
+    picks = order.lot_picks(address_df, pd.DataFrame(rows, columns=cols), positions, {}, parcel_of)
+    assert picks["a48"] == "lane_house"
+    # A path mostly across grass (40 m off pavement) is no lane.
+    rows[1] = ("a48", "lane_house", 1.0, True, 1.0, 40.0, 220.0)
+    picks = order.lot_picks(address_df, pd.DataFrame(rows, columns=cols), positions, {}, parcel_of)
+    assert picks["a48"] == "front"

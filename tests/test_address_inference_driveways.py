@@ -18,7 +18,7 @@ def offset(east_m, north_m):
 
 def fake_bands(monkeypatch, paved_path):
     """Grass everywhere (red 40, NIR 150) except `paved_path` ((east, north) meter
-    points, a 6 m wide strip between consecutive points): pavement (red 150, NIR 160)."""
+    points, a 6 m wide strip between consecutive points): pavement (red 150, NIR 140)."""
     bbox = imagery.bbox_around(LAT, LON, driveways.HALF_M)
     size = driveways.SIZE
     x0, y0, x1, y1 = bbox
@@ -30,10 +30,10 @@ def fake_bands(monkeypatch, paved_path):
             px, py = to_px(*offset(e0 + (e1 - e0) * t, n0 + (n1 - n0) * t))
             r0, c0 = int(py), int(px)
             red[max(0, r0 - 4):r0 + 5, max(0, c0 - 4):c0 + 5] = 150
-            nir[max(0, r0 - 4):r0 + 5, max(0, c0 - 4):c0 + 5] = 160
+            nir[max(0, r0 - 4):r0 + 5, max(0, c0 - 4):c0 + 5] = 140
     # isolated dark-but-bright specks in the grass must not become shortcuts
     red[10, 10] = 150
-    nir[10, 10] = 160
+    nir[10, 10] = 140
     monkeypatch.setattr(imagery, "crop", lambda b, s, band: (red if band == 0 else nir).copy())
 
 
@@ -63,8 +63,10 @@ def test_without_a_driveway_the_nearer_road_wins(monkeypatch):
 
 
 def test_driveway_features_compare_this_street_with_the_easiest_road():
-    parcels = {"driveways": {"b": {"ASH RD": 900.0, "BIRCH RD": 300.0}}}
-    assert dataset._driveway_features("b", {"BIRCH RD"}, parcels) == {"drive_ratio": 1.0, "drive_best": 1.0}
+    parcels = {"driveways": {"b": {"ASH RD": 900.0, "BIRCH RD": 300.0}},
+               "driveway_off": {"b": {"ASH RD": 250.0, "BIRCH RD": 2.0}}}
+    assert dataset._driveway_features("b", {"BIRCH RD"}, parcels) == {
+        "drive_ratio": 1.0, "drive_best": 1.0, "drive_off_m": 2.0}
     f = dataset._driveway_features("b", {"ASH RD"}, parcels)
     assert f["drive_ratio"] == pytest.approx(3.0) and f["drive_best"] == 0.0
     assert all(np.isnan(v) for v in dataset._driveway_features("b", {"ELM ST"}, parcels).values())
@@ -96,6 +98,7 @@ def test_the_entry_is_where_the_driveway_meets_the_road(monkeypatch):
     paths = driveways.road_paths(LAT, LON, square(6), roads)[0]
     _cost, la, lo, off = paths["BIRCH RD"]
     east, north = (lo - LON) * 111320 * math.cos(math.radians(LAT)), (la - LAT) * 111320
-    assert east == pytest.approx(80, abs=6) and north == pytest.approx(-150, abs=4)
+    # Reached at the road's edge (VIA_BUFFER_PX, ~6 m), not its centerline.
+    assert east == pytest.approx(80, abs=6) and north == pytest.approx(-150, abs=8)
     assert off < 5                   # all on the driveway
     assert paths["ASH RD"][3] > 150  # across grass to Ash Rd

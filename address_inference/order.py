@@ -80,6 +80,19 @@ DRIVEWAY_CORNER_RATIO = 3.0
 DRIVEWAY_SET_BACK_M = 40
 
 POOL_HOME_M = 15
+# Owner's rule: a long lane you can see in the imagery is expensive -- nobody
+# builds one to a barn. The building at its end (from LANE_MIN_M+ back, its
+# driveway nearly all pavement or gravel: off it at most LANE_MAX_OFF_SHARE
+# of the distance back, never under LANE_MAX_OFF_M -- tree shadows break a
+# long lane here and there) is the home: never a shed or an extra, its lot's
+# numbered building, and LANE_BONUS more likely for the street its lane joins
+# (48 Flying Point Road: 226 m back, 10 m of gaps). LANE_BONUS None = off.
+# Adopted as the foundation even though Freeport scores dip (owner's call,
+# 2026-11-07): imagery first, then review the changed cases.
+LANE_MIN_M = 100
+LANE_MAX_OFF_M = 10
+LANE_MAX_OFF_SHARE = 0.1
+LANE_BONUS = 0.3
 POOL_BONUS = 0.0
 
 # A street only claims a building it's this sure of (the ranker's
@@ -317,6 +330,15 @@ RURAL_MIN_LOT_M2 = 4000
 MAX_PER_BUILDING = 2
 
 
+def lane_end(df) -> pd.Series:
+    """Rows whose building sits at the end of a visible lane to this street."""
+    if LANE_BONUS is None or not {"drive_best", "drive_off_m", "dist_road"} <= set(df.columns):
+        return pd.Series(False, index=df.index)
+    allowed = np.maximum(LANE_MAX_OFF_M, LANE_MAX_OFF_SHARE * df["dist_road"])
+    return ((df["drive_best"] == 1) & (df["drive_off_m"] <= allowed)
+            & (df["dist_road"] >= LANE_MIN_M)).fillna(False).astype(bool)
+
+
 def monotone_assign(P, share_penalty=None, max_per_building=None):
     """P[i, j]: score for number i (ascending) on building j (in road
     order). Returns (total, {i: j}) maximizing the summed score over
@@ -536,6 +558,11 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     # A pool within POOL_HOME_M marks a home (owner's rule): never a shed,
     # never a "much smaller extra", and a small boost in the assignment.
     home_pool = (scored["pool_m"] <= POOL_HOME_M) if "pool_m" in scored.columns else pd.Series(False, index=scored.index)
+    lane = (scored["lane_end"].astype(bool) if "lane_end" in scored.columns else lane_end(scored)) \
+        if driveway_rules else pd.Series(False, index=scored.index)
+    if lane.any():
+        scored = scored.assign(p=scored["p"] + LANE_BONUS * lane)
+    home_pool = home_pool | lane
     if pool_bonus and home_pool.any():
         scored = scored.assign(p=scored["p"] + pool_bonus * home_pool)
     accessory = ACCESSORY_MAX_RATIO if accessory_max_ratio is None else accessory_max_ratio
@@ -577,6 +604,9 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     pool_bonus = POOL_BONUS if pool_bonus is None else pool_bonus
     pool_homes = (set(scored_df.loc[scored_df["pool_m"] <= POOL_HOME_M, "source_id"])
                   if "pool_m" in scored_df.columns else set())
+    if driveway_rules:
+        lanes = scored_df["lane_end"].astype(bool) if "lane_end" in scored_df.columns else lane_end(scored_df)
+        pool_homes |= set(scored_df.loc[lanes, "source_id"])  # never a "much smaller extra"
     size_of = dict(zip(scored_df["source_id"], scored_df["sqmeters"].fillna(0))) if "sqmeters" in scored_df.columns else {}
     lot_of = (dict(zip(scored_df["source_id"], scored_df["parcel_area_m2"]))
               if "parcel_area_m2" in scored_df.columns else {})
@@ -762,11 +792,14 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
     # townhouses, 2 Village View) holds many numbered buildings.
     key = {b: ("lot:" + pid if 1 < lot_size[pid] <= LOT_MAX_BUILDINGS else b) for b, pid in parcel_of.items()}
     df["place"] = df["source_id"].map(lambda b: key.get(b, b))
-    df = df.sort_values(["address_id", "place", "p"], ascending=[True, True, False], kind="stable")
+    # The lane's end is the lot's numbered building, whatever the ranker liked.
+    df["lane_end"] = lane_end(df)
+    df = df.sort_values(["address_id", "place", "lane_end", "p"], ascending=[True, True, False, False], kind="stable")
     agg_spec = {"p_sum": ("p", "sum"), "best": ("source_id", "first"), "same_side": ("same_side", "first")}
     for col, how in (("dist_vs_nearest_road", "min"), ("d_m0", "min"), ("sqmeters", "max"),
                      ("parcel_size_ratio", "max"), ("parcel_buildings", "min"), ("parcel_area_m2", "max"),
-                     ("pool_m", "min"), ("drive_ratio", "min"), ("drive_best", "max"), ("dist_road", "min")):
+                     ("pool_m", "min"), ("drive_ratio", "min"), ("drive_best", "max"), ("dist_road", "min"),
+                     ("lane_end", "max")):
         if col in df.columns:
             agg_spec[col] = (col, how)
     agg = df.groupby(["address_id", "place"], sort=False).agg(**agg_spec).reset_index()

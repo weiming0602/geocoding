@@ -211,16 +211,19 @@ POOLS_SQL = "SELECT source_id, d FROM address_inference.building_pool"
 
 # Which road each set-back building's driveway reaches (driveways.py): the
 # cheapest path over pavement from the building to each nearby named road.
-DRIVEWAYS_SQL = "SELECT source_id, road, cost FROM address_inference.building_driveways"
+DRIVEWAYS_SQL = "SELECT source_id, road, cost, off_m FROM address_inference.building_driveways"
 
 
-def load_driveways(conn) -> dict:
+def load_driveways(conn) -> tuple[dict, dict]:
+    """({source_id: {road: path cost}}, {source_id: {road: meters off pavement}})."""
     if conn.execute("SELECT to_regclass('address_inference.building_driveways') IS NULL").fetchone()[0]:
-        return {}
-    out = defaultdict(dict)
-    for sid, road, cost in conn.execute(DRIVEWAYS_SQL).fetchall():
-        out[sid][road] = cost
-    return dict(out)
+        return {}, {}
+    costs, offs = defaultdict(dict), defaultdict(dict)
+    for sid, road, cost, off_m in conn.execute(DRIVEWAYS_SQL).fetchall():
+        costs[sid][road] = cost
+        if off_m is not None:
+            offs[sid][road] = off_m
+    return dict(costs), dict(offs)
 
 
 def load_pools(conn) -> dict:
@@ -276,7 +279,7 @@ def load(dsn, region, town: str):
         parcels = load_parcels(conn, params)
         if parcels is not None:
             parcels["pools"] = load_pools(conn)
-            parcels["driveways"] = load_driveways(conn)
+            parcels["driveways"], parcels["driveway_off"] = load_driveways(conn)
     return addresses, segments, candidates, parcels
 
 
@@ -417,13 +420,17 @@ def _driveway_features(source_id, street_names, parcels) -> dict:
     the easiest. NaN for buildings near the road (no driveway question) or
     when this street isn't among the building's nearby roads."""
     costs = (parcels or {}).get("driveways", {}).get(source_id)
+    none = {"drive_ratio": np.nan, "drive_best": np.nan, "drive_off_m": np.nan}
     if not costs:
-        return {"drive_ratio": np.nan, "drive_best": np.nan}
+        return none
     mine = min((c for road, c in costs.items() if road in street_names), default=None)
     if mine is None:
-        return {"drive_ratio": np.nan, "drive_best": np.nan}
+        return none
     best = min(costs.values())
-    return {"drive_ratio": mine / best if best > 0 else 1.0, "drive_best": float(mine <= best)}
+    offs = parcels.get("driveway_off", {}).get(source_id, {})
+    off = min((o for road, o in offs.items() if road in street_names), default=np.nan)
+    return {"drive_ratio": mine / best if best > 0 else 1.0, "drive_best": float(mine <= best),
+            "drive_off_m": off}
 
 
 def _access_distance(addr, source_id, d_m0, parcels) -> float:

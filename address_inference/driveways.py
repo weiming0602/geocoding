@@ -44,17 +44,21 @@ CORNER_M = 60        # ...or with two named roads within this distance (corners)
 HALF_M = 260         # crop half-width (ground meters)
 SIZE = 768           # crop pixels (~0.68 m each)
 ROAD_RADIUS_M = 300  # candidate roads within this distance of the building
-PAVE_NDVI = 0.12
+# Pavement/gravel: vegetation index under this. 0.12 counted dry grass as
+# pavement (common in rural Maine): the field around 48 Flying Point Road's
+# lane read as one big paved area. At 0.02 the lane stands out as a line.
+PAVE_NDVI = 0.02
 PAVE_BRIGHT = 80
 OFF_PAVEMENT_COST = 30.0
 VIA_BUFFER_PX = 8      # ~5 m: a path within this of another road "runs along" it
 WORKERS = max(1, min(12, (os.cpu_count() or 2) - 2))  # parallel processes
 WORKER_TILES = 12      # imagery tiles each process keeps in memory (~12 MB each)
 JUNCTION_PX = 22       # ~15 m: a road's own stretch starts this far from any other road
-# Branch-road check (48 Flying Point Road: Johns Road branches off the road
-# its driveway joins, so it looked nearly as cheap). Right on 48's TIGER
-# roads, but town-wide it cost TIGER 0.1 and E911 roads 0.5 points -- off.
-BRANCH_CHECK = False
+# A driveway reaches its road directly, never by running along another road
+# (48 Flying Point Road: on TIGER, Johns Road looked nearly as cheap by
+# following Flying Point's pavement). One extra path search per building.
+BRANCH_CHECK = True
+UNREACHABLE_COST = 1e6  # a road only reachable along another road
 
 CREATE_SQL = """
 CREATE TABLE IF NOT EXISTS address_inference.building_driveways (
@@ -176,39 +180,36 @@ def road_paths(lat, lon, building_geojson, roads_by_db, quick=False):
     cum, _ = mcp.find_costs(start_list)
     out = {}
     for db, masks in masks_by_db.items():
-        best = {}
         if not BRANCH_CHECK:
             out[db] = {key: entry(cum, m, mcp) for key, m in masks.items()}
             continue
+        # A driveway reaches its road directly, never by running along
+        # another road first (48 Flying Point Road's lane reaches Flying
+        # Point Road; on TIGER, Johns Road looked nearly as cheap only by
+        # following Flying Point's pavement). One search with every road's
+        # pavement blocked; each road costs what it takes to reach its own
+        # edge, away from where other roads meet it.
+        roads = np.zeros((SIZE, SIZE), dtype=bool)
+        for m in masks.values():
+            roads |= m
+        blocked = binary_dilation(roads, iterations=VIA_BUFFER_PX) & ~inside
+        free = cost.copy()
+        free[blocked] = np.inf
+        mcp2 = MCP_Geometric(free)
+        cum2, _ = mcp2.find_costs(start_list)
+        best = {}
         for key, m in masks.items():
             others = np.zeros_like(m)
             for k2, m2 in masks.items():
                 if k2 != key:
                     others |= m2
-            junction = binary_dilation(others, iterations=JUNCTION_PX)
-            others = binary_dilation(others, iterations=VIA_BUFFER_PX)
-            # Reaching a road right where it meets another road says nothing
-            # about which one the driveway joins: only this road's own stretch
-            # (beyond JUNCTION_PX of every other road) counts.
-            m = m & ~junction
-            if not m.any():
-                continue
-            end = tuple(np.argwhere(m)[np.argmin(cum[m])])
-            path = np.asarray(mcp.traceback(end))
-            if others[path[:, 0], path[:, 1]].any():
-                # The cheapest way here runs along another road first (48
-                # Flying Point Road's driveway reaches Flying Point Road;
-                # Johns Road only branches off it), so this road's own access
-                # is what it costs without crossing any other road. The search
-                # stops at the first pixel of this road it reaches.
-                blocked = cost.copy()
-                blocked[others] = np.inf
-                cum2, _ = MCP_Geometric(blocked).find_costs(start_list, ends=[tuple(p) for p in np.argwhere(m)],
-                                                            find_all_ends=False)
-                best[key] = entry(cum2, m)
+            rim = binary_dilation(m, iterations=VIA_BUFFER_PX + 1) & ~blocked
+            rim &= ~binary_dilation(others, iterations=JUNCTION_PX)
+            if rim.any() and math.isfinite(float(cum2[rim].min())):
+                best[key] = entry(cum2, rim, mcp2)
             else:
-                best[key] = entry(cum, m, mcp)
-        out[db] = {k: v for k, v in best.items() if math.isfinite(v[0])}
+                best[key] = (UNREACHABLE_COST, None, None, None)
+        out[db] = best
     return out
 
 

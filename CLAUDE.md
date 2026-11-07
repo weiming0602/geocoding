@@ -83,10 +83,15 @@ read-write).
   [more DSNs]` follows each set-back building's driveway over NAIP imagery
   (public domain, cached in `data/naip/`, DATA_SOURCES.md §7) to the road it
   joins (set-back buildings 40 m+ and corner buildings with two named roads
-  within 60 m; 12 processes, ~3 min for Freeport); road order then drops a
-  building whose driveway clearly (1.5x, corners 3x) goes to another road
-  and lets one whose driveway comes to this street past the 25 m
-  nearer-road rule.
+  within 60 m; 12 processes, ~5 min for Freeport); pavement is NDVI < 0.02
+  (0.12 counted dry grass), and a driveway may not reach a road by running
+  along another road. Road order then drops a building whose driveway
+  clearly (1.5x, corners 3x) goes to another road, lets one whose driveway
+  comes to this street past the 25 m nearer-road rule, and treats the
+  building at the end of a visible lane (100 m+ back, <= 10% off pavement)
+  as the home: never a shed, its lot's numbered building, +0.3 for the
+  lane's street. Imagery first by the owner's call, even though Freeport
+  dips: TIGER 53.6%, E911 roads 66.5%.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)
