@@ -193,7 +193,46 @@ def coastal_dead_ends(conn, params) -> set:
     return {street for (street,) in conn.execute(COASTAL_DEAD_ENDS_SQL, params).fetchall()}
 
 
-def load_positions(dsn, region, town, by_lot="coastal") -> dict:
+# Where each set-back building's driveway meets the street (driveways.py's
+# entry point), as meters along the street. Only entries on (within
+# ENTRY_SNAP_M of) the street line count; the caller checks the entry's
+# road is this street.
+ENTRY_POSITIONS_SQL = """
+WITH lines AS (
+    SELECT sms.label_street AS street, ST_LineMerge(ST_Union(s.geom)) AS g
+    FROM address_inference.street_match_segments sms
+    JOIN streets s ON s.tlid = sms.tlid
+    WHERE sms.region_id = %(region)s AND sms.town = %(town)s
+    GROUP BY sms.label_street
+), entries AS (
+    SELECT d.source_id, d.road, ST_SetSRID(ST_MakePoint(d.entry_lon, d.entry_lat), 4326) AS pt
+    FROM address_inference.building_driveways d
+    WHERE d.state_fips = %(state_fips)s AND d.entry_lat IS NOT NULL
+      -- a visible driveway: (nearly) all of the path on pavement
+      AND d.off_m <= %(max_off)s
+)
+SELECT l.street, e.source_id, e.road,
+       ST_LineLocatePoint(l.g, e.pt) * ST_Length(l.g::geography) AS along,
+       ST_Distance(l.g::geography, b.inner_point::geography) AS back_m
+FROM lines l
+JOIN entries e ON e.pt && ST_Expand(l.g, 0.0005) AND ST_DWithin(e.pt::geography, l.g::geography, %(snap)s)
+JOIN address_inference.structures b ON b.state_fips = %(state_fips)s AND b.source_id = e.source_id
+WHERE ST_GeometryType(l.g) = 'ST_LineString'
+ORDER BY l.street, e.source_id
+"""
+ENTRY_SNAP_M = 30
+ENTRY_MAX_OFF_M = 10
+# Buildings at least this far back from a street take their position along
+# it from their driveway's entry. None = off: Freeport, every driveway at
+# 50 m+ back cost TIGER 1.1 / E911 roads 0.8 points; visible driveways only
+# (<= ENTRY_MAX_OFF_M off pavement), 80 m+ back, tied (TIGER 54.0% -> 54.0%,
+# E911 roads 66.2% -> 66.1%) -- deep lots already sit where their tax lot
+# meets the road, usually where the driveway is. Possibly useful where
+# there are no parcels (NH).
+ENTRY_MIN_BACK_M = None
+
+
+def load_positions(dsn, region, town, by_lot="coastal", entry_min_back_m=None, entry_max_off_m=None) -> dict:
     """{(street, source_id): meters along the street}. by_lot: on which
     streets a building on an ordinary tax lot that fronts the street takes
     the lot's frontage position (LOT_POSITIONS_SQL) instead of its own
@@ -213,6 +252,19 @@ def load_positions(dsn, region, town, by_lot="coastal") -> dict:
                 # road ~87 m before the house projects onto it).
                 deep = back_m is not None and back_m >= DEEP_LOT_M
                 if (street, source_id) in out and (only is None or street in only or deep):
+                    out[(street, source_id)] = along
+        min_back = ENTRY_MIN_BACK_M if entry_min_back_m is None else entry_min_back_m
+        if min_back is not None and not conn.execute(
+                "SELECT to_regclass('address_inference.building_driveways') IS NULL").fetchone()[0]:
+            from .street_names import canonical
+            for street, source_id, road, along, back_m in conn.execute(
+                    ENTRY_POSITIONS_SQL, {**params, "snap": ENTRY_SNAP_M,
+                                          "max_off": ENTRY_MAX_OFF_M if entry_max_off_m is None else entry_max_off_m}).fetchall():
+                # The house's number belongs where its driveway meets the road
+                # (48 Flying Point Road: 226 m back, its lane enters the road
+                # well before the house projects onto it).
+                if ((street, source_id) in out and back_m is not None and back_m >= min_back
+                        and canonical(street) == road):
                     out[(street, source_id)] = along
     return out
 

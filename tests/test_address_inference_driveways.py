@@ -86,3 +86,16 @@ def test_a_building_with_one_road_in_reach_skips_the_imagery(monkeypatch):
     monkeypatch.setattr(imagery, "crop", lambda *a: (_ for _ in ()).throw(AssertionError("imagery read")))
     roads = {0: [("Ash Rd", line((60, -200), (60, 200)))], 1: [("Ash Road", line((60, -200), (60, 200)))]}
     assert driveways.road_costs(LAT, LON, square(6), roads) == {0: {"ASH RD": 1.0}, 1: {"ASH RD": 1.0}}
+
+
+def test_the_entry_is_where_the_driveway_meets_the_road(monkeypatch):
+    # The driveway runs south, then east along a lane, reaching Birch Rd
+    # 80 m east of the house: that's its entry, not the point straight south.
+    fake_bands(monkeypatch, [(0, 0), (0, -100), (80, -100), (80, -150)])
+    roads = {0: [("Birch Rd", line((-200, -150), (200, -150))), ("Ash Rd", line((-200, 200), (200, 200)))]}
+    paths = driveways.road_paths(LAT, LON, square(6), roads)[0]
+    _cost, la, lo, off = paths["BIRCH RD"]
+    east, north = (lo - LON) * 111320 * math.cos(math.radians(LAT)), (la - LAT) * 111320
+    assert east == pytest.approx(80, abs=6) and north == pytest.approx(-150, abs=4)
+    assert off < 5                   # all on the driveway
+    assert paths["ASH RD"][3] > 150  # across grass to Ash Rd

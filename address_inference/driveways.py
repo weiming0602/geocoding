@@ -62,8 +62,14 @@ CREATE TABLE IF NOT EXISTS address_inference.building_driveways (
     source_id TEXT NOT NULL,
     road TEXT NOT NULL,
     cost REAL NOT NULL,
+    entry_lat DOUBLE PRECISION,  -- where the cheapest path meets this road
+    entry_lon DOUBLE PRECISION,
+    off_m REAL,                  -- meters of that path off pavement
     PRIMARY KEY (state_fips, source_id, road)
-)
+);
+ALTER TABLE address_inference.building_driveways ADD COLUMN IF NOT EXISTS entry_lat DOUBLE PRECISION;
+ALTER TABLE address_inference.building_driveways ADD COLUMN IF NOT EXISTS entry_lon DOUBLE PRECISION;
+ALTER TABLE address_inference.building_driveways ADD COLUMN IF NOT EXISTS off_m REAL
 """
 
 SET_BACK_SQL = """
@@ -114,10 +120,33 @@ def cost_map(bbox):
 
 def road_costs(lat, lon, building_geojson, roads_by_db):
     """{db_index: {canonical road: cheapest path cost from the building}}."""
+    return {db: {k: v[0] for k, v in paths.items()}
+            for db, paths in road_paths(lat, lon, building_geojson, roads_by_db, quick=True).items()}
+
+
+def road_paths(lat, lon, building_geojson, roads_by_db, quick=False):
+    """{db_index: {canonical road: (cost, entry_lat, entry_lon, off_m)}} -- the
+    cheapest path's cost, where it meets the road (the driveway's entry), and
+    how many meters of it are off pavement (small = a visible driveway).
+    quick: a building with one road in reach gets (1.0, None, None, None)
+    without imagery."""
     bbox = imagery.bbox_around(lat, lon, HALF_M)
     x0, y0, x1, y1 = bbox
     to_px = lambda lo, la: ((imagery.merc(lo, la)[0] - x0) / (x1 - x0) * SIZE,
                             (y1 - imagery.merc(lo, la)[1]) / (y1 - y0) * SIZE)
+
+    px_m = 2 * HALF_M / SIZE
+
+    def entry(cumulative, m, tracer=None):
+        r, c = np.argwhere(m)[np.argmin(cumulative[m])]
+        mx, my = x0 + (c + 0.5) / SIZE * (x1 - x0), y1 - (r + 0.5) / SIZE * (y1 - y0)
+        off = None
+        if tracer is not None and math.isfinite(float(cumulative[r, c])):
+            path = np.asarray(tracer.traceback((int(r), int(c))))
+            off = float((cost[path[:, 0], path[:, 1]] > 2).sum() * px_m)
+        return (float(cumulative[r, c]),
+                math.degrees(2 * math.atan(math.exp(my * math.pi / 20037508.34)) - math.pi / 2),
+                mx / 20037508.34 * 180, off)
     # Draw every road first: a building with a single named road in reach
     # has nothing to choose between (its ratio is 1 whatever the cost), so it
     # skips the imagery and path search entirely.
@@ -131,8 +160,8 @@ def road_costs(lat, lon, building_geojson, roads_by_db):
                 ImageDraw.Draw(mask).line([to_px(x, y) for x, y in line], fill=1, width=3)
         masks = {k: np.asarray(m) > 0 for k, m in masks.items()}
         masks_by_db[db] = {k: m for k, m in masks.items() if m.any()}
-    if all(len(m) <= 1 for m in masks_by_db.values()):
-        return {db: {k: 1.0 for k in masks} for db, masks in masks_by_db.items()}
+    if quick and all(len(m) <= 1 for m in masks_by_db.values()):
+        return {db: {k: (1.0, None, None, None) for k in masks} for db, masks in masks_by_db.items()}
     cost = cost_map(bbox)
     house = Image.new("L", (SIZE, SIZE), 0)
     for ring in _rings(building_geojson):
@@ -149,7 +178,7 @@ def road_costs(lat, lon, building_geojson, roads_by_db):
     for db, masks in masks_by_db.items():
         best = {}
         if not BRANCH_CHECK:
-            out[db] = {key: float(cum[m].min()) for key, m in masks.items()}
+            out[db] = {key: entry(cum, m, mcp) for key, m in masks.items()}
             continue
         for key, m in masks.items():
             others = np.zeros_like(m)
@@ -176,10 +205,10 @@ def road_costs(lat, lon, building_geojson, roads_by_db):
                 blocked[others] = np.inf
                 cum2, _ = MCP_Geometric(blocked).find_costs(start_list, ends=[tuple(p) for p in np.argwhere(m)],
                                                             find_all_ends=False)
-                best[key] = float(cum2[m].min())
+                best[key] = entry(cum2, m)
             else:
-                best[key] = float(cum[m].min())
-        out[db] = {k: c for k, c in best.items() if math.isfinite(c)}
+                best[key] = entry(cum, m, mcp)
+        out[db] = {k: v for k, v in best.items() if math.isfinite(v[0])}
     return out
 
 
@@ -194,7 +223,7 @@ def _worker_init(dsns):
 def _worker(item):
     sid, (lat, lon, geo) = item
     roads_by_db = {i: c.execute(ROADS_SQL, {"lat": lat, "lon": lon}).fetchall() for i, c in enumerate(_worker_conns)}
-    return sid, road_costs(lat, lon, geo, roads_by_db)
+    return sid, road_paths(lat, lon, geo, roads_by_db)
 
 
 def run(region, town, dsns, progress=lambda m: print(m, flush=True), skip_done=False, workers=None):
@@ -227,15 +256,17 @@ def run(region, town, dsns, progress=lambda m: print(m, flush=True), skip_done=F
         with multiprocessing.get_context("fork").Pool(workers, _worker_init, (dsns,)) as pool:
             for k, (sid, costs_by_db) in enumerate(pool.imap_unordered(_worker, items, chunksize=8), 1):
                 for i, costs in costs_by_db.items():
-                    rows[i] += [(region.state_fips, sid, road, c) for road, c in costs.items()]
+                    rows[i] += [(region.state_fips, sid, road, c, la, lo, off) for road, (c, la, lo, off) in costs.items()]
                 if k % 250 == 0:
                     progress(f"  {k}/{len(buildings)} buildings ({time.time() - t0:.0f} s)")
         for i, conn in enumerate(conns):
-            conn.execute(CREATE_SQL)
+            for stmt in CREATE_SQL.split(";"):
+                conn.execute(stmt)
             conn.execute("DELETE FROM address_inference.building_driveways WHERE state_fips = %s AND source_id = ANY(%s)",
                          (region.state_fips, list(buildings)))
             with conn.cursor() as cur:
-                cur.executemany("INSERT INTO address_inference.building_driveways VALUES (%s, %s, %s, %s)", rows[i])
+                cur.executemany("INSERT INTO address_inference.building_driveways (state_fips, source_id, road, cost,"
+                                " entry_lat, entry_lon, off_m) VALUES (%s, %s, %s, %s, %s, %s, %s)", rows[i])
             conn.commit()
             progress(f"{dsns[i]}: {len(rows[i])} building-road costs")
     finally:
