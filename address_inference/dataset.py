@@ -226,6 +226,17 @@ def load_driveways(conn) -> tuple[dict, dict]:
     return dict(costs), dict(offs)
 
 
+# Trees over and around each building (canopy.py): a tree-covered outline
+# was traced short, so its size is unreliable.
+CANOPY_SQL = "SELECT source_id, canopy_over, canopy_ring, width_m FROM address_inference.building_canopy"
+
+
+def load_canopy(conn) -> dict:
+    if conn.execute("SELECT to_regclass('address_inference.building_canopy') IS NULL").fetchone()[0]:
+        return {}
+    return {sid: (over, ring, width) for sid, over, ring, width in conn.execute(CANOPY_SQL).fetchall()}
+
+
 def load_pools(conn) -> dict:
     if conn.execute("SELECT to_regclass('address_inference.building_pool') IS NULL").fetchone()[0]:
         return {}
@@ -279,6 +290,7 @@ def load(dsn, region, town: str):
         parcels = load_parcels(conn, params)
         if parcels is not None:
             parcels["pools"] = load_pools(conn)
+            parcels["canopy"] = load_canopy(conn)
             parcels["driveways"], parcels["driveway_off"] = load_driveways(conn)
     return addresses, segments, candidates, parcels
 
@@ -414,6 +426,12 @@ def _parcel_features(source_id, street_tlids, parcels) -> dict:
             "parcel_size_ratio": info.get("size_ratio", np.nan) if info.get("size_ratio") is not None else np.nan}
 
 
+def _canopy_features(source_id, parcels) -> dict:
+    over, ring, width = (parcels or {}).get("canopy", {}).get(source_id, (None, None, None))
+    nan = lambda v: np.nan if v is None else v
+    return {"canopy_over": nan(over), "canopy_ring": nan(ring), "width_m": nan(width)}
+
+
 def _driveway_features(source_id, street_names, parcels) -> dict:
     """drive_ratio: the cheapest pavement path to this street vs. to the
     easiest road (1 = this street is easiest); drive_best: this street is
@@ -541,6 +559,7 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
             "match_exact": addr["match_method"] == "exact",
             **_parcel_features(source_id, street_tlids, parcels),
             "pool_m": (parcels or {}).get("pools", {}).get(source_id, np.nan),
+            **_canopy_features(source_id, parcels),
             **_driveway_features(source_id, street_names, parcels),
             "d_m0_access": _access_distance(addr, source_id, d_m0, parcels),
         })
@@ -568,6 +587,9 @@ FEATURES = [
     "parcel_frontage_this", "parcel_frontage_other", "parcel_frontage_share", "parcel_buildings",
     "parcel_largest", "parcel_area_m2", "parcel_size_ratio", "pool_m",
 ]
+# canopy_over / canopy_ring / width_m (canopy.py) are computed for road
+# order's tree-covered rule but are not model inputs: as inputs they cost
+# TIGER 0.7 and E911 roads 1.2 points (Freeport, 2026-11-07).
 # drive_ratio / drive_best (driveways.py) are computed for road order's
 # driveway rules but are not model inputs: as inputs they cost TIGER 1.2
 # points; as rules (order.DRIVEWAY_CLEAR_RATIO) they add a point on E911 roads.

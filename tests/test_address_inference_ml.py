@@ -528,3 +528,19 @@ def test_one_lane_leads_to_one_home():
     parcel_of = {"house47": "L47", "barn47": "L47", "shed47a": "L47", "shed47b": "L47", "house45": "L45"}
     picks = order.lot_picks(address_df, pd.DataFrame(rows, columns=cols), positions, {}, parcel_of)
     assert picks == {"a45": "house45", "a47": "house47"}
+
+
+def test_a_tree_covered_building_is_never_a_shed():
+    from address_inference import order
+    # 42's house: a third of its outline under trees, traced as a thin strip
+    # 15% the size of its lot's biggest building -- a "shed" by size alone.
+    address_df = pd.DataFrame([{"id": "a42", "number": 42, "street": "FP", "scorable": True}])
+    positions = {("FP", "thin"): 10.0, ("FP", "big"): 50.0}
+    cols = ["address_id", "source_id", "score", "same_side", "parcel_buildings", "parcel_size_ratio",
+            "dist_vs_nearest_road", "canopy_over"]
+    rows = [("a42", "thin", 2.0, True, 2, 0.15, 0.0, 0.31), ("a42", "big", 1.0, True, 2, 1.0, 0.0, 0.04)]
+    picks = order.order_constrained_picks(address_df, pd.DataFrame(rows, columns=cols), positions, {})
+    assert picks["a42"] == "thin"
+    rows[0] = ("a42", "thin", 2.0, True, 2, 0.15, 0.0, 0.0)  # clear roof: a shed
+    picks = order.order_constrained_picks(address_df, pd.DataFrame(rows, columns=cols), positions, {})
+    assert picks["a42"] == "big"

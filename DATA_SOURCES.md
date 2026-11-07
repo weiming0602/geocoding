@@ -176,9 +176,11 @@ geocoding request. Current as of August 2026.
   orthoNaip2018/ImageServer`).
 - **Why it matters:** the building-address experiment follows each set-back
   building's driveway over pavement (low vegetation index, bright) to the
-  road it joins (`address_inference/driveways.py`); tiles are cached once
-  under `data/naip/` (`address_inference/imagery.py`). **Not used by
-  geocoding today.**
+  road it joins (`address_inference/driveways.py`), and measures the trees
+  over and around each building (`address_inference/canopy.py`: a
+  tree-covered outline was traced short, so its size is unreliable); tiles
+  are cached once under `data/naip/` (`address_inference/imagery.py`).
+  **Not used by geocoding today.**
 - **License:** "Public domain." (the service's item info, checked
   2026-11-06). Newer NAIP years (2021, 2023) and Maine's own 2023/2024
   regional orthophotos need a token on Maine's server; Maine Regional 2021

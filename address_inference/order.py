@@ -89,6 +89,10 @@ POOL_HOME_M = 15
 # (48 Flying Point Road: 226 m back, 10 m of gaps). LANE_BONUS None = off.
 # Adopted as the foundation even though Freeport scores dip (owner's call,
 # 2026-11-07): imagery first, then review the changed cases.
+# A building whose outline is at least this share under trees (canopy.py)
+# was traced short (42 Flying Point Road: 31%, a thin 78 m2 strip): never a
+# shed or a "much smaller extra" for its size. None = off.
+TREE_COVERED = 0.2
 LANE_MIN_M = 100
 LANE_MAX_OFF_M = 10
 LANE_MAX_OFF_SHARE = 0.1
@@ -563,6 +567,8 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     if lane.any():
         scored = scored.assign(p=scored["p"] + LANE_BONUS * lane)
     home_pool = home_pool | lane
+    if TREE_COVERED is not None and "canopy_over" in scored.columns:
+        home_pool = home_pool | (scored["canopy_over"] >= TREE_COVERED).fillna(False)
     if pool_bonus and home_pool.any():
         scored = scored.assign(p=scored["p"] + pool_bonus * home_pool)
     accessory = ACCESSORY_MAX_RATIO if accessory_max_ratio is None else accessory_max_ratio
@@ -607,6 +613,8 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     if driveway_rules:
         lanes = scored_df["lane_end"].astype(bool) if "lane_end" in scored_df.columns else lane_end(scored_df)
         pool_homes |= set(scored_df.loc[lanes, "source_id"])  # never a "much smaller extra"
+    if TREE_COVERED is not None and "canopy_over" in scored_df.columns:
+        pool_homes |= set(scored_df.loc[scored_df["canopy_over"] >= TREE_COVERED, "source_id"])
     size_of = dict(zip(scored_df["source_id"], scored_df["sqmeters"].fillna(0))) if "sqmeters" in scored_df.columns else {}
     lot_of = (dict(zip(scored_df["source_id"], scored_df["parcel_area_m2"]))
               if "parcel_area_m2" in scored_df.columns else {})
@@ -809,7 +817,7 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
     for col, how in (("dist_vs_nearest_road", "min"), ("d_m0", "min"), ("sqmeters", "max"),
                      ("parcel_size_ratio", "max"), ("parcel_buildings", "min"), ("parcel_area_m2", "max"),
                      ("pool_m", "min"), ("drive_ratio", "min"), ("drive_best", "max"), ("dist_road", "min"),
-                     ("lane_end", "max")):
+                     ("lane_end", "max"), ("canopy_over", "max")):
         if col in df.columns:
             agg_spec[col] = (col, how)
     agg = df.groupby(["address_id", "place"], sort=False).agg(**agg_spec).reset_index()

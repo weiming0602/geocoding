@@ -91,7 +91,11 @@ read-write).
   building at the end of a visible lane (100 m+ back, <= 10% off pavement)
   as the home (one per lot, the biggest): never a shed, its lot's numbered
   building, +0.3 for the lane's street. Imagery first by the owner's call,
-  even though TIGER dips: TIGER 53.8%, E911 roads 66.6%.
+  even though TIGER dips: TIGER 53.8%, E911 roads 66.6%. `python -m
+  address_inference.canopy me --town Freeport "dbname=geocoding" [more
+  DSNs]` (~1 min) measures trees over each building's outline from the same
+  imagery; road order never calls a building 20%+ under trees a shed (as
+  model inputs these measures cost points, so they aren't).
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)
