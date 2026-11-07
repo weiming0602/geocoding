@@ -88,10 +88,13 @@ POOL_BONUS = 0.0
 # taking an Arrowhead Ridge Road house).
 CLAIM_MIN_P = 0.3
 # lot_picks: a place another street's address wants with at least this
-# probability (and more than this address does) is that street's. None = off:
-# at 0.5 TIGER 53.3% -> 53.8% (fixes 48 and 42 Flying Point Road, breaks 1
-# Carriage Road) but E911 roads 66.1% -> 65.6% -- not a consistent win.
-LOT_RESERVE_P = None
+# probability (and more than this address does) is that street's -- unless
+# the place's building has its driveway on THIS street. Freeport: TIGER
+# 53.3% -> 54.0% (46 numbers fixed, 23 broken), E911 roads 66.1% -> 66.2%
+# (38/34). Without the driveway guard it lost 0.5 on E911 roads; also
+# requiring this address to have wanted the lot (p >= 0.05) lost 0.6 there.
+LOT_RESERVE_P = 0.5
+LOT_RESERVE_MIN_P = 0.0
 
 STREET_CLASS_SQL = """
 SELECT sms.label_street, array_agg(DISTINCT s.mtfcc)
@@ -729,7 +732,16 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
         def other_claim(pl, st):
             return max((pm for pm, s2 in top[pl] if s2 != st), default=0.0)
         rival = np.array([other_claim(pl, st) for pl, st in zip(agg["place"], agg["_street"])])
-        agg = agg[~((rival >= reserve) & (rival > agg["p_sum"].to_numpy()))].drop(columns="_street")
+        drop = (rival >= reserve) & (rival > agg["p_sum"].to_numpy())
+        # Only a real dispute: a number that never wanted the lot (Baker
+        # Road vs a Wardtown Road lot, p ~0) keeps it as a slot -- taking it
+        # away shifted whole streets of easy houses.
+        drop &= agg["p_sum"].to_numpy() >= LOT_RESERVE_MIN_P
+        # Never against the driveway: 40 Baker Road's building was handed to
+        # Cedar Lane though its driveway goes to Baker Road.
+        if "drive_best" in agg.columns:
+            drop &= ~(agg["drive_best"] == 1).to_numpy()
+        agg = agg[~drop].drop(columns="_street")
     best_building = {(a, pl): b for a, pl, b in zip(agg["address_id"], agg["place"], agg["best"])}
     scored_place = agg.rename(columns={"place": "source_id"}).assign(score=lambda d: np.log(d["p_sum"].clip(lower=1e-12)))
     lists = defaultdict(list)

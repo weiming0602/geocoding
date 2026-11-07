@@ -468,3 +468,24 @@ def test_corner_buildings_need_a_clearer_driveway():
                            ("a1", "corner", 1.0, True, 0.0, 20.0, 2.0, 0.0)], columns=cols)
     assert order.order_constrained_picks(address_df, scored, positions, {})["a1"] == "corner"
     assert order.lot_picks(address_df, scored, positions, {}, {"set_back": "p1", "corner": "p2"})["a1"] == "corner"
+
+
+def test_a_lot_goes_to_the_street_that_wants_it_most_unless_its_driveway_says_otherwise():
+    from address_inference import order
+    # 48 on Main St (assigned first, a main road) vs 2 on Side Rd both want
+    # lot L; Side Rd's 2 wants it far more, so Main's 48 takes its own house.
+    address_df = pd.DataFrame([{"id": "m48", "number": 48, "street": "MAIN ST", "scorable": True},
+                               {"id": "s2", "number": 2, "street": "SIDE RD", "scorable": True}])
+    positions = {("MAIN ST", "garage"): 10.0, ("MAIN ST", "house48"): 50.0, ("SIDE RD", "garage"): 5.0, ("SIDE RD", "house2"): 6.0}
+    cols = ["address_id", "source_id", "score", "same_side", "drive_best"]
+    rows = [("m48", "garage", 2.0, True, 0.0), ("m48", "house48", 1.5, True, 0.0),
+            ("s2", "house2", 3.0, True, float("nan")), ("s2", "garage", 1.0, True, float("nan"))]
+    parcel_of = {"garage": "L", "house2": "L", "house48": "L48"}
+    picks = order.lot_picks(address_df, pd.DataFrame(rows, columns=cols), positions, {}, parcel_of,
+                            street_order=["MAIN ST", "SIDE RD"])
+    assert picks["m48"] == "house48" and picks["s2"] == "house2"
+    # ...but if the garage's driveway comes to Main St, the lot stays open to 48.
+    rows[0] = ("m48", "garage", 2.0, True, 1.0)
+    picks = order.lot_picks(address_df, pd.DataFrame(rows, columns=cols), positions, {}, parcel_of,
+                            street_order=["MAIN ST", "SIDE RD"])
+    assert picks["m48"] == "garage"
