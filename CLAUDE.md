@@ -89,9 +89,9 @@ read-write).
   clearly (1.5x, corners 3x) goes to another road, lets one whose driveway
   comes to this street past the 25 m nearer-road rule, and treats the
   building at the end of a visible lane (100 m+ back, <= 10% off pavement)
-  as the home: never a shed, its lot's numbered building, +0.3 for the
-  lane's street. Imagery first by the owner's call, even though Freeport
-  dips: TIGER 53.6%, E911 roads 66.5%.
+  as the home (one per lot, the biggest): never a shed, its lot's numbered
+  building, +0.3 for the lane's street. Imagery first by the owner's call,
+  even though TIGER dips: TIGER 53.8%, E911 roads 66.6%.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

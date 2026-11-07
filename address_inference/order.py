@@ -793,7 +793,17 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
     key = {b: ("lot:" + pid if 1 < lot_size[pid] <= LOT_MAX_BUILDINGS else b) for b, pid in parcel_of.items()}
     df["place"] = df["source_id"].map(lambda b: key.get(b, b))
     # The lane's end is the lot's numbered building, whatever the ranker liked.
-    df["lane_end"] = lane_end(df)
+    # One lane, one home: of several buildings at the end of a lot's lane
+    # (47 Flying Point Road: house, barn and sheds), only the biggest is the
+    # home -- each counted as one drew 45 onto 47's barn, and 39-45 shifted.
+    lane = lane_end(df)
+    if lane.any() and "sqmeters" in df.columns:
+        lot = df["source_id"].map(parcel_of)
+        cand = df[lane & lot.notna()].assign(_lot=lot)
+        home = (cand.sort_values(["sqmeters", "source_id"], ascending=[False, True], kind="stable")
+                .drop_duplicates("_lot").set_index("_lot")["source_id"])
+        lane &= lot.isna() | (df["source_id"] == lot.map(home))
+    df["lane_end"] = lane
     df = df.sort_values(["address_id", "place", "lane_end", "p"], ascending=[True, True, False, False], kind="stable")
     agg_spec = {"p_sum": ("p", "sum"), "best": ("source_id", "first"), "same_side": ("same_side", "first")}
     for col, how in (("dist_vs_nearest_road", "min"), ("d_m0", "min"), ("sqmeters", "max"),

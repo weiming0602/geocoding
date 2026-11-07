@@ -508,3 +508,23 @@ def test_the_house_at_the_end_of_a_visible_lane_is_the_home_and_takes_the_number
     rows[1] = ("a48", "lane_house", 1.0, True, 1.0, 40.0, 220.0)
     picks = order.lot_picks(address_df, pd.DataFrame(rows, columns=cols), positions, {}, parcel_of)
     assert picks["a48"] == "front"
+
+
+def test_one_lane_leads_to_one_home():
+    from address_inference import order
+    # 47's lot: its house and a barn both sit at the end of 47's lane. Only
+    # the house (the bigger) is the lane's home; counted as a second home,
+    # the barn drew 45 off its own house by the road.
+    address_df = pd.DataFrame([{"id": "a45", "number": 45, "street": "FP", "scorable": True},
+                               {"id": "a47", "number": 47, "street": "FP", "scorable": True}])
+    positions = {("FP", "house45"): 10.0, ("FP", "barn47"): 20.0, ("FP", "house47"): 30.0,
+                 ("FP", "shed47a"): 31.0, ("FP", "shed47b"): 32.0}
+    cols = ["address_id", "source_id", "score", "same_side", "drive_best", "drive_off_m", "dist_road", "sqmeters"]
+    lane = (1.0, 5.0, 150.0)
+    rows = [("a45", "house45", 1.0, True, float("nan"), float("nan"), 20.0, 120.0),
+            ("a45", "barn47", 0.9, True, *lane, 200.0),
+            ("a47", "house47", 1.5, True, *lane, 300.0), ("a47", "barn47", 0.5, True, *lane, 200.0)]
+    # a lot of 4+ buildings stays separate places in road order
+    parcel_of = {"house47": "L47", "barn47": "L47", "shed47a": "L47", "shed47b": "L47", "house45": "L45"}
+    picks = order.lot_picks(address_df, pd.DataFrame(rows, columns=cols), positions, {}, parcel_of)
+    assert picks == {"a45": "house45", "a47": "house47"}
