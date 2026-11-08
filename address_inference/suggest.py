@@ -13,7 +13,9 @@ suggests a number from their neighbors on the same side of the street:
    are taken, at least SECOND_MIN_M2 and SECOND_MIN_SHARE of the lot's
    numbered house, and at least SECOND_MIN_H tall (not a shed or garage).
 2. Its street: the road its visible driveway reaches (driveways.py), else
-   the nearest street within STREET_MAX_M; its side and distance along it.
+   the nearest street its tax lot fronts, else the nearest within
+   STREET_MAX_M; its side, and its distance along the street kept within
+   its lot's frontage (POSITION).
 3. Its number (suggest_number): numbers on one side of a street share a
    parity and run in order along the road, so the number is a free one of
    that side's parity between the numbers just before and after it,
@@ -48,10 +50,15 @@ SECOND_MIN_M2 = 80
 SECOND_MIN_SHARE = 0.5
 SECOND_MIN_H = 3.0
 DRIVEWAY_MAX_OFF_M = 10       # a visible driveway (order.LANE_MAX_OFF_M)
-# Where a house sits along its street: its own projection ("house"), or
-# where its visible driveway meets the street ("driveway"). Chosen by the
-# leave-one-out check (see main's output).
-POSITION = "house"
+# Where a house sits along its street (owner's rule: reference the tax lot
+# before numbering -- lots are what get numbered): "within lot" = the house's
+# own projection, kept inside the stretch of street its lot fronts. Freeport
+# leave-one-out, exact number: within lot 44.1%, house 43.5%, lot (middle of
+# the frontage) 42.3%, driveway entry 42.2%; right street 88.7% vs 88.3%.
+# A lot that fronts no street (or a condo lot of more than LOT_MAX_BUILDINGS
+# buildings) falls back to the house.
+POSITION = "within lot"
+LOT_FRONTAGE_M = 15   # order.LOT_FRONTAGE_M
 
 LINES_CTE = """
 WITH lines AS (
@@ -158,6 +165,28 @@ FROM best b JOIN line l ON l.g && ST_Expand(b.pt, 0.0005) AND ST_DWithin(l.g::ge
 WHERE b.off_m <= {DRIVEWAY_MAX_OFF_M}
 """
 
+# Where each building's tax lot meets each street piece: the middle of the
+# street's stretch within LOT_FRONTAGE_M of the lot (as order.py's
+# LOT_POSITIONS_SQL), and how long that stretch is.
+LOT_FRONTS_SQL = LINES_CTE + f"""
+, lots AS (
+    SELECT p.parcel_id, p.geom FROM address_inference.parcels p
+    WHERE p.state_fips = %(state_fips)s AND p.town = %(town)s
+      AND (SELECT count(*) FROM address_inference.building_parcels b2
+           WHERE b2.parcel_id = p.parcel_id) <= {LOT_MAX_BUILDINGS}
+), front AS (
+    SELECT lots.parcel_id, l.part,
+           ST_Intersection(l.g, ST_Buffer(lots.geom::geography, {LOT_FRONTAGE_M})::geometry) AS seg, l.g, l.len
+    FROM lots JOIN line l ON lots.geom && ST_Expand(l.g, 0.0003)
+     AND ST_DWithin(lots.geom::geography, l.g::geography, {LOT_FRONTAGE_M})
+)
+SELECT bp.source_id, f.part, ST_LineLocatePoint(f.g, ST_Centroid(f.seg)) * f.len,
+       (SELECT min(ST_LineLocatePoint(f.g, d.geom)) * f.len FROM ST_DumpPoints(f.seg) d),
+       (SELECT max(ST_LineLocatePoint(f.g, d.geom)) * f.len FROM ST_DumpPoints(f.seg) d)
+FROM front f JOIN address_inference.building_parcels bp ON bp.parcel_id = f.parcel_id
+WHERE NOT ST_IsEmpty(f.seg)
+"""
+
 CREATE_SQL = """
 CREATE TABLE IF NOT EXISTS address_inference.suggested_numbers (
     region_id TEXT NOT NULL,
@@ -257,7 +286,8 @@ def load(dsn, region, town):
         has_driveways = conn.execute(
             "SELECT to_regclass('address_inference.building_driveways') IS NOT NULL").fetchone()[0]
         driveways = conn.execute(DRIVEWAYS_SQL, params).fetchall() if has_driveways else []
-    return points, all_points, buildings, streets, driveways
+        fronts = conn.execute(LOT_FRONTS_SQL, params).fetchall()
+    return points, all_points, buildings, streets, driveways, fronts
 
 
 def unnumbered_houses(all_points, buildings):
@@ -280,22 +310,40 @@ def unnumbered_houses(all_points, buildings):
     return out
 
 
-def placements(streets, driveways, position=None):
-    """{source_id: (street, along, side)}: the street its visible driveway
-    reaches, else the nearest; along from `position` (see POSITION)."""
-    position = position or POSITION
+def _position(sid, street, along, entry, front, position):
+    if position == "driveway" and (sid, street) in entry:
+        return entry[(sid, street)][1]
+    if position == "lot" and (sid, street) in front:
+        return front[(sid, street)][0]
+    if position == "within lot" and (sid, street) in front:
+        _, lo, hi = front[(sid, street)]
+        return min(max(along, lo), hi)
+    return along
+
+
+def _indexes(streets, driveways, fronts):
     near = defaultdict(dict)
     for sid, street, dist, along, side in streets:
         near[sid][street] = (dist, along, side)
     entry = {(sid, street): (road, along) for sid, road, street, along in driveways}
+    front = {(sid, street): (mid, lo, hi) for sid, street, mid, lo, hi in fronts}
+    return near, entry, front
+
+
+def placements(streets, driveways, fronts=(), position=None):
+    """{source_id: (street, along, side)}. The street: the one its visible
+    driveway reaches, else (position "lot") the nearest its lot fronts,
+    else the nearest; along from `position` (see POSITION); side of the house."""
+    position = position or POSITION
+    near, entry, front = _indexes(streets, driveways, fronts)
     out = {}
     for sid, options in near.items():
         drive = [st for st in options if (sid, st) in entry and canonical(st.split('#')[0]) == entry[(sid, st)][0]]
-        street = drive[0] if drive else min(options, key=lambda st: (options[st][0], st))
+        fronted = [st for st in options if (sid, st) in front] if position in ("lot", "within lot") else []
+        pool = drive or fronted or list(options)
+        street = min(pool, key=lambda st: (options[st][0], st))
         _, along, side = options[street]
-        if position == "driveway" and (sid, street) in entry:
-            along = entry[(sid, street)][1]
-        out[sid] = (street, along, side)
+        out[sid] = (street, _position(sid, street, along, entry, front, position), side)
     return out
 
 
@@ -309,32 +357,29 @@ def street_numbers(points):
     return out
 
 
-def leave_one_out(points, streets, driveways, position=None):
+def leave_one_out(points, streets, driveways, fronts=(), position=None):
     """(right, tried): every house exactly one E911 number labels, on that
     number's own street, suggested again with its number taken out."""
+    position = position or POSITION
     numbers = street_numbers(points)
     per_building = Counter(b for *_, b in points if b)
-    near = defaultdict(dict)
-    for sid, street, dist, along, side in streets:
-        near[sid][street] = (dist, along, side)
-    entry = {(sid, street): along for sid, _, street, along in driveways}
+    near, entry, front = _indexes(streets, driveways, fronts)
     right = tried = 0
     for _, n, street, _, _, b in points:
         if not b or per_building[b] != 1 or street not in near.get(b, {}):
             continue
         _, along, side = near[b][street]
-        if (position or POSITION) == "driveway" and (b, street) in entry:
-            along = entry[(b, street)]
+        along = _position(b, street, along, entry, front, position)
         others = [p for p in numbers[street] if p[0] != n]
         tried += 1
         right += suggest_number(others, along, side).number == n
     return right, tried
 
 
-def suggest(points, all_points, buildings, streets, driveways):
+def suggest(points, all_points, buildings, streets, driveways, fronts=()):
     """[(source_id, street, tier, Suggestion, lat, lon)]."""
     numbers = street_numbers(points)
-    where = placements(streets, driveways)
+    where = placements(streets, driveways, fronts)
     latlon = {sid: (lat, lon) for sid, *_, lat, lon in buildings}
     out = []
     for sid, tier in sorted(unnumbered_houses(all_points, buildings).items()):
@@ -368,9 +413,9 @@ def main():
     args = parser.parse_args()
     region = load_region(args.region)
     loaded = load(args.dsn, region, args.town)
-    points, _, _, streets, driveways = loaded
-    for position in ("house", "driveway"):
-        right, tried = leave_one_out(points, streets, driveways, position)
+    points, _, _, streets, driveways, fronts = loaded
+    for position in ("within lot", "lot", "house", "driveway"):
+        right, tried = leave_one_out(points, streets, driveways, fronts, position)
         print(f"leave-one-out, position={position}: {right}/{tried} = {right / max(tried, 1):.1%} exact number")
     rows = suggest(*loaded)
     by = Counter((tier, s.number is not None) for _, _, tier, s, _, _ in rows)

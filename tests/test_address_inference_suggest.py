@@ -54,3 +54,13 @@ def test_only_houses_get_numbers_and_a_garage_does_not():
     ]
     all_points = [("p42", "front", "L1")]
     assert suggest.unnumbered_houses(all_points, buildings) == {"back": "second house", "new": "unnumbered lot"}
+
+
+def test_a_deep_house_is_placed_within_its_lots_frontage():
+    # House projects at 300 m, but its lot meets this street only at 100-140 m
+    # (a back lot reached down a long drive): it is numbered there.
+    streets = [("deep", "CARRIAGE ROAD", 70.0, 300.0, 1), ("deep", "OTHER ROAD", 60.0, 10.0, 1)]
+    fronts = [("deep", "CARRIAGE ROAD", 120.0, 100.0, 140.0)]
+    assert suggest.placements(streets, [], fronts, "within lot") == {"deep": ("CARRIAGE ROAD", 140.0, 1)}
+    # without the lot: the nearer road, at the house
+    assert suggest.placements(streets, [], fronts, "house") == {"deep": ("OTHER ROAD", 10.0, 1)}

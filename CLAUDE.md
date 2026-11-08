@@ -115,7 +115,9 @@ read-write).
   falls between its neighbors (TIGER streets + public E911 points only).
   Leave-one-out on Freeport's numbered houses: 43.5% exact number. Saved to
   `address_inference.suggested_numbers`; the Training data map shows them
-  as blue dots, never as E911.
+  as blue dots, never as E911. Lot first (owner's rule): a house's place along
+  the street is kept inside its tax lot's frontage, in suggest (44.1% vs
+  43.5% exact) and road order (`order.BY_LOT = "within"`, Freeport neutral).
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

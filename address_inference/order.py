@@ -154,7 +154,12 @@ WITH lines AS (
 ), touch AS (
     SELECT l.street, p.parcel_id,
            ST_LineLocatePoint(l.g, ST_Centroid(ST_Intersection(l.g, ST_Buffer(p.geom::geography, {LOT_FRONTAGE_M})::geometry)))
-             * ST_Length(l.g::geography) AS along
+             * ST_Length(l.g::geography) AS along,
+           -- the ends of the lot's stretch of street
+           (SELECT min(ST_LineLocatePoint(l.g, d.geom)) FROM ST_DumpPoints(ST_Intersection(l.g,
+               ST_Buffer(p.geom::geography, {LOT_FRONTAGE_M})::geometry)) d) * ST_Length(l.g::geography) AS lo,
+           (SELECT max(ST_LineLocatePoint(l.g, d.geom)) FROM ST_DumpPoints(ST_Intersection(l.g,
+               ST_Buffer(p.geom::geography, {LOT_FRONTAGE_M})::geometry)) d) * ST_Length(l.g::geography) AS hi
     FROM lines l
     JOIN address_inference.parcels p
       ON p.state_fips = %(state_fips)s AND p.town = %(town)s AND p.geom && ST_Expand(l.g, 0.0003)
@@ -163,7 +168,7 @@ WITH lines AS (
 )
 SELECT t.street, bp.source_id, t.along,
        -- how far back the building sits from this street
-       ST_Distance(l.g::geography, b.inner_point::geography) AS back_m
+       ST_Distance(l.g::geography, b.inner_point::geography) AS back_m, t.lo, t.hi
 FROM touch t JOIN address_inference.building_parcels bp ON bp.parcel_id = t.parcel_id
 JOIN lines l ON l.street = t.street
 JOIN address_inference.structures b ON b.state_fips = bp.state_fips AND b.source_id = bp.source_id
@@ -249,27 +254,42 @@ ENTRY_MAX_OFF_M = 10
 ENTRY_MIN_BACK_M = None
 
 
-def load_positions(dsn, region, town, by_lot="coastal", entry_min_back_m=None, entry_max_off_m=None) -> dict:
+# Owner's rule: reference the tax lot before numbering. "within" = coastal
+# dead ends and deep houses as "coastal", and every other building's own
+# place kept inside its lot's stretch of the street. Freeport, right
+# building: TIGER 53.3% (coastal) / 53.3% (within) / 53.1% (True: every lot's
+# frontage middle); E911 roads 66.4 / 66.4 / 66.1.
+BY_LOT = "within"
+
+
+def load_positions(dsn, region, town, by_lot=BY_LOT, entry_min_back_m=None, entry_max_off_m=None) -> dict:
     """{(street, source_id): meters along the street}. by_lot: on which
     streets a building on an ordinary tax lot that fronts the street takes
     the lot's frontage position (LOT_POSITIONS_SQL) instead of its own
-    projection -- "coastal" (dead ends near the shore), True (all), False."""
+    projection -- "coastal" (dead ends near the shore), "within" (coastal, and
+    elsewhere the projection kept inside the lot's frontage), True (all), False."""
     params = {"region": region.id, "town": town, "state_fips": region.state_fips}
     with psycopg.connect(dsn) as conn:
         rows = conn.execute(POSITIONS_SQL, params).fetchall()
         out = {(street, source_id): along for street, source_id, along in rows}
         if by_lot and not conn.execute("SELECT to_regclass('address_inference.building_parcels') IS NULL").fetchone()[0]:
-            only = coastal_dead_ends(conn, params) if by_lot == "coastal" else None
+            only = coastal_dead_ends(conn, params) if by_lot in ("coastal", "within") else None
             sql = LOT_POSITIONS_SQL.replace("{max_buildings}", str(LOT_MAX_BUILDINGS))
-            for street, source_id, along, back_m in conn.execute(sql, params).fetchall():
+            for street, source_id, along, back_m, lo, hi in conn.execute(sql, params).fetchall():
                 # Coastal dead ends (lots numbered in columns), and anywhere a
                 # house sits far back at the end of a long driveway: its
                 # number belongs where its lot -- the driveway -- meets the
                 # road (48 Flying Point Road: house 226 m back, lot meets the
                 # road ~87 m before the house projects onto it).
                 deep = back_m is not None and back_m >= DEEP_LOT_M
-                if (street, source_id) in out and (only is None or street in only or deep):
+                if (street, source_id) not in out:
+                    continue
+                if only is None or street in only or deep:
                     out[(street, source_id)] = along
+                elif by_lot == "within" and lo is not None:
+                    # elsewhere the building's own place, kept inside its
+                    # lot's stretch of the street
+                    out[(street, source_id)] = min(max(out[(street, source_id)], lo), hi)
         min_back = ENTRY_MIN_BACK_M if entry_min_back_m is None else entry_min_back_m
         if min_back is not None and not conn.execute(
                 "SELECT to_regclass('address_inference.building_driveways') IS NULL").fetchone()[0]:
