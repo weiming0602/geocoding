@@ -78,6 +78,15 @@ SMALL_ROOF_M2 = None
 # E911-numbered houses (low or flat roofs, thin coverage); right building
 # TIGER 53.3% -> 52.8%, E911 roads 66.0% -> 65.0%; Webster Road unchanged.
 NO_ROOF = False
+# Narrower (owner's eye on Webster Road's south building: open ground, no
+# driveway): no lidar roof, not under trees (canopy_over < TREE_COVERED) and
+# an outline under this many m2 -- 91 of Freeport's 99 such footprints are
+# not E911 houses; bigger ones are mostly houses built after the 2020
+# flight. Off: right building TIGER 53.3 -> 53.2 (80 or 100 m2) / 52.9
+# (120), E911 roads 66.0 -> 65.7 / 65.6 / 65.3. On Webster Road it breaks
+# 48: E911's 46 has no building near its point, and with the south footprint
+# gone, 46 takes 48's house instead -- the footprint was harmlessly holding 46.
+NO_ROOF_SMALL_M2 = None
 
 # A number with at least this many E911 points is a big complex (141 Main
 # Street: 563 points, one building). It keeps the ranker's own pick and
@@ -637,6 +646,11 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     if accessory is not None and "parcel_size_ratio" in scored.columns:
         shed = (scored["parcel_buildings"].fillna(1) >= 2) & (scored["parcel_size_ratio"] < accessory) & ~home_pool
         scored = scored[~shed]
+    if NO_ROOF_SMALL_M2 is not None and "roof_m2" in scored.columns and "sqmeters" in scored.columns:
+        open_ground = (scored["canopy_over"].fillna(0) < TREE_COVERED) if "canopy_over" in scored.columns \
+            else pd.Series(True, index=scored.index)
+        gone = (scored["roof_m2"] == 0) & (scored["sqmeters"] < NO_ROOF_SMALL_M2) & open_ground
+        scored = scored[~(gone & ~home_pool.reindex(scored.index))]
     if NO_ROOF and "roof_m2" in scored.columns:
         scored = scored[~((scored["roof_m2"] == 0) & ~home_pool.reindex(scored.index))]
     if SMALL_ROOF_M2 is not None and "roof_m2" in scored.columns:
