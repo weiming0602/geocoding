@@ -253,7 +253,7 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
         size_of = candidate_df.drop_duplicates("source_id").set_index("source_id")["sqmeters"].to_dict()
         picks["assessor"], assessor_matched = order.assessor_picks(
             address_df, order.load_lot_addresses(dsn, region, town), parcel_of, size_of, picks["ML+order"],
-            roof_of=order.load_roofs(dsn), positions=positions)
+            roof_of=order.load_roofs(dsn), positions=positions, scored_df=scored)
 
     property_of = order.load_properties(
         dsn, region, set(candidate_df["source_id"]) | set(address_df["true_building"].dropna()))

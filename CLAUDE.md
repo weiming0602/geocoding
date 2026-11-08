@@ -126,7 +126,12 @@ read-write).
   `order.parse_prop_loc` (LWR -> LOWER, trailing SF -> SOUTH, units dropped). A lot
   with several numbers on one street gives them to that many of its houses,
   in order along the street (`order.SPREAD_WITHIN_LOT`; 57/59 Lower Mast
-  Landing Road; Freeport neutral, E911 roads ML + road order -0.4).
+  Landing Road; Freeport neutral, E911 roads ML + road order -0.4). In
+  assessor mode the tax roll's pinned numbers are anchors: a number it
+  doesn't list stays between the pinned lots around it (`order.ANCHORED`;
+  fixed 51/57/59 Lower Mast Landing on E911 roads; TIGER 80.5%, E911 roads
+  83.9%). Charging road order for unplaced numbers (`order.SKIP_SCORE`)
+  instead cost 3-5 points, so it's off.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

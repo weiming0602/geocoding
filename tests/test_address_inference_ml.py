@@ -601,3 +601,25 @@ def test_a_lot_with_two_numbers_gives_one_to_each_house_in_road_order():
     picks = {"a51": "h51", "a57": "big", "a59": "big", "a63": "h63"}
     out = order.spread_within_lots(picks, address_df, parcel_of, size_of, positions)
     assert out == {"a51": "h51", "a57": "big", "a59": "small", "a63": "h63"}
+
+
+def test_a_number_the_tax_roll_lacks_stays_between_its_pinned_neighbors():
+    # E911 roads, Lower Mast Landing Road: the tax roll pins 51 (lot C) and
+    # 59 (lot D, two houses); road order had shifted 57 onto 51's house.
+    import pandas as pd
+    from address_inference import order
+    address_df = pd.DataFrame([{"id": f"a{n}", "number": n, "street": "LML"} for n in (51, 57, 59)])
+    parcel_of = {"h51": "C", "shed": "C", "h57": "D", "h59": "D"}
+    positions = {("LML", "shed"): 811.0, ("LML", "h51"): 826.0, ("LML", "h57"): 898.0, ("LML", "h59"): 929.0}
+    scored = pd.DataFrame([
+        {"address_id": "a57", "source_id": "h51", "score": 2.0, "same_side": True},
+        {"address_id": "a57", "source_id": "h59", "score": 0.5, "same_side": True},
+        {"address_id": "a57", "source_id": "shed", "score": -3.0, "same_side": True},
+    ])
+    picks = {"a51": "h51", "a57": "h51", "a59": "h57"}
+    out = order.anchored_fill(picks, {"a51", "a59"}, address_df, scored, positions, parcel_of)
+    assert out["a57"] == "h59"
+    # then the lot's two numbers go to its two houses in road order
+    sizes = {"h51": 105, "shed": 44, "h57": 202, "h59": 81}
+    out = order.spread_within_lots(out, address_df, parcel_of, sizes, positions)
+    assert out == {"a51": "h51", "a57": "h57", "a59": "h59"}

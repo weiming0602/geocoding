@@ -363,7 +363,19 @@ def lane_end(df) -> pd.Series:
             & (df["dist_road"] >= LANE_MIN_M)).fillna(False).astype(bool)
 
 
-def monotone_assign(P, share_penalty=None, max_per_building=None):
+# What leaving a number unplaced scores (scores are log-probabilities; None
+# = 0, free). Free, the cheapest answer could shift a whole run one house on
+# and drop its last number: E911 roads, Lower Mast Landing Road 45 -> 47's
+# house, 47 -> 51's, ... 59 -> 63's, 63 unplaced.
+# Freeport, right building with an unplaced number scored as log(p):
+# free 53.3 / 66.0 (TIGER / E911 roads); p=0.3 50.1 / 64.4; p=0.03 48.8 /
+# 62.3 -- many numbers really have no house among the candidates (units,
+# geocoded points, houses past 200 m). Off; the assessor mode's anchors
+# (assessor_picks) fix that run instead.
+SKIP_SCORE = None
+
+
+def monotone_assign(P, share_penalty=None, max_per_building=None, skip_score=None):
     """P[i, j]: score for number i (ascending) on building j (in road
     order). Returns (total, {i: j}) maximizing the summed score over
     assignments where buildings never go backwards along the road; a number
@@ -371,6 +383,8 @@ def monotone_assign(P, share_penalty=None, max_per_building=None):
     may share a building, each extra one costing `share_penalty` (None =
     SHARE_PENALTY; inf = strictly one number per building)."""
     penalty = SHARE_PENALTY if share_penalty is None else share_penalty
+    skip = SKIP_SCORE if skip_score is None else skip_score
+    skip = 0.0 if skip is None else skip
     cap = (MAX_PER_BUILDING if max_per_building is None else max_per_building) if np.isfinite(penalty) else 1
     k, m = P.shape
     NEG = -np.inf
@@ -385,7 +399,7 @@ def monotone_assign(P, share_penalty=None, max_per_building=None):
             for c in range(1, cap):
                 M[c, i, j] = M[c - 1, i - 1, j] + P[i - 1, j - 1] - penalty
         for j in range(m + 1):
-            best, how = D[i - 1, j], 0
+            best, how = D[i - 1, j] + skip, 0
             if j > 0 and D[i, j - 1] > best:
                 best, how = D[i, j - 1], 1
             for c in range(cap):
@@ -1024,7 +1038,8 @@ def load_lot_addresses(dsn, region, town) -> dict:
     return dict(out)
 
 
-def assessor_picks(address_df, lot_addresses, parcel_of, size_of, fallback, roof_of=None, positions=None):
+def assessor_picks(address_df, lot_addresses, parcel_of, size_of, fallback, roof_of=None, positions=None,
+                   scored_df=None):
     """(picks, matched): each address whose number and street the assessor
     gives a tax lot takes that lot's biggest building (lidar roof where seen,
     else its outline); every other address keeps `fallback`'s pick. Only
@@ -1042,7 +1057,70 @@ def assessor_picks(address_df, lot_addresses, parcel_of, size_of, fallback, roof
         if buildings:
             picks[a.id] = max(buildings, key=lambda b: (roof_of[b][0] if b in roof_of and roof_of[b][0] else size_of[b] or 0))
             matched.add(a.id)
+    if ANCHORED and positions and scored_df is not None:
+        picks = anchored_fill(picks, matched, address_df, scored_df, positions, parcel_of)
     if SPREAD_WITHIN_LOT and positions:
         within = {b: (roof_of[b][0] if b in roof_of and roof_of[b][0] else size_of[b] or 0) for b in size_of}
         picks = spread_within_lots(picks, address_df, parcel_of, within, positions)
     return picks, matched
+
+
+# Numbers the tax roll pins to a lot are fixed points along the street: a
+# number it doesn't list must land between the pinned numbers around it on
+# its side (57 Lower Mast Landing Road, between pinned 51 and 59, had gone
+# to 51's house when road order shifted the run on E911 roads).
+ANCHORED = True
+
+
+def anchored_fill(picks, matched, address_df, scored_df, positions, parcel_of=None):
+    """Each unmatched address whose pick lies outside the stretch between
+    the pinned (matched) numbers just below and above it on its street and
+    parity -- from the far end of one anchor's lot to the far end of the
+    other's -- takes the ranker's best same-side building inside it, never
+    a building already pinned to a number; kept as is when there is no
+    anchor on one side or no building inside."""
+    parcel_of = parcel_of or {}
+    lot_size = Counter(parcel_of.values())
+    members = defaultdict(list)
+    for b, lot in parcel_of.items():
+        members[lot].append(b)
+    def lot_positions(street, b):
+        lot = parcel_of.get(b)
+        group = members[lot] if lot is not None and lot_size[lot] <= LOT_MAX_BUILDINGS else [b]
+        return [positions[(street, x)] for x in group if (street, x) in positions]
+    p = scored_df.assign(p=probabilities(scored_df))
+    if "same_side" in p.columns:
+        p = p[p["same_side"].astype(bool)]
+    pinned = defaultdict(list)
+    pinned_buildings = set()
+    rows = list(address_df.itertuples())
+    for a in rows:
+        b = picks.get(a.id)
+        if a.id in matched and b is not None and (a.street, b) in positions:
+            pinned[(a.street, int(a.number) % 2)].append((int(a.number), lot_positions(a.street, b)))
+            pinned_buildings.add(b)
+    out = dict(picks)
+    by_address = {aid: g for aid, g in p.groupby("address_id")}
+    for a in rows:
+        if a.id in matched:
+            continue
+        n = int(a.number)
+        anchors = pinned.get((a.street, n % 2), [])
+        below = [t for t in anchors if t[0] < n]
+        above = [t for t in anchors if t[0] > n]
+        if not below or not above:
+            continue
+        span = max(below)[1] + min(above)[1]
+        lo, hi = min(span) - 1, max(span) + 1
+        def ok(x):
+            return x not in pinned_buildings and lo <= positions.get((a.street, x), -1e9) <= hi
+        b = picks.get(a.id)
+        if b is not None and ok(b):
+            continue
+        g = by_address.get(a.id)
+        if g is None:
+            continue
+        inside = g[[ok(x) for x in g["source_id"]]]
+        if len(inside):
+            out[a.id] = inside.sort_values(["p", "source_id"], ascending=[False, True]).iloc[0]["source_id"]
+    return out
