@@ -64,6 +64,14 @@ OTHER_ROAD_CLOSER_M = 25
 # take a number and push the street's other numbers along (12 Brickyard
 # Cove's 45 m2 shed next to its 297 m2 house).
 ACCESSORY_MAX_RATIO = 0.2
+# A place whose biggest lidar roof (lidar.py) is under this many m2 is no
+# house and takes no number, like a shed (None = off): a 36 m2 outbuilding
+# on a 5-building lot took 50 Webster Road and shifted 52-58 one house on.
+# Buildings lidar never measured are kept. Off: Freeport right building,
+# TIGER 53.3% (off) / 53.1 (30 m2) / 52.6 (50) / 52.1 (60), E911 roads 66.0 /
+# 65.8 / 65.7 / 64.1, and Webster Road stays shifted -- the ranker itself
+# leans one house on there (58: 0.17 on 54's house, 0.07 on its own).
+SMALL_ROOF_M2 = None
 
 # A number with at least this many E911 points is a big complex (141 Main
 # Street: 563 points, one building). It keeps the ranker's own pick and
@@ -609,6 +617,8 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     if accessory is not None and "parcel_size_ratio" in scored.columns:
         shed = (scored["parcel_buildings"].fillna(1) >= 2) & (scored["parcel_size_ratio"] < accessory) & ~home_pool
         scored = scored[~shed]
+    if SMALL_ROOF_M2 is not None and "roof_m2" in scored.columns:
+        scored = scored[~((scored["roof_m2"] < SMALL_ROOF_M2).fillna(False) & ~home_pool.reindex(scored.index))]
     both_sides = scored  # townhouse streets match both parities together
     if same_side_only:
         scored = scored[scored["same_side"].astype(bool)]
@@ -867,6 +877,8 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
                 .drop_duplicates("_lot").set_index("_lot")["source_id"])
         lane &= lot.isna() | (df["source_id"] == lot.map(home))
     df["lane_end"] = lane
+    if roof_of:
+        df["roof_m2"] = df["source_id"].map(lambda b: (roof_of.get(b) or (None,))[0] or np.nan).astype(float)
     order_by = ["address_id", "place", "lane_end", "p"]
     if WITHIN_LOT is not None and roof_of:
         roof = df["source_id"].map(lambda b: (roof_of.get(b) or (None, None)))
@@ -891,7 +903,7 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
     for col, how in (("dist_vs_nearest_road", "min"), ("d_m0", "min"), ("sqmeters", "max"),
                      ("parcel_size_ratio", "max"), ("parcel_buildings", "min"), ("parcel_area_m2", "max"),
                      ("pool_m", "min"), ("drive_ratio", "min"), ("drive_best", "max"), ("dist_road", "min"),
-                     ("lane_end", "max"), ("canopy_over", "max")):
+                     ("lane_end", "max"), ("canopy_over", "max"), ("roof_m2", "max")):
         if col in df.columns:
             agg_spec[col] = (col, how)
     agg = df.groupby(["address_id", "place"], sort=False).agg(**agg_spec).reset_index()
