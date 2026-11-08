@@ -789,9 +789,18 @@ LOT_MAX_BUILDINGS = 3
 # outline under trees but a 177 m2 roof); "lidar" = the lidar roof where
 # lidar sees one, else the outline; "height" = the tallest roof. Freeport
 # (TIGER / E911 roads, today 53.8 / 66.5%): lidar 53.3 / 66.5 (fixes 42,
-# ~75 lots swap each way), roof 53.1 / 66.2, height 52.4 / 64.5. Off until
-# the owner decides. Needs roof_of {source_id: (roof_m2, roof_h)}.
-WITHIN_LOT = None
+# ~75 lots swap each way), roof 53.1 / 66.2, height 52.4 / 64.5. "lidar"
+# by the owner's call (imagery first). Needs roof_of (load_roofs).
+WITHIN_LOT = "lidar"
+
+
+def load_roofs(dsn) -> dict:
+    """{source_id: (roof_m2, roof_h)} from lidar.py's building_lidar; {} if not run."""
+    with psycopg.connect(dsn) as conn:
+        if conn.execute("SELECT to_regclass('address_inference.building_lidar') IS NULL").fetchone()[0]:
+            return {}
+        return {sid: (m2, h) for sid, m2, h in
+                conn.execute("SELECT source_id, roof_m2, roof_h FROM address_inference.building_lidar")}
 
 
 def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve_p=None, roof_of=None,

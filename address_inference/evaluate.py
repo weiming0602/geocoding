@@ -242,7 +242,7 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
         # Each ordinary multi-building tax lot is one place along the road.
         parcel_of = {sid: info["parcel"] for sid, info in parcels["buildings"].items()}
         picks["ML+order"] = order.lot_picks(address_df, scored, positions, picks["ML"], parcel_of,
-                                            street_order=street_order)
+                                            street_order=street_order, roof_of=order.load_roofs(dsn))
     else:
         picks["ML+order"] = order.order_constrained_picks(address_df, scored, positions, picks["ML"],
                                                           street_order=street_order)

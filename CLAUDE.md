@@ -102,10 +102,10 @@ read-write).
   `data/lidar/`, finished tiles in `data/lidar/tiles/` -- delete that folder
   after changing the measurement; ~1 h for Freeport, wrap long runs in
   `systemd-inhibit --what=sleep:idle` or the laptop suspends mid-run).
-  Both uses are off by default: `dataset.LIDAR_SIZE` (size everywhere)
-  loses 1.5-1.8 points; `order.WITHIN_LOT = "lidar"` (a lot's number goes
-  to its biggest lidar roof) fixes 42 Flying Point Road, TIGER -0.5, E911
-  roads even. Driveways continue a straight visible piece under trees
+  `dataset.LIDAR_SIZE` (size everywhere) is off: it loses 1.5-1.8 points.
+  `order.WITHIN_LOT = "lidar"` is on by the owner's call (imagery first): a
+  lot's number goes to its biggest lidar roof, fixing 42 Flying Point Road;
+  Freeport TIGER 53.3%, E911 roads 66.4%. Driveways continue a straight visible piece under trees
   (`driveways.HIDDEN_REACH_M`, owner's rule; Freeport neutral).
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
