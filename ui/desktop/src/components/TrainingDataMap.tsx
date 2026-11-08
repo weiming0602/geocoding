@@ -3,7 +3,12 @@ import { GeoJSONSource, LngLatBounds, Map as MapLibreMap, NavigationControl, Pop
 import 'maplibre-gl/dist/maplibre-gl.css';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import type { AddressInferenceReviewResponse, TrainingAddress, TrainingStatus } from '../../../shared/api/types';
+import type {
+  AddressInferenceReviewResponse,
+  SuggestedNumber,
+  TrainingAddress,
+  TrainingStatus,
+} from '../../../shared/api/types';
 import { OSM_RASTER_STYLE } from '../map/osmStyle';
 
 // Inlined hex, not CSS custom properties: maplibre paint runs in WebGL.
@@ -19,6 +24,8 @@ export const BUILDING_COLORS = {
   both: '#8e44ad', // the true building of one address and the wrong pick of another
   other: '#9aa0a6',
 };
+// Suggested numbers (houses E911 never numbered): never an E911 color.
+export const SUGGESTION_COLOR = '#2471a3';
 
 type Props = {
   data: AddressInferenceReviewResponse;
@@ -27,6 +34,9 @@ type Props = {
   // Bumped on a list-row click so the map flies even to the same address twice.
   focusNonce: number;
   onSelect: (address: TrainingAddress) => void;
+  suggestions: SuggestedNumber[];
+  selectedSuggestion: SuggestedNumber | null;
+  onSelectSuggestion: (suggestion: SuggestedNumber) => void;
 };
 
 type Buildings = AddressInferenceReviewResponse['buildings'];
@@ -90,6 +100,19 @@ function links(addresses: TrainingAddress[]): GeoJSON.FeatureCollection {
   };
 }
 
+export function describeSuggestion(s: SuggestedNumber): string {
+  const between =
+    s.before != null && s.after != null
+      ? `between ${s.before} and ${s.after}`
+      : s.before != null || s.after != null
+        ? `past ${s.before ?? s.after}`
+        : 'no neighbors';
+  const what = s.tier === 'second house' ? 'second house on a numbered lot' : 'house on a lot with no E911 number';
+  return s.number != null
+    ? `Suggested ${s.number} ${s.street} (${what}; ${between}). Not in E911.`
+    : `No number suggested on ${s.street}: ${s.reason} (${what}).`;
+}
+
 export function addressLabel(a: TrainingAddress): string {
   return `${a.number} ${a.street}${a.unit ? `, ${a.unit}` : ''}`;
 }
@@ -108,7 +131,27 @@ export function describe(a: TrainingAddress): string {
   }
 }
 
-export default function TrainingDataMap({ data, visible, selected, focusNonce, onSelect }: Props) {
+function suggestionPoints(suggestions: SuggestedNumber[]): GeoJSON.FeatureCollection {
+  return {
+    type: 'FeatureCollection',
+    features: suggestions.map((s) => ({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [s.longitude, s.latitude] },
+      properties: { building: s.building, numbered: s.number != null },
+    })),
+  };
+}
+
+export default function TrainingDataMap({
+  data,
+  visible,
+  selected,
+  focusNonce,
+  onSelect,
+  suggestions,
+  selectedSuggestion,
+  onSelectSuggestion,
+}: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const popupRef = useRef<Popup | null>(null);
@@ -116,6 +159,10 @@ export default function TrainingDataMap({ data, visible, selected, focusNonce, o
   const byIdRef = useRef(new Map<string, TrainingAddress>());
   const onSelectRef = useRef(onSelect);
   onSelectRef.current = onSelect;
+  const suggestionByIdRef = useRef(new Map<string, SuggestedNumber>());
+  suggestionByIdRef.current = new Map(suggestions.map((s) => [s.building, s]));
+  const onSelectSuggestionRef = useRef(onSelectSuggestion);
+  onSelectSuggestionRef.current = onSelectSuggestion;
 
   const shown = useMemo(() => data.addresses.filter((a) => visible.has(a.status)), [data, visible]);
   byIdRef.current = new Map(data.addresses.map((a) => [a.id, a]));
@@ -128,7 +175,7 @@ export default function TrainingDataMap({ data, visible, selected, focusNonce, o
     mapRef.current = map;
 
     map.on('load', () => {
-      for (const id of ['buildings', 'links', 'points', 'selected-buildings', 'selected-m0']) {
+      for (const id of ['buildings', 'links', 'points', 'selected-buildings', 'selected-m0', 'suggestions', 'selected-suggestion']) {
         map.addSource(id, { type: 'geojson', data: emptyCollection() });
       }
       const roleColor = [
@@ -210,6 +257,33 @@ export default function TrainingDataMap({ data, visible, selected, focusNonce, o
         },
       });
 
+      // Suggested numbers: a blue dot on the house (hollow when the
+      // neighbors leave no free number), its outline blue when selected.
+      map.addLayer({
+        id: 'selected-suggestion',
+        type: 'line',
+        source: 'selected-suggestion',
+        paint: { 'line-color': SUGGESTION_COLOR, 'line-width': 4 },
+      });
+      map.addLayer({
+        id: 'suggestions',
+        type: 'circle',
+        source: 'suggestions',
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 3, 17, 7] as unknown as number,
+          'circle-color': ['case', ['get', 'numbered'], SUGGESTION_COLOR, '#ffffff'] as unknown as string,
+          'circle-stroke-width': 2,
+          'circle-stroke-color': SUGGESTION_COLOR,
+        },
+      });
+      map.on('mouseenter', 'suggestions', () => (map.getCanvas().style.cursor = 'pointer'));
+      map.on('mouseleave', 'suggestions', () => (map.getCanvas().style.cursor = ''));
+      map.on('click', 'suggestions', (e) => {
+        const id = e.features?.[0]?.properties?.building;
+        const suggestion = typeof id === 'string' ? suggestionByIdRef.current.get(id) : undefined;
+        if (suggestion) onSelectSuggestionRef.current(suggestion);
+      });
+
       map.on('mouseenter', 'points', () => (map.getCanvas().style.cursor = 'pointer'));
       map.on('mouseleave', 'points', () => (map.getCanvas().style.cursor = ''));
       map.on('click', 'points', (e) => {
@@ -279,6 +353,37 @@ export default function TrainingDataMap({ data, visible, selected, focusNonce, o
       .setText(describe(selected))
       .addTo(map);
   }, [selected, data, ready]);
+
+  // After the address effect: picking a suggestion clears the address
+  // (whose effect removes its popup) and then opens this one.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    (map.getSource('suggestions') as GeoJSONSource).setData(suggestionPoints(suggestions));
+  }, [suggestions, ready]);
+
+  // The selected suggestion: its house outlined, a popup, and the map moved there.
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const source = map.getSource('selected-suggestion') as GeoJSONSource;
+    if (!selectedSuggestion) {
+      source.setData(emptyCollection());
+      if (!selected) popupRef.current?.remove();
+      return;
+    }
+    const house = data.buildings.features.find((f) => f.properties.id === selectedSuggestion.building);
+    source.setData({
+      type: 'FeatureCollection',
+      features: house ? [{ ...(house as unknown as GeoJSON.Feature), properties: {} }] : [],
+    });
+    const at: [number, number] = [selectedSuggestion.longitude, selectedSuggestion.latitude];
+    popupRef.current = new Popup({ offset: 10, closeButton: false, maxWidth: '280px' })
+      .setLngLat(at)
+      .setText(describeSuggestion(selectedSuggestion))
+      .addTo(map);
+    if (map.getZoom() < 16) map.flyTo({ center: at, zoom: 17 });
+  }, [selectedSuggestion, selected, data, ready]);
 
   useEffect(() => {
     const map = mapRef.current;

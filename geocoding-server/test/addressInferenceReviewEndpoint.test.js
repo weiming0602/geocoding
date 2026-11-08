@@ -83,6 +83,8 @@ test('GET /admin/address-inference/review returns each address with its true and
         // Only footprints near the town's addresses.
         assert.deepEqual(body.buildings.features.map((f) => f.properties), [{ id: 'b1', sqmeters: 140 }]);
         assert.equal(body.buildings.features[0].geometry.type, 'MultiPolygon');
+        // suggest.py never ran here
+        assert.deepEqual(body.suggestions, []);
       }),
     { seedStreets: false, geoOptions: { postgis: true }, geoSeed: seedPredictions }
   ));
@@ -104,4 +106,42 @@ test('GET /admin/address-inference/review defaults to ML + road order and flags 
         assert.equal(body.addresses.find((a) => a.id === 'a1').changedFromMl, false);
       }),
     { seedStreets: false, geoOptions: { postgis: true }, geoSeed: seedPredictions }
+  ));
+
+test('GET /admin/address-inference/review includes numbers suggested for unnumbered houses', () =>
+  withTestServer(
+    async ({ port }) =>
+      withPasscode(async () => {
+        const response = await fetch(`http://127.0.0.1:${port}/admin/address-inference/review?passcode=correct-horse`);
+        const body = await response.json();
+        assert.deepEqual(body.suggestions, [
+          {
+            building: 'b44',
+            street: 'FLYING POINT ROAD',
+            number: 44,
+            tier: 'second house',
+            before: 42,
+            after: 48,
+            reason: 'between',
+            latitude: 43.8575,
+            longitude: -70.0716,
+          },
+        ]);
+      }),
+    {
+      seedStreets: false,
+      geoOptions: { postgis: true },
+      geoSeed: async (pool) => {
+        await seedPredictions(pool);
+        await pool.query(`
+          CREATE TABLE address_inference.suggested_numbers (
+            region_id TEXT, town TEXT, source_id TEXT, street TEXT, number INTEGER, tier TEXT,
+            before_number INTEGER, after_number INTEGER, reason TEXT, lat DOUBLE PRECISION, lon DOUBLE PRECISION,
+            run_date DATE)`);
+        await pool.query(`
+          INSERT INTO address_inference.suggested_numbers VALUES
+            ('me', 'Freeport', 'b44', 'FLYING POINT ROAD', 44, 'second house', 42, 48, 'between', 43.8575, -70.0716, '2026-11-08'),
+            ('me', 'Yarmouth', 'y1', 'MAIN ST', 3, 'unnumbered lot', 1, 5, 'between', 43.8, -70.1, '2026-11-08')`);
+      },
+    }
   ));

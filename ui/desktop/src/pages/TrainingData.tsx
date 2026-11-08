@@ -3,13 +3,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ApiError, getAddressInferenceReview } from '../../../shared/api/client';
 import type {
   AddressInferenceReviewResponse,
+  SuggestedNumber,
   TrainingAddress,
   TrainingMethod,
   TrainingStatus,
 } from '../../../shared/api/types';
 import AccountTabs, { ADMIN_PASSCODE_STORAGE_KEY } from '../components/AccountTabs';
 import PageHeader from '../components/PageHeader';
-import TrainingDataMap, { BUILDING_COLORS, STATUS_COLORS, addressLabel, describe } from '../components/TrainingDataMap';
+import TrainingDataMap, {
+  BUILDING_COLORS,
+  STATUS_COLORS,
+  SUGGESTION_COLOR,
+  addressLabel,
+  describe,
+  describeSuggestion,
+} from '../components/TrainingDataMap';
 
 // Owner-only: the building-address ML experiment's training data on a map
 // (address_inference/ -- see docs/superpowers/specs/2026-11-02-building-
@@ -90,6 +98,8 @@ export default function TrainingData() {
   const [visible, setVisible] = useState<Set<TrainingStatus>>(() => new Set(['wrong', 'missed']));
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<TrainingAddress | null>(null);
+  const [showSuggestions, setShowSuggestions] = useState(true);
+  const [selectedSuggestion, setSelectedSuggestion] = useState<SuggestedNumber | null>(null);
   const [focusNonce, setFocusNonce] = useState(0);
   const mapBoxRef = useRef<HTMLDivElement>(null);
 
@@ -99,6 +109,7 @@ export default function TrainingData() {
     try {
       setData(await getAddressInferenceReview(key, townName, methodName));
       setSelected(null);
+      setSelectedSuggestion(null);
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
         setError('Incorrect passcode.');
@@ -168,6 +179,30 @@ export default function TrainingData() {
     () => new Map((data?.buildings.features ?? []).map((f) => [f.properties.id, f.properties.sqmeters])),
     [data]
   );
+
+  const suggestions = useMemo(() => data?.suggestions ?? [], [data]);
+  const suggestionCounts = useMemo(
+    () => ({
+      numbered: suggestions.filter((s) => s.number != null).length,
+      secondHouse: suggestions.filter((s) => s.number != null && s.tier === 'second house').length,
+      unnumberedLot: suggestions.filter((s) => s.number != null && s.tier === 'unnumbered lot').length,
+    }),
+    [suggestions]
+  );
+  const listedSuggestions = useMemo(() => {
+    const needle = search.trim().toUpperCase();
+    return suggestions.filter(
+      (s) => !needle || `${s.number ?? ''} ${s.street}`.toUpperCase().includes(needle)
+    );
+  }, [suggestions, search]);
+  const selectAddress = (a: TrainingAddress) => {
+    setSelectedSuggestion(null);
+    setSelected(a);
+  };
+  const selectSuggestion = (s: SuggestedNumber) => {
+    setSelected(null);
+    setSelectedSuggestion(s);
+  };
 
   const total = data?.addresses.length ?? 0;
   // Same base as evaluate's report: each street number counts once (141
@@ -323,6 +358,43 @@ export default function TrainingData() {
             })}
           </div>
 
+          {suggestions.length > 0 && (
+            <label
+              className="card elev-sm"
+              style={{
+                cursor: 'pointer',
+                opacity: showSuggestions ? 1 : 0.55,
+                margin: '0 0 var(--space-4)',
+                display: 'block',
+                maxWidth: 760,
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={showSuggestions}
+                  onChange={(e) => {
+                    setShowSuggestions(e.target.checked);
+                    if (!e.target.checked) setSelectedSuggestion(null);
+                  }}
+                />
+                <Swatch color={SUGGESTION_COLOR} />
+                <span className="card-kicker" style={{ margin: 0 }}>
+                  Suggested numbers (not in E911)
+                </span>
+              </div>
+              <div style={{ fontFamily: 'var(--font-heading)', fontSize: 22, fontVariantNumeric: 'tabular-nums' }}>
+                {suggestionCounts.numbered.toLocaleString()}{' '}
+                <span className="text-muted" style={{ fontSize: 14 }}>
+                  houses with no E911 point: {suggestionCounts.secondHouse.toLocaleString()} second houses on a
+                  numbered lot, {suggestionCounts.unnumberedLot.toLocaleString()} on a lot with no number;{' '}
+                  {(suggestions.length - suggestionCounts.numbered).toLocaleString()} more where the neighbors leave no
+                  free number (hollow dots)
+                </span>
+              </div>
+            </label>
+          )}
+
           <div
             className="text-muted"
             style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-4)', fontSize: 13, marginBottom: 'var(--space-2)' }}
@@ -343,6 +415,12 @@ export default function TrainingData() {
               <Swatch color={BUILDING_COLORS.other} square />
               Other footprints
             </span>
+            {suggestions.length > 0 && (
+              <span>
+                <Swatch color={SUGGESTION_COLOR} />
+                Suggested number (click a dot)
+              </span>
+            )}
             <span>Dashed line: E911 point → picked building · white ring: today's interpolation</span>
           </div>
 
@@ -352,9 +430,26 @@ export default function TrainingData() {
               visible={visible}
               selected={selected}
               focusNonce={focusNonce}
-              onSelect={setSelected}
+              onSelect={selectAddress}
+              suggestions={showSuggestions ? suggestions : []}
+              selectedSuggestion={selectedSuggestion}
+              onSelectSuggestion={selectSuggestion}
             />
           </div>
+
+          {selectedSuggestion && (
+            <div className="card elev-sm" style={{ marginTop: 'var(--space-3)' }}>
+              <div>{describeSuggestion(selectedSuggestion)}</div>
+              <div className="text-muted" style={{ fontSize: 13, marginTop: 4 }}>
+                Building {selectedSuggestion.building}
+                {sqmeters.get(selectedSuggestion.building) != null
+                  ? ` (${sqmeters.get(selectedSuggestion.building)} m² outline)`
+                  : ''}
+                . Numbers on one side of a street share a parity and run in order by distance, so this is the free
+                number nearest to where the house falls between its neighbors.
+              </div>
+            </div>
+          )}
 
           {selected && (
             <div className="card elev-sm" style={{ marginTop: 'var(--space-3)' }}>
@@ -426,7 +521,7 @@ export default function TrainingData() {
                   <tr
                     key={a.id}
                     onClick={() => {
-                      setSelected(a);
+                      selectAddress(a);
                       setFocusNonce((n) => n + 1);
                       mapBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
                     }}
@@ -464,6 +559,58 @@ export default function TrainingData() {
               </tbody>
             </table>
           </div>
+
+          {showSuggestions && suggestions.length > 0 && (
+            <>
+              <h4 style={{ margin: 'var(--space-5) 0 var(--space-3)' }}>
+                Suggested numbers{' '}
+                <span className="text-muted" style={{ fontWeight: 400 }}>
+                  ({listedSuggestions.length.toLocaleString()}
+                  {listedSuggestions.length > LIST_LIMIT ? `; showing ${LIST_LIMIT}` : ''}; same filter as above)
+                </span>
+              </h4>
+              <div style={{ overflowX: 'auto' }}>
+                <table className="table">
+                  <thead>
+                    <tr>
+                      <th>Suggested</th>
+                      <th>House</th>
+                      <th>Neighbors</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {listedSuggestions.slice(0, LIST_LIMIT).map((sg) => (
+                      <tr
+                        key={sg.building}
+                        onClick={() => {
+                          selectSuggestion(sg);
+                          mapBoxRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                        }}
+                        style={{
+                          cursor: 'pointer',
+                          background: selectedSuggestion?.building === sg.building ? 'var(--color-accent-100)' : undefined,
+                        }}
+                      >
+                        <td>
+                          {sg.number != null ? (
+                            `${sg.number} ${sg.street}`
+                          ) : (
+                            <span className="text-muted">none on {sg.street}</span>
+                          )}
+                        </td>
+                        <td>{sg.tier === 'second house' ? 'Second house on a numbered lot' : 'Lot with no number'}</td>
+                        <td className="text-muted">
+                          {sg.number != null
+                            ? [sg.before, sg.after].filter((n) => n != null).join(' – ') || '—'
+                            : sg.reason}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
         </>
       )}
     </div>

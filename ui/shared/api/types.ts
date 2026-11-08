@@ -573,6 +573,21 @@ export type TrainingMethod =
 
 export type TrainingTown = { region: string; town: string; runDate: string; addresses: number };
 
+// A number suggested for a house E911 never numbered (address_inference/
+// suggest.py): free numbers of its side's parity between its neighbors.
+// number is null when the neighbors leave no room (reason says why).
+export type SuggestedNumber = {
+  building: string;
+  street: string;
+  number: number | null;
+  tier: 'unnumbered lot' | 'second house';
+  before: number | null;
+  after: number | null;
+  reason: string;
+  latitude: number;
+  longitude: number;
+};
+
 export type AddressInferenceReviewResponse = {
   towns: TrainingTown[];
   town: string;
@@ -582,6 +597,8 @@ export type AddressInferenceReviewResponse = {
   methods: TrainingMethod[];
   summary: Partial<Record<TrainingStatus, number>>;
   addresses: TrainingAddress[];
+  // Absent from older servers.
+  suggestions?: SuggestedNumber[];
   buildings: {
     type: 'FeatureCollection';
     features: {

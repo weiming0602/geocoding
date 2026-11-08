@@ -92,6 +92,20 @@ async function getAddressInferenceReview(db, town, method) {
       [selected.region, selected.town, selectedMethod]
     );
 
+    // Numbers suggested for houses E911 never numbered (python -m
+    // address_inference.suggest ... --save): a suggestion, never E911.
+    const { rows: [{ has_suggestions }] } = await db.query(
+      "SELECT to_regclass('address_inference.suggested_numbers') IS NOT NULL AS has_suggestions"
+    );
+    const { rows: suggestions } = has_suggestions
+      ? await db.query(
+          `SELECT source_id, street, number, tier, before_number, after_number, reason, lat, lon
+           FROM address_inference.suggested_numbers WHERE region_id = $1 AND town = $2
+           ORDER BY street, number NULLS LAST, source_id`,
+          [selected.region, selected.town]
+        )
+      : { rows: [] };
+
     const summary = {};
     for (const r of rows) summary[r.status] = (summary[r.status] ?? 0) + 1;
 
@@ -120,6 +134,17 @@ async function getAddressInferenceReview(db, town, method) {
         candidates: r.candidates,
         mlStatus: r.ml_status ?? r.status,
         changedFromMl: r.ml_pick !== null && r.ml_pick !== undefined && r.ml_pick !== r.picked_building,
+      })),
+      suggestions: suggestions.map((r) => ({
+        building: r.source_id,
+        street: r.street,
+        number: r.number,
+        tier: r.tier,
+        before: r.before_number,
+        after: r.after_number,
+        reason: r.reason,
+        latitude: r.lat,
+        longitude: r.lon,
       })),
       buildings: {
         type: 'FeatureCollection',

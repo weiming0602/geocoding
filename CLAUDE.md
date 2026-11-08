@@ -106,7 +106,16 @@ read-write).
   `order.WITHIN_LOT = "lidar"` is on by the owner's call (imagery first): a
   lot's number goes to its biggest lidar roof, fixing 42 Flying Point Road;
   Freeport TIGER 53.3%, E911 roads 66.4%. Driveways continue a straight visible piece under trees
-  (`driveways.HIDDEN_REACH_M`, owner's rule; Freeport neutral).
+  (`driveways.HIDDEN_REACH_M`, owner's rule; Freeport neutral). `python -m
+  address_inference.suggest me --town Freeport "dbname=geocoding" --save`
+  suggests numbers for houses E911 never numbered (44 Flying Point Road:
+  second house on 42's lot, suggested 44 between 42 and 48): residential,
+  house-sized lidar roof, on a lot with no E911 point or a second house on a
+  numbered lot; the free number of its side's parity nearest to where it
+  falls between its neighbors (TIGER streets + public E911 points only).
+  Leave-one-out on Freeport's numbered houses: 43.5% exact number. Saved to
+  `address_inference.suggested_numbers`; the Training data map shows them
+  as blue dots, never as E911.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)
