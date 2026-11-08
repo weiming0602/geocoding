@@ -915,3 +915,60 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
     positions_place = {k: float(np.mean(v)) for k, v in lists.items()}
     picked = order_constrained_picks(address_df, scored_place, positions_place, fallback, **kwargs)
     return {a: best_building.get((a, v), v) for a, v in picked.items()}
+
+
+# The assessor's own address for each tax lot (parcels.prop_loc, e.g. "21
+# CARRIAGE ROAD"; DATA_SOURCES.md §5). Kept out of the model -- it nearly
+# answers the question (Freeport: 79% of E911 points sit on a lot with the
+# same number and street) -- and scored as its own mode instead: where no
+# E911 exists, the town's tax roll may be what gives each lot its number.
+LOT_ADDRESSES_SQL = """
+SELECT parcel_id, prop_loc FROM address_inference.parcels
+WHERE state_fips = %(state_fips)s AND town = %(town)s AND prop_loc IS NOT NULL
+ORDER BY parcel_id
+"""
+
+
+def parse_prop_loc(prop_loc):
+    """("21 CARRIAGE ROAD") -> (21, "CARRIAGE RD"); None without a house number."""
+    import re
+    from .street_names import canonical
+    m = re.match(r"\s*(\d+)[A-Z]?(?:\s*-\s*\d+[A-Z]?)?\s+(.+)", prop_loc or "")
+    if not m or int(m.group(1)) == 0:
+        return None
+    return int(m.group(1)), canonical(m.group(2))
+
+
+def load_lot_addresses(dsn, region, town) -> dict:
+    """{(number, canonical street): [parcel_id, ...]}"""
+    out = defaultdict(list)
+    with psycopg.connect(dsn) as conn:
+        if conn.execute("SELECT to_regclass('address_inference.parcels') IS NULL").fetchone()[0]:
+            return {}
+        for parcel_id, prop_loc in conn.execute(
+                LOT_ADDRESSES_SQL, {"state_fips": region.state_fips, "town": town}).fetchall():
+            key = parse_prop_loc(prop_loc)
+            if key:
+                out[key].append(parcel_id)
+    return dict(out)
+
+
+def assessor_picks(address_df, lot_addresses, parcel_of, size_of, fallback, roof_of=None):
+    """(picks, matched): each address whose number and street the assessor
+    gives a tax lot takes that lot's biggest building (lidar roof where seen,
+    else its outline); every other address keeps `fallback`'s pick. Only
+    buildings in size_of (the candidate set) can be picked."""
+    from .street_names import canonical
+    roof_of = roof_of or {}
+    on_lot = defaultdict(list)
+    for sid, lot in parcel_of.items():
+        if sid in size_of:
+            on_lot[lot].append(sid)
+    picks, matched = dict(fallback), set()
+    for a in address_df.itertuples():
+        lots = lot_addresses.get((int(a.number), canonical(a.street)), [])
+        buildings = sorted(b for lot in lots for b in on_lot.get(lot, []))
+        if buildings:
+            picks[a.id] = max(buildings, key=lambda b: (roof_of[b][0] if b in roof_of and roof_of[b][0] else size_of[b] or 0))
+            matched.add(a.id)
+    return picks, matched

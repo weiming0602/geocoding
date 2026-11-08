@@ -563,3 +563,19 @@ def test_the_lidar_roof_picks_a_lots_house_when_its_outline_was_cut_short_by_tre
     assert order.lot_picks(address_df, rows, positions, {}, parcel_of, roof_of=roof_of) == {"a42": "house"}
     # no lidar roof seen: the outline decides
     assert order.lot_picks(address_df, rows, positions, {}, parcel_of, roof_of={}) == {"a42": "back"}
+
+
+def test_the_assessor_lot_address_picks_the_lots_biggest_building():
+    import pandas as pd
+    from address_inference import order
+    assert order.parse_prop_loc("21 CARRIAGE ROAD") == (21, "CARRIAGE RD")
+    assert order.parse_prop_loc("0 CARRIAGE ROAD") is None
+    address_df = pd.DataFrame([{"id": "a21", "number": 21, "street": "CARRIAGE ROAD"},
+                               {"id": "a17", "number": 17, "street": "CARRIAGE ROAD"}])
+    lots = {(21, "CARRIAGE RD"): ["lot24"]}
+    parcel_of = {"house": "lot24", "barn": "lot24", "other": "lot26"}
+    size_of = {"house": 150, "barn": 200, "other": 120}
+    roof_of = {"house": (260, 7.0), "barn": (190, 5.0)}   # trees hid half the house's outline
+    picks, matched = order.assessor_picks(address_df, lots, parcel_of, size_of, {"a21": "other", "a17": "other"},
+                                          roof_of=roof_of)
+    assert picks == {"a21": "house", "a17": "other"} and matched == {"a21"}

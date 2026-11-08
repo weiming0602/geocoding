@@ -166,7 +166,7 @@ CREATE TABLE IF NOT EXISTS address_inference.ml_predictions (
 """
 
 # Saved methods: the ranker alone, and the ranker + road order (order.py).
-SAVED_METHODS = {"ML": "ml", "ML+order": "ml_order"}
+SAVED_METHODS = {"ML": "ml", "ML+order": "ml_order", "assessor": "assessor"}
 
 STATUSES = ("right", "wrong", "missed", "no_building")
 
@@ -246,6 +246,14 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     else:
         picks["ML+order"] = order.order_constrained_picks(address_df, scored, positions, picks["ML"],
                                                           street_order=street_order)
+    assessor_matched = set()
+    if parcels:
+        # The assessor's own address for each lot, scored on its own (never a
+        # model input): the lot's biggest building, else ML + road order.
+        size_of = candidate_df.drop_duplicates("source_id").set_index("source_id")["sqmeters"].to_dict()
+        picks["assessor"], assessor_matched = order.assessor_picks(
+            address_df, order.load_lot_addresses(dsn, region, town), parcel_of, size_of, picks["ML+order"],
+            roof_of=order.load_roofs(dsn))
 
     property_of = order.load_properties(
         dsn, region, set(candidate_df["source_id"]) | set(address_df["true_building"].dropna()))
@@ -256,8 +264,16 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     table = [summarize("M0 interpolation (today)", score_method(address_df, candidate_df, None, property_of))]
     for name, label in (("M1", "M1 snap to building"), ("M2", "M2 rank order"),
                         ("M3", "M3 rank order, no outbuildings"), ("ML", "ML ranker (LightGBM)"),
-                        ("ML+order", "ML + road order (one-to-one)")):
-        table.append(summarize(label, score_method(address_df, candidate_df, picks[name], property_of)))
+                        ("ML+order", "ML + road order (one-to-one)"),
+                        ("assessor", "Assessor's lot address, else ML + road order")):
+        if name in picks:
+            table.append(summarize(label, score_method(address_df, candidate_df, picks[name], property_of)))
+    if assessor_matched:
+        # The same comparison on just the addresses the assessor has a lot for.
+        on = address_df[address_df["id"].isin(assessor_matched)]
+        for name, label in (("ML+order", "  on assessor-matched addresses: ML + road order"),
+                            ("assessor", "  on assessor-matched addresses: assessor's lot")):
+            table.append(summarize(label, score_method(on, candidate_df, picks[name], property_of)))
 
     coverage = {
         "E911 addresses on matched streets": len(address_df),
@@ -265,13 +281,16 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
         "  with a true building within 30 m": int(with_truth.sum()),
         "  true building among the candidates (ceiling for right-building %)": len(in_candidates),
         "candidate rows": len(candidate_df),
+        "  scorable with an assessor lot of the same number and street": int(
+            address_df["scorable"][address_df["id"].isin(assessor_matched)].sum()),
     }
     if save:
         rows = []
         suffix = "" if ranges == "tiger" else f"_{ranges}"
-        for name, method in SAVED_METHODS.items():
+        saved = {name: method for name, method in SAVED_METHODS.items() if name in picks}
+        for name, method in saved.items():
             rows += prediction_rows(region.id, town, method + suffix, address_df, candidate_df, picks[name], date.today())
-        save_predictions(dsn, region.id, town, rows, [m + suffix for m in SAVED_METHODS.values()])
+        save_predictions(dsn, region.id, town, rows, [m + suffix for m in saved.values()])
     return pd.DataFrame(table), coverage, importance
 
 
