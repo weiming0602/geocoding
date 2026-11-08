@@ -23,15 +23,21 @@ const UNDEFINED_TABLE = '42P01';
 // *_e911roads: Maine E911 road centerlines instead of TIGER (a RESTRICTED
 // source -- loaded by the owner for internal verification only; this
 // owner-only page is the only place it shows).
+// assessor / assessor_e911roads: each address takes the biggest building on
+// the tax lot whose assessor address (parcels.prop_loc) is the same number
+// and street, else ML + road order's pick -- compared against ML + road order.
 const METHODS = [
   'ml_order', 'ml',
+  'assessor', 'assessor_e911roads',
   'ml_order_e911roads', 'ml_e911roads',
   'ml_order_auto', 'ml_auto',
   'ml_order_list', 'ml_list',
   'ml_order_ranges', 'ml_ranges',
 ];
 // What "changed by road order" compares each method against.
-const BASE_METHOD = Object.fromEntries(METHODS.map((m) => [m, m.replace('ml_order', 'ml')]));
+const BASE_METHOD = Object.fromEntries(
+  METHODS.map((m) => [m, m.startsWith('assessor') ? m.replace('assessor', 'ml_order') : m.replace('ml_order', 'ml')])
+);
 
 async function listReviewTowns(db) {
   const { rows } = await db.query(

@@ -117,7 +117,12 @@ read-write).
   `address_inference.suggested_numbers`; the Training data map shows them
   as blue dots, never as E911. Lot first (owner's rule): a house's place along
   the street is kept inside its tax lot's frontage, in suggest (44.1% vs
-  43.5% exact) and road order (`order.BY_LOT = "within"`, Freeport neutral).
+  43.5% exact) and road order (`order.BY_LOT = "within"`, Freeport neutral). The assessor's lot
+  address (`parcels.prop_loc`, never a model input) is scored as its own
+  mode, saved as method `assessor` (`assessor_e911roads` when copied from
+  the E911-roads DB): the biggest building on the lot with the same number
+  and street, else ML + road order -- Freeport TIGER 53.3% -> 79.6%, E911
+  roads 66.4% -> 82.7% right building.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

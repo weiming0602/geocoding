@@ -45,6 +45,8 @@ const METHOD_LABELS: Record<TrainingMethod, string> = {
   ml_list: 'List ranges: ML alone',
   ml_order_ranges: 'Correct ranges: ML + road order',
   ml_ranges: 'Correct ranges: ML alone',
+  assessor: "Assessor's lot address",
+  assessor_e911roads: "E911 roads: assessor's lot address",
 };
 const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   ml_order: 'ml',
@@ -57,7 +59,11 @@ const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   ml_list: 'ml_list',
   ml_order_ranges: 'ml_ranges',
   ml_ranges: 'ml_ranges',
+  // compared against ML + road order, the pick it replaces
+  assessor: 'ml_order',
+  assessor_e911roads: 'ml_order_e911roads',
 };
+const isAssessorMethod = (m: TrainingMethod) => m.startsWith('assessor');
 const isOrderMethod = (m: TrainingMethod) => BASE_METHOD[m] !== m;
 const STATUS_ORDER: TrainingStatus[] = ['wrong', 'missed', 'right', 'no_building'];
 const LIST_LIMIT = 200;
@@ -260,7 +266,9 @@ export default function TrainingData() {
         TIGER's house-number ranges replaced by the real E911 numbers' range on each segment side (what a
         correctly-numbered road file would give). "List ranges" uses only the address list's own min..max per
         street side, never TIGER's numbers; "Auto" does that only where TIGER's range looks like a placeholder
-        for sequentially-numbered houses. "E911 roads" uses Maine's E911 road centerlines instead of TIGER (restricted
+        for sequentially-numbered houses. "Assessor's lot address" gives each address the biggest building on the tax lot
+        whose assessor address (the town's tax roll) is the same number and street, else the ML + road order pick -- the
+        tax roll is never a model input. "E911 roads" uses Maine's E911 road centerlines instead of TIGER (restricted
         source, internal verification only). Owner only, not linked for visitors.
       </p>
 
@@ -333,7 +341,8 @@ export default function TrainingData() {
             <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 'var(--space-3)' }}>
               <input type="checkbox" checked={changedOnly} onChange={(e) => setChangedOnly(e.target.checked)} />
               <span>
-                Only addresses where road order changed the pick ({changedCounts.total.toLocaleString()}:{' '}
+                Only addresses where {isAssessorMethod(data.method) ? "the assessor's lot address" : 'road order'} changed
+                the pick ({changedCounts.total.toLocaleString()}:{' '}
                 <span style={{ color: STATUS_COLORS.right }}>{changedCounts.fixed.toLocaleString()} now right</span>,{' '}
                 <span style={{ color: STATUS_COLORS.wrong }}>{changedCounts.broke.toLocaleString()} were right before</span>)
               </span>
@@ -477,7 +486,7 @@ export default function TrainingData() {
               {isOrderMethod(data.method) && (
                 <div style={{ fontSize: 13, marginTop: 4 }}>
                   {selected.changedFromMl
-                    ? `Road order changed the pick. Without it: ${STATUS_LABELS[selected.mlStatus].toLowerCase()}.`
+                    ? `${isAssessorMethod(data.method) ? "The assessor's lot address" : 'Road order'} changed the pick. Without it: ${STATUS_LABELS[selected.mlStatus].toLowerCase()}.`
                     : 'Same pick as ML alone.'}
                 </div>
               )}
@@ -532,7 +541,9 @@ export default function TrainingData() {
                   <th>Address</th>
                   <th>Result</th>
                   <th>Off by</th>
-                  {isOrderMethod(data.method) && <th>Without road order</th>}
+                  {isOrderMethod(data.method) && (
+                    <th>{isAssessorMethod(data.method) ? 'ML + road order' : 'Without road order'}</th>
+                  )}
                   <th>Candidates</th>
                 </tr>
               </thead>

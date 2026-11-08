@@ -569,7 +569,9 @@ export type TrainingMethod =
   | 'ml_list'
   | 'ml_order_list'
   | 'ml_ranges'
-  | 'ml_order_ranges';
+  | 'ml_order_ranges'
+  | 'assessor'
+  | 'assessor_e911roads';
 
 export type TrainingTown = { region: string; town: string; runDate: string; addresses: number };
 

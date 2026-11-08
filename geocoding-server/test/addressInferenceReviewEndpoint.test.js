@@ -145,3 +145,33 @@ test('GET /admin/address-inference/review includes numbers suggested for unnumbe
       },
     }
   ));
+
+test('GET /admin/address-inference/review compares the assessor mode against ML + road order', () =>
+  withTestServer(
+    async ({ port }) =>
+      withPasscode(async () => {
+        const response = await fetch(
+          `http://127.0.0.1:${port}/admin/address-inference/review?passcode=correct-horse&method=assessor`
+        );
+        const body = await response.json();
+        assert.equal(body.method, 'assessor');
+        assert.deepEqual(body.methods, ['ml_order', 'ml', 'assessor']);
+        const a2 = body.addresses.find((a) => a.id === 'a2');
+        assert.equal(a2.status, 'right');
+        assert.equal(a2.mlStatus, 'wrong'); // ML + road order picked b3
+        assert.equal(a2.changedFromMl, true);
+      }),
+    {
+      seedStreets: false,
+      geoOptions: { postgis: true },
+      geoSeed: async (pool) => {
+        await seedPredictions(pool);
+        await pool.query(`UPDATE address_inference.ml_predictions SET picked_building = 'b3', status = 'wrong'
+                          WHERE method = 'ml_order' AND address_id = 'a2'`);
+        await pool.query(`
+          INSERT INTO address_inference.ml_predictions VALUES
+            ('me', 'Freeport', 'assessor', 'a1', 12, 'MAIN ST', 43.857, -70.103, 43.8571, -70.1031, 'b1', 'b1', 43.857, -70.103, 4.2, 'right', 30, '2026-11-08'),
+            ('me', 'Freeport', 'assessor', 'a2', 14, 'MAIN ST', 43.858, -70.103, 43.8581, -70.1031, 'b2', 'b2', 43.858, -70.103, 3.0, 'right', 30, '2026-11-08')`);
+      },
+    }
+  ));
