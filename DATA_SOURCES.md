@@ -131,6 +131,63 @@ geocoding request. Current as of August 2026.
   loaded with `python -m address_inference.load_footprints
   "dbname=geocoding" me --town Freeport`.
 
+### 5. Maine GeoLibrary — tax parcels (experiment only)
+
+- **What it is:** "Maine Parcels Organized Towns", the statewide tax
+  parcel layer the Maine GeoLibrary assembles from towns' voluntary
+  submissions (FeatureServer `Maine_Parcels_Organized_Towns`, item
+  `346131b710a645ffb624f448a9cba6d4`): each lot's boundary, map/block/lot,
+  and the assessor's property address (`PROP_LOC`, e.g. "15 SUMMER
+  STREET").
+- **Why it matters:** the building-address experiment uses the lot
+  geometry to tell which street a building belongs to (the street its lot
+  fronts, even when another road is nearer), which buildings form one
+  property (a house and its barn), and which buildings make up a complex
+  (2 Village View's units). `PROP_LOC` is stored but not used as a model
+  input: it nearly answers the question, so it gets its own separately
+  scored mode. **Not used by geocoding today.**
+- **License:** "Access: Public. Use: User assumes risk." (item license
+  info, checked 2026-11-05) -- no use restriction stated.
+- **Coverage / currency:** town by town, whenever a town submits; check
+  `FMUPDAT`. Freeport: 4,356 parcels, submitted by the town, 2022.
+  Loaded with `python -m address_inference.parcels "dbname=geocoding" me
+  --town Freeport`.
+
+### 6. US Census Bureau TIGER/Line — coastline and bays (experiment only)
+
+- **What it is:** two more TIGER/Line layers. The national "Coastline"
+  file (outer ocean edge only: for Freeport it runs 10.5 km out, past the
+  Casco Bay islands), and each county's "Area Hydrography" (AREAWATER),
+  whose bay/estuary/sound (MTFCC H2051) and ocean (H2053) polygons trace
+  the real shoreline, coves included.
+- **Why it matters:** the building-address experiment numbers deep lots
+  in columns along the road only on dead ends that stop near the water
+  (Brickyard Cove's end is 62-76 m from it). Loaded with `python -m
+  address_inference.coastline "dbname=geocoding" me
+  tl_2025_us_coastline.shp --areawater tl_2025_23005_areawater.shp`.
+  **Not used by geocoding today.**
+- **License:** public domain, same as the street data.
+
+### 7. USDA NAIP aerial imagery (experiment only)
+
+- **What it is:** the National Agriculture Imagery Program's 2018 Maine
+  flight, 0.6 m per pixel, red/green/blue + near-infrared, served by
+  Maine's image service (`gis.maine.gov/image/rest/services/NAIP/
+  orthoNaip2018/ImageServer`).
+- **Why it matters:** the building-address experiment follows each set-back
+  building's driveway over pavement (low vegetation index, bright) to the
+  road it joins (`address_inference/driveways.py`), and measures the trees
+  over and around each building (`address_inference/canopy.py`: a
+  tree-covered outline was traced short, so its size is unreliable); tiles
+  are cached once under `data/naip/` (`address_inference/imagery.py`).
+  **Not used by geocoding today.**
+- **License:** "Public domain." (the service's item info, checked
+  2026-11-06). Newer NAIP years (2021, 2023) and Maine's own 2023/2024
+  regional orthophotos need a token on Maine's server; Maine Regional 2021
+  (7.5 cm, "use constraints: none") and 2022 don't cover Freeport.
+- **Coverage / currency:** statewide; 2018 imagery, so newer houses and
+  driveways are missing.
+
 ## How the data gets in (and stays current)
 
 | Script | What it does |

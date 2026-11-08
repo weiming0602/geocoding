@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 
 import { ApiError, getTransactions } from '../../../shared/api/client';
 import type { Transaction } from '../../../shared/api/types';
+import { ADMIN_PASSCODE_STORAGE_KEY } from '../components/AccountTabs';
 import { useRecentLookups } from '../state/RecentLookups';
 
 // Gated by a shared admin passcode (ADMIN_PASSCODE on the server) since
@@ -11,7 +12,7 @@ import { useRecentLookups } from '../state/RecentLookups';
 // system anywhere in this app (see CLAUDE.md), so this is the simplest
 // real gate available, same trust model as a batch service key: one
 // shared secret, remembered in this browser's localStorage after entry.
-const STORAGE_KEY = 'meridianAdminPasscode';
+const STORAGE_KEY = ADMIN_PASSCODE_STORAGE_KEY;
 
 function formatPrice(cents: number): string {
   return `$${(cents / 100).toFixed(2)}`;

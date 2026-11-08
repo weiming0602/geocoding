@@ -523,3 +523,71 @@ export type Transaction = {
 export type TransactionsResponse = {
   transactions: Transaction[];
 };
+
+// GET /admin/address-inference/review -- owner-only map of the building-
+// address ML experiment's training data (geocoding-server/src/
+// addressInferenceReview.js). One row per scorable E911 training address.
+// status: right = the ranker picked the E911 building; wrong = it picked
+// another although the true one was a candidate; missed = the true
+// building was never a candidate; no_building = no footprint within 30 m
+// of the E911 point (no label).
+export type TrainingStatus = 'right' | 'wrong' | 'missed' | 'no_building';
+
+export type TrainingAddress = {
+  id: string;
+  number: number;
+  // E911's unit ("Unit 14") when one number covers several units, and how
+  // the state placed the point ("Structure - Rooftop", "Geocoding", ...).
+  unit: string | null;
+  placement: string | null;
+  street: string;
+  e911: { latitude: number; longitude: number };
+  interpolated: { latitude: number; longitude: number };
+  trueBuilding: string | null;
+  pickedBuilding: string | null;
+  picked: { latitude: number; longitude: number } | null;
+  errorMeters: number;
+  status: TrainingStatus;
+  candidates: number;
+  // What the ranker alone did -- differs from status/pickedBuilding only
+  // for method 'ml_order', where road order may have changed the pick.
+  mlStatus: TrainingStatus;
+  changedFromMl: boolean;
+};
+
+// 'ml' = the ranker alone; 'ml_order' = ranker + road order, one building
+// per number, numbers increasing along the road (address_inference/order.py).
+// The *_ranges pair: same pipeline, TIGER ranges replaced by the real E911
+// numbers' min..max per segment side -- an upper-bound experiment.
+export type TrainingMethod =
+  | 'ml'
+  | 'ml_order'
+  | 'ml_e911roads'
+  | 'ml_order_e911roads'
+  | 'ml_auto'
+  | 'ml_order_auto'
+  | 'ml_list'
+  | 'ml_order_list'
+  | 'ml_ranges'
+  | 'ml_order_ranges';
+
+export type TrainingTown = { region: string; town: string; runDate: string; addresses: number };
+
+export type AddressInferenceReviewResponse = {
+  towns: TrainingTown[];
+  town: string;
+  region: string;
+  runDate: string;
+  method: TrainingMethod;
+  methods: TrainingMethod[];
+  summary: Partial<Record<TrainingStatus, number>>;
+  addresses: TrainingAddress[];
+  buildings: {
+    type: 'FeatureCollection';
+    features: {
+      type: 'Feature';
+      geometry: { type: 'MultiPolygon' | 'Polygon'; coordinates: unknown };
+      properties: { id: string; sqmeters: number | null };
+    }[];
+  };
+};

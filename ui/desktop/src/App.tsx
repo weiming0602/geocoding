@@ -24,6 +24,7 @@ import RoadAlertsSandbox from './pages/RoadAlertsSandbox';
 import RoadAlertsTest from './pages/RoadAlertsTest';
 import SiteMap from './pages/SiteMap';
 import TermsOfUse from './pages/TermsOfUse';
+import TrainingData from './pages/TrainingData';
 import ServiceWorkerNavigation from './components/ServiceWorkerNavigation';
 import { ImportAddressesStateProvider } from './state/ImportAddressesState';
 import { RecentLookupsProvider } from './state/RecentLookups';
@@ -97,6 +98,7 @@ export default function App() {
                 <Route path="/progress" element={<Progress />} />
                 <Route path="/api-docs" element={<ApiDocs />} />
                 <Route path="/help" element={<Help />} />
+                <Route path="/training-data" element={<TrainingData />} />
                 <Route path="/privacy" element={<PrivacyPolicy />} />
                 <Route path="/terms" element={<TermsOfUse />} />
                 <Route path="/sitemap" element={<SiteMap />} />

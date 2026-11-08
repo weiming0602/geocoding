@@ -50,8 +50,52 @@ read-write).
   interpolation and geometry baselines: `python -m
   address_inference.evaluate "dbname=geocoding" me --town Freeport` (needs
   `pip install -r address_inference/requirements.txt`; Freeport: within
-  50 m 24.5% -> 46.6%). Regions are TOML files in
-  `address_inference/regions/`.
+  50 m 24.5% -> 46.6%; `address_inference/order.py` then assigns each
+  street side's numbers one-to-one in increasing order along the road, same side
+  only, every number placed, main roads first, no building 25 m nearer another
+  road, houses past a dead end sided by the street's overall direction: 41.5%
+  right building, 50.1% within 50 m, 86.5% within 150 m). Training is
+  deterministic: query rows are ordered and ties broken by id. `--ranges list|auto`
+  places numbers by the address list's own min..max per street side instead of
+  TIGER's range (auto: only for placeholder ranges with sequential numbers);
+  both lose to TIGER town-wide in Freeport, auto fixes Arrowhead Ridge Rd. Add `--save` to keep each training
+  address's pick (methods `ml` and `ml_order`) in
+  `address_inference.ml_predictions` (one run per town), which the
+  owner-only Account > Training data tab (`ui/desktop`'s
+  `TrainingData.tsx`, `GET /admin/address-inference/review`, same
+  `ADMIN_PASSCODE` gate as `/owner`) maps: right/wrong/missed picks with
+  the E911 building vs. the picked one. The tab shows only in a browser
+  that has unlocked `/owner`; the endpoint 404s where the experiment never
+  ran (the droplets). Regions are TOML files in
+  `address_inference/regions/`. `python -m address_inference.e911_details
+  "dbname=geocoding" me --town Freeport` loads each E911 point's unit ("Unit
+  14" -- one number can be a whole complex) and placement ("Geocoding" =
+  estimated along the road, not on a building) from the public points layer;
+  the Training data tab shows both. `python -m address_inference.parcels "dbname=geocoding" me
+  --town Freeport` loads tax parcels (DATA_SOURCES.md §5), links buildings to
+  lots and measures each lot's frontage per street segment: parcel features
+  add ~2 points right building, and "right property" uses the parcel. Scores
+  count each street number once (141 Main Street alone has 563 E911 points);
+  ML + road order, Freeport: TIGER 50.2% right building / 59.0% within 50 m,
+  E911 roads 61.5% / 72.1%. Road order keeps sheds (<20% of their lot's
+  biggest building) out and takes each street's direction from its ranges.
+  `python -m address_inference.driveways me --town Freeport "dbname=geocoding"
+  [more DSNs]` follows each set-back building's driveway over NAIP imagery
+  (public domain, cached in `data/naip/`, DATA_SOURCES.md §7) to the road it
+  joins (set-back buildings 40 m+ and corner buildings with two named roads
+  within 60 m; 12 processes, ~5 min for Freeport); pavement is NDVI < 0.02
+  (0.12 counted dry grass), and a driveway may not reach a road by running
+  along another road. Road order then drops a building whose driveway
+  clearly (1.5x, corners 3x) goes to another road, lets one whose driveway
+  comes to this street past the 25 m nearer-road rule, and treats the
+  building at the end of a visible lane (100 m+ back, <= 10% off pavement)
+  as the home (one per lot, the biggest): never a shed, its lot's numbered
+  building, +0.3 for the lane's street. Imagery first by the owner's call,
+  even though TIGER dips: TIGER 53.8%, E911 roads 66.6%. `python -m
+  address_inference.canopy me --town Freeport "dbname=geocoding" [more
+  DSNs]` (~1 min) measures trees over each building's outline from the same
+  imagery; road order never calls a building 20%+ under trees a shed (as
+  model inputs these measures cost points, so they aren't).
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)
