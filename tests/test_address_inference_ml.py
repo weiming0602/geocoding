@@ -583,3 +583,21 @@ def test_the_assessor_lot_address_picks_the_lots_biggest_building():
     picks, matched = order.assessor_picks(address_df, lots, parcel_of, size_of, {"a21": "other", "a17": "other"},
                                           roof_of=roof_of)
     assert picks == {"a21": "house", "a17": "other"} and matched == {"a21"}
+
+
+def test_a_lot_with_two_numbers_gives_one_to_each_house_in_road_order():
+    # 57 and 59 Lower Mast Landing Road: two houses on one tax lot; the
+    # biggest-roof rule put both numbers on 57's (bigger) house.
+    import pandas as pd
+    from address_inference import order
+    address_df = pd.DataFrame([{"id": "a51", "number": 51, "street": "LML"},
+                               {"id": "a57", "number": 57, "street": "LML"},
+                               {"id": "a59", "number": 59, "street": "LML"},
+                               {"id": "a63", "number": 63, "street": "LML"}])
+    parcel_of = {"h51": "C", "big": "D", "small": "D", "shed": "D", "h63": "B"}
+    size_of = {"h51": 60, "big": 133, "small": 70, "shed": 12, "h63": 100}
+    positions = {("LML", "h51"): 100.0, ("LML", "big"): 160.0, ("LML", "small"): 190.0,
+                 ("LML", "shed"): 175.0, ("LML", "h63"): 240.0}
+    picks = {"a51": "h51", "a57": "big", "a59": "big", "a63": "h63"}
+    out = order.spread_within_lots(picks, address_df, parcel_of, size_of, positions)
+    assert out == {"a51": "h51", "a57": "big", "a59": "small", "a63": "h63"}

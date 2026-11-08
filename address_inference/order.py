@@ -13,7 +13,7 @@ that has to come from somewhere else (a batch file, assessor records, the
 National Address Database).
 """
 
-from collections import defaultdict
+from collections import Counter, defaultdict
 
 import numpy as np
 import pandas as pd
@@ -914,7 +914,67 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
         lists[(street, key.get(b, b))].append(along)
     positions_place = {k: float(np.mean(v)) for k, v in lists.items()}
     picked = order_constrained_picks(address_df, scored_place, positions_place, fallback, **kwargs)
-    return {a: best_building.get((a, v), v) for a, v in picked.items()}
+    picks = {a: best_building.get((a, v), v) for a, v in picked.items()}
+    if SPREAD_WITHIN_LOT and roof_of is not None:
+        size_of = df.drop_duplicates("source_id").set_index("source_id")["_within" if "_within" in df.columns
+                                                                          else "sqmeters"].to_dict()
+        picks = spread_within_lots(picks, address_df, parcel_of, size_of, positions)
+    return picks
+
+
+# A lot E911 gives several numbers on one street (57 and 59 Lower Mast
+# Landing Road: two houses on lot 20/82/D, which the tax roll lists only as
+# 59) gets them on that many of its houses, in order along the street -- the
+# biggest-roof rule above put both on 57's house.
+SPREAD_WITHIN_LOT = True
+
+
+def street_directions(picks, address_df, positions) -> dict:
+    """{street: True if numbers rise along the street line}, from where the
+    picks sit (each street number once)."""
+    pts = defaultdict(dict)
+    for a in address_df.itertuples():
+        b = picks.get(a.id)
+        if b is not None and (a.street, b) in positions:
+            pts[a.street].setdefault(int(a.number), positions[(a.street, b)])
+    out = {}
+    for street, by_number in pts.items():
+        seq = [by_number[n] for n in sorted(by_number)]
+        out[street] = sum(b - a for a, b in zip(seq, seq[1:])) >= 0
+    return out
+
+
+def spread_within_lots(picks, address_df, parcel_of, size_of, positions):
+    """Several numbers of one street on one ordinary tax lot -> its biggest
+    houses (sheds -- under ACCESSORY_MAX_RATIO of the biggest -- never), one
+    number each, lowest number first along the street's numbering direction.
+    A lot with fewer houses than numbers is left as it is."""
+    lot_size = Counter(parcel_of.values())
+    on_lot = defaultdict(list)
+    for b, lot in parcel_of.items():
+        if 1 < lot_size[lot] <= LOT_MAX_BUILDINGS and b in size_of:
+            on_lot[lot].append(b)
+    rising = street_directions(picks, address_df, positions)
+    groups = defaultdict(lambda: defaultdict(list))
+    for a in address_df.itertuples():
+        b = picks.get(a.id)
+        lot = parcel_of.get(b) if b is not None else None
+        if lot in on_lot:
+            groups[(a.street, lot)][int(a.number)].append(a.id)
+    out = dict(picks)
+    for (street, lot), by_number in groups.items():
+        if len(by_number) < 2:
+            continue
+        biggest = max(size_of[b] or 0 for b in on_lot[lot])
+        houses = sorted((b for b in on_lot[lot] if (size_of[b] or 0) >= ACCESSORY_MAX_RATIO * biggest
+                         and (street, b) in positions), key=lambda b: (-(size_of[b] or 0), b))[:len(by_number)]
+        if len(houses) < len(by_number):
+            continue
+        houses.sort(key=lambda b: positions[(street, b)], reverse=not rising.get(street, True))
+        for n, house in zip(sorted(by_number), houses):
+            for a in by_number[n]:
+                out[a] = house
+    return out
 
 
 # The assessor's own address for each tax lot (parcels.prop_loc, e.g. "21
@@ -964,7 +1024,7 @@ def load_lot_addresses(dsn, region, town) -> dict:
     return dict(out)
 
 
-def assessor_picks(address_df, lot_addresses, parcel_of, size_of, fallback, roof_of=None):
+def assessor_picks(address_df, lot_addresses, parcel_of, size_of, fallback, roof_of=None, positions=None):
     """(picks, matched): each address whose number and street the assessor
     gives a tax lot takes that lot's biggest building (lidar roof where seen,
     else its outline); every other address keeps `fallback`'s pick. Only
@@ -982,4 +1042,7 @@ def assessor_picks(address_df, lot_addresses, parcel_of, size_of, fallback, roof
         if buildings:
             picks[a.id] = max(buildings, key=lambda b: (roof_of[b][0] if b in roof_of and roof_of[b][0] else size_of[b] or 0))
             matched.add(a.id)
+    if SPREAD_WITHIN_LOT and positions:
+        within = {b: (roof_of[b][0] if b in roof_of and roof_of[b][0] else size_of[b] or 0) for b in size_of}
+        picks = spread_within_lots(picks, address_df, parcel_of, within, positions)
     return picks, matched

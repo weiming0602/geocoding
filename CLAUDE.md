@@ -123,7 +123,10 @@ read-write).
   the E911-roads DB): the biggest building on the lot with the same number
   and street, else ML + road order -- Freeport TIGER 53.3% -> 80.3%, E911
   roads 66.4% -> 83.9% right building. Tax-roll spellings are normalized in
-  `order.parse_prop_loc` (LWR -> LOWER, trailing SF -> SOUTH, units dropped).
+  `order.parse_prop_loc` (LWR -> LOWER, trailing SF -> SOUTH, units dropped). A lot
+  with several numbers on one street gives them to that many of its houses,
+  in order along the street (`order.SPREAD_WITHIN_LOT`; 57/59 Lower Mast
+  Landing Road; Freeport neutral, E911 roads ML + road order -0.4).
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)
