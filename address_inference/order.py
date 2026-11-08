@@ -383,6 +383,16 @@ RURAL_MIN_LOT_M2 = 4000
 # The smallest surplus buildings are often the real houses (camps,
 # cottages); Webster Road 50-58 stayed shifted in every variant.
 EXTRA_SIZE = "outline"
+# Owner's idea: on a side with more buildings than numbers, deal the numbers
+# out from one end -- "max": the highest number to the last building along
+# the road, the next to the one before..., so the leftover buildings fall
+# at the low end ("min": the other way). Number i's slot gets END_SLOT_BONUS.
+# Off (0): right building TIGER / E911 roads, today 53.3 / 66.0; from max
+# 0.05: 53.3 / 66.0, 0.1: 52.7 / 66.0, 0.2: 50.6 / 65.3, 0.4: 47.9 / 64.8;
+# from min 0.05: 53.2 / 65.8, 0.4: 48.7 / 63.8. Webster Road unchanged.
+END_SLOT_FROM = "max"
+END_SLOT_BONUS = 0.0
+END_SLOT_HOMES = True   # count only home buildings (their nearest road is this street)
 
 
 # A building holds at most this many numbers of one parity (owner's rule:
@@ -804,6 +814,12 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
                 group_of = {b: int(np.searchsorted(cuts, idx, side="right")) for idx, b in enumerate(homes_in_order)}
                 in_slot = np.array([[group_of.get(b, -1) == i for b in order] for i in range(k)])
                 P = P + property_bonus * in_slot
+            if END_SLOT_BONUS and not townhouses:
+                slots = [b for b in order if (street, b) in home] if END_SLOT_HOMES else list(order)
+                if len(slots) > k:
+                    first = len(slots) - k if END_SLOT_FROM == "max" else 0
+                    slot_of = {b: idx - first for idx, b in enumerate(slots)}
+                    P = P + END_SLOT_BONUS * np.array([[slot_of.get(b, -1) == i for b in order] for i in range(k)])
             # MATCH_BONUS: placing a number always beats leaving it out, so
             # every number gets a building in road order when the side has
             # enough; a non-candidate pair is never allowed.
