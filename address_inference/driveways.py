@@ -59,6 +59,18 @@ JUNCTION_PX = 22       # ~15 m: a road's own stretch starts this far from any ot
 # following Flying Point's pavement). One extra path search per building.
 BRANCH_CHECK = True
 UNREACHABLE_COST = 1e6  # a road only reachable along another road
+# A driveway half hidden under trees (owner's rule): driveways run straight
+# to save money, so the visible piece leaving the building points at its
+# road. Its line is extended HIDDEN_REACH_M past its far end, and trees on
+# that line cost HIDDEN_COST (counted as driveway, not off pavement). The
+# visible piece must be HIDDEN_MIN_M+ long and HIDDEN_MIN_ELONGATION x as
+# long as wide. None turns it off.
+HIDDEN_REACH_M = 150
+HIDDEN_COST = 2.0
+HIDDEN_MIN_M = 12
+HIDDEN_MIN_ELONGATION = 3.0
+HIDDEN_WIDTH_PX = 5
+TREE_NDVI = 0.3
 
 CREATE_SQL = """
 CREATE TABLE IF NOT EXISTS address_inference.building_driveways (
@@ -114,12 +126,52 @@ def _rings(geojson):
     return [ring for poly in polys for ring in poly]
 
 
-def cost_map(bbox):
+def cost_map(bbox, with_ndvi=False):
     """Per-pixel travel cost: 1 on pavement/gravel, 1 + OFF_PAVEMENT_COST elsewhere."""
     red, nir = imagery.crop(bbox, SIZE, 0), imagery.crop(bbox, SIZE, 3)
     ndvi = (nir - red) / (nir + red + 1e-6)
     pave = median_filter(((ndvi < PAVE_NDVI) & (red > PAVE_BRIGHT)).astype(np.float32), size=5)
-    return 1.0 + OFF_PAVEMENT_COST * (1.0 - pave)
+    cost = 1.0 + OFF_PAVEMENT_COST * (1.0 - pave)
+    return (cost, ndvi) if with_ndvi else cost
+
+
+def hidden_driveway(cost, ndvi, inside, roads=None):
+    """Pixels where a straight driveway leaving the building continues under
+    trees: the visible pavement piece touching the building, if long and
+    narrow, extended along its own line past its far end. Empty if none."""
+    from scipy.ndimage import label
+    out = np.zeros_like(inside)
+    if HIDDEN_REACH_M is None:
+        return out
+    px_m = 2 * HALF_M / SIZE
+    pave = cost <= 1.0
+    if roads is not None:
+        pave &= ~binary_dilation(roads, iterations=VIA_BUFFER_PX)
+    near = binary_dilation(inside, iterations=3)
+    parts, _ = label(pave & ~inside)
+    for k in set(np.unique(parts[near]).tolist()) - {0}:
+        pts = np.argwhere(parts == k).astype(float)
+        if len(pts) < 10:
+            continue
+        mean = pts.mean(axis=0)
+        evals, evecs = np.linalg.eigh(np.cov((pts - mean).T))
+        major, minor = evals[1], max(evals[0], 1e-6)
+        if math.sqrt(major / minor) < HIDDEN_MIN_ELONGATION:
+            continue
+        d = evecs[:, 1]
+        along = (pts - mean) @ d
+        if (along.max() - along.min()) * px_m < HIDDEN_MIN_M:
+            continue
+        # The far end is the end away from the building.
+        hc = np.argwhere(inside).mean(axis=0)
+        if (hc - mean) @ d > 0:
+            d, along = -d, -along
+        start = mean + d * along.max()
+        line = Image.new("L", (SIZE, SIZE), 0)
+        end = start + d * (HIDDEN_REACH_M / px_m)
+        ImageDraw.Draw(line).line([(start[1], start[0]), (end[1], end[0])], fill=1, width=HIDDEN_WIDTH_PX)
+        out |= np.asarray(line) > 0
+    return out & (ndvi > TREE_NDVI)
 
 
 def road_costs(lat, lon, building_geojson, roads_by_db):
@@ -166,7 +218,7 @@ def road_paths(lat, lon, building_geojson, roads_by_db, quick=False):
         masks_by_db[db] = {k: m for k, m in masks.items() if m.any()}
     if quick and all(len(m) <= 1 for m in masks_by_db.values()):
         return {db: {k: (1.0, None, None, None) for k in masks} for db, masks in masks_by_db.items()}
-    cost = cost_map(bbox)
+    cost, ndvi = cost_map(bbox, with_ndvi=True)
     house = Image.new("L", (SIZE, SIZE), 0)
     for ring in _rings(building_geojson):
         ImageDraw.Draw(house).polygon([to_px(x, y) for x, y in ring], fill=1, outline=1)
@@ -174,6 +226,11 @@ def road_paths(lat, lon, building_geojson, roads_by_db, quick=False):
     starts = np.argwhere(inside)
     if len(starts) == 0:
         return {}
+    all_roads = np.zeros((SIZE, SIZE), dtype=bool)
+    for masks in masks_by_db.values():
+        for m in masks.values():
+            all_roads |= m
+    cost[hidden_driveway(cost, ndvi, inside, all_roads)] = HIDDEN_COST
     cost[inside] = 1.0
     start_list = [tuple(p) for p in starts]
     mcp = MCP_Geometric(cost)

@@ -102,3 +102,34 @@ def test_the_entry_is_where_the_driveway_meets_the_road(monkeypatch):
     assert east == pytest.approx(80, abs=6) and north == pytest.approx(-150, abs=8)
     assert off < 5                   # all on the driveway
     assert paths["ASH RD"][3] > 150  # across grass to Ash Rd
+
+
+def test_a_straight_driveway_hidden_under_trees_still_points_at_its_road(monkeypatch):
+    # The driveway is visible for 40 m south of the house, then runs under a
+    # belt of trees to Birch Rd 150 m south. Ash Rd is 90 m east across a lawn.
+    # Driveways run straight: the visible piece points at Birch Rd.
+    bbox = imagery.bbox_around(LAT, LON, driveways.HALF_M)
+    size = driveways.SIZE
+    x0, y0, x1, y1 = bbox
+    to_px = lambda e, n: ((imagery.merc(*offset(e, n))[0] - x0) / (x1 - x0) * size,
+                          (y1 - imagery.merc(*offset(e, n))[1]) / (y1 - y0) * size)
+    red = np.full((size, size), 60.0, dtype=np.float32)   # lawn, NDVI 0.25
+    nir = np.full((size, size), 100.0, dtype=np.float32)
+    _, top = to_px(0, -40)
+    _, bottom = to_px(0, -148)
+    red[int(top):int(bottom), :] = 30                      # trees, NDVI 0.74
+    nir[int(top):int(bottom), :] = 200
+    for t in np.linspace(0, 1, 200):
+        px, py = to_px(0, -40 * t)
+        r0, c0 = int(py), int(px)
+        red[r0 - 4:r0 + 5, c0 - 4:c0 + 5] = 150
+        nir[r0 - 4:r0 + 5, c0 - 4:c0 + 5] = 140
+    monkeypatch.setattr(imagery, "crop", lambda b, s, band: (red if band == 0 else nir).copy())
+    roads = {0: [("Ash Rd", line((90, -200), (90, 200))), ("Birch Rd", line((-200, -150), (200, -150)))]}
+    monkeypatch.setattr(driveways, "HIDDEN_REACH_M", None)
+    off = driveways.road_paths(LAT, LON, square(6), roads)[0]
+    assert off["ASH RD"][0] < off["BIRCH RD"][0]           # without the rule: the lawn
+    monkeypatch.setattr(driveways, "HIDDEN_REACH_M", 150)
+    on = driveways.road_paths(LAT, LON, square(6), roads)[0]
+    assert on["BIRCH RD"][0] < on["ASH RD"][0]
+    assert on["BIRCH RD"][3] < 15                          # the hidden stretch counts as driveway
