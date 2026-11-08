@@ -13,10 +13,12 @@ import PageHeader from '../components/PageHeader';
 import TrainingDataMap, {
   BUILDING_COLORS,
   STATUS_COLORS,
-  SUGGESTION_COLOR,
+  SUGGESTION_COLORS,
+  type SuggestionKind,
   addressLabel,
   describe,
   describeSuggestion,
+  suggestionKind,
 } from '../components/TrainingDataMap';
 
 // Owner-only: the building-address ML experiment's training data on a map
@@ -59,6 +61,11 @@ const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
 const isOrderMethod = (m: TrainingMethod) => BASE_METHOD[m] !== m;
 const STATUS_ORDER: TrainingStatus[] = ['wrong', 'missed', 'right', 'no_building'];
 const LIST_LIMIT = 200;
+const SUGGESTION_KINDS: { kind: SuggestionKind; label: string }[] = [
+  { kind: 'second', label: 'Second house on a numbered lot' },
+  { kind: 'lot', label: 'House on a lot with no E911 number' },
+  { kind: 'none', label: 'No free number between its neighbors' },
+];
 
 function readPasscode(): string | null {
   try {
@@ -99,6 +106,7 @@ export default function TrainingData() {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<TrainingAddress | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(true);
+  const [shownKinds, setShownKinds] = useState<Set<SuggestionKind>>(() => new Set(['second', 'lot', 'none']));
   const [selectedSuggestion, setSelectedSuggestion] = useState<SuggestedNumber | null>(null);
   const [focusNonce, setFocusNonce] = useState(0);
   const mapBoxRef = useRef<HTMLDivElement>(null);
@@ -180,15 +188,23 @@ export default function TrainingData() {
     [data]
   );
 
-  const suggestions = useMemo(() => data?.suggestions ?? [], [data]);
-  const suggestionCounts = useMemo(
-    () => ({
-      numbered: suggestions.filter((s) => s.number != null).length,
-      secondHouse: suggestions.filter((s) => s.number != null && s.tier === 'second house').length,
-      unnumberedLot: suggestions.filter((s) => s.number != null && s.tier === 'unnumbered lot').length,
-    }),
-    [suggestions]
+  const allSuggestions = useMemo(() => data?.suggestions ?? [], [data]);
+  const kindCounts = useMemo(() => {
+    const counts: Record<SuggestionKind, number> = { second: 0, lot: 0, none: 0 };
+    for (const sg of allSuggestions) counts[suggestionKind(sg)] += 1;
+    return counts;
+  }, [allSuggestions]);
+  const suggestions = useMemo(
+    () => allSuggestions.filter((sg) => shownKinds.has(suggestionKind(sg))),
+    [allSuggestions, shownKinds]
   );
+  const toggleKind = (kind: SuggestionKind) =>
+    setShownKinds((prev) => {
+      const next = new Set(prev);
+      if (next.has(kind)) next.delete(kind);
+      else next.add(kind);
+      return next;
+    });
   const listedSuggestions = useMemo(() => {
     const needle = search.trim().toUpperCase();
     return suggestions.filter(
@@ -358,18 +374,9 @@ export default function TrainingData() {
             })}
           </div>
 
-          {suggestions.length > 0 && (
-            <label
-              className="card elev-sm"
-              style={{
-                cursor: 'pointer',
-                opacity: showSuggestions ? 1 : 0.55,
-                margin: '0 0 var(--space-4)',
-                display: 'block',
-                maxWidth: 760,
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          {allSuggestions.length > 0 && (
+            <div className="card elev-sm" style={{ margin: '0 0 var(--space-4)', opacity: showSuggestions ? 1 : 0.55 }}>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
                 <input
                   type="checkbox"
                   checked={showSuggestions}
@@ -378,21 +385,37 @@ export default function TrainingData() {
                     if (!e.target.checked) setSelectedSuggestion(null);
                   }}
                 />
-                <Swatch color={SUGGESTION_COLOR} />
                 <span className="card-kicker" style={{ margin: 0 }}>
-                  Suggested numbers (not in E911)
+                  {allSuggestions.length.toLocaleString()} houses with no E911 point (suggested numbers, not E911)
                 </span>
+              </label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-4)', marginTop: 'var(--space-2)' }}>
+                {SUGGESTION_KINDS.map(({ kind, label }) => (
+                  <label
+                    key={kind}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                      cursor: 'pointer',
+                      opacity: shownKinds.has(kind) ? 1 : 0.55,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={shownKinds.has(kind)}
+                      disabled={!showSuggestions}
+                      onChange={() => toggleKind(kind)}
+                    />
+                    <Swatch color={SUGGESTION_COLORS[kind]} square />
+                    <span>
+                      {label}{' '}
+                      <strong style={{ fontVariantNumeric: 'tabular-nums' }}>{kindCounts[kind].toLocaleString()}</strong>
+                    </span>
+                  </label>
+                ))}
               </div>
-              <div style={{ fontFamily: 'var(--font-heading)', fontSize: 22, fontVariantNumeric: 'tabular-nums' }}>
-                {suggestionCounts.numbered.toLocaleString()}{' '}
-                <span className="text-muted" style={{ fontSize: 14 }}>
-                  houses with no E911 point: {suggestionCounts.secondHouse.toLocaleString()} second houses on a
-                  numbered lot, {suggestionCounts.unnumberedLot.toLocaleString()} on a lot with no number;{' '}
-                  {(suggestions.length - suggestionCounts.numbered).toLocaleString()} more where the neighbors leave no
-                  free number (hollow dots)
-                </span>
-              </div>
-            </label>
+            </div>
           )}
 
           <div
@@ -415,11 +438,8 @@ export default function TrainingData() {
               <Swatch color={BUILDING_COLORS.other} square />
               Other footprints
             </span>
-            {suggestions.length > 0 && (
-              <span>
-                <Swatch color={SUGGESTION_COLOR} />
-                Suggested number (click a dot)
-              </span>
+            {allSuggestions.length > 0 && (
+              <span>Colored footprint + dot: a house with no E911 point (click the dot; dashed = no free number)</span>
             )}
             <span>Dashed line: E911 point → picked building · white ring: today's interpolation</span>
           </div>
@@ -560,7 +580,7 @@ export default function TrainingData() {
             </table>
           </div>
 
-          {showSuggestions && suggestions.length > 0 && (
+          {showSuggestions && allSuggestions.length > 0 && (
             <>
               <h4 style={{ margin: 'var(--space-5) 0 var(--space-3)' }}>
                 Suggested numbers{' '}
@@ -598,7 +618,10 @@ export default function TrainingData() {
                             <span className="text-muted">none on {sg.street}</span>
                           )}
                         </td>
-                        <td>{sg.tier === 'second house' ? 'Second house on a numbered lot' : 'Lot with no number'}</td>
+                        <td>
+                          <Swatch color={SUGGESTION_COLORS[suggestionKind(sg)]} square />
+                          {sg.tier === 'second house' ? 'Second house on a numbered lot' : 'Lot with no number'}
+                        </td>
                         <td className="text-muted">
                           {sg.number != null
                             ? [sg.before, sg.after].filter((n) => n != null).join(' – ') || '—'

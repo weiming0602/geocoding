@@ -24,8 +24,28 @@ export const BUILDING_COLORS = {
   both: '#8e44ad', // the true building of one address and the wrong pick of another
   other: '#9aa0a6',
 };
-// Suggested numbers (houses E911 never numbered): never an E911 color.
-export const SUGGESTION_COLOR = '#2471a3';
+// Suggested numbers (houses E911 never numbered), by kind: never an E911
+// color. 'none' = the neighbors leave no free number (drawn hollow/dashed).
+export type SuggestionKind = 'second' | 'lot' | 'none';
+export const SUGGESTION_COLORS: Record<SuggestionKind, string> = {
+  second: '#2471a3', // second house on a numbered lot, number suggested
+  lot: '#0e9aa7', // house on a lot with no E911 number, number suggested
+  none: '#34495e', // no free number between its neighbors
+};
+export const SUGGESTION_COLOR = SUGGESTION_COLORS.second;
+export function suggestionKind(s: SuggestedNumber): SuggestionKind {
+  if (s.number == null) return 'none';
+  return s.tier === 'second house' ? 'second' : 'lot';
+}
+const kindColor = [
+  'match',
+  ['get', 'kind'],
+  'second',
+  SUGGESTION_COLORS.second,
+  'lot',
+  SUGGESTION_COLORS.lot,
+  SUGGESTION_COLORS.none,
+] as unknown as string;
 
 type Props = {
   data: AddressInferenceReviewResponse;
@@ -137,8 +157,22 @@ function suggestionPoints(suggestions: SuggestedNumber[]): GeoJSON.FeatureCollec
     features: suggestions.map((s) => ({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [s.longitude, s.latitude] },
-      properties: { building: s.building, numbered: s.number != null },
+      properties: { building: s.building, kind: suggestionKind(s) },
     })),
+  };
+}
+
+// The suggested houses' own footprints, colored by kind.
+function suggestionFootprints(buildings: Buildings, suggestions: SuggestedNumber[]): GeoJSON.FeatureCollection {
+  const kinds = new Map(suggestions.map((s) => [s.building, suggestionKind(s)]));
+  return {
+    type: 'FeatureCollection',
+    features: buildings.features
+      .filter((f) => kinds.has(f.properties.id))
+      .map((f) => ({
+        ...(f as unknown as GeoJSON.Feature),
+        properties: { building: f.properties.id, kind: kinds.get(f.properties.id) },
+      })),
   };
 }
 
@@ -175,7 +209,7 @@ export default function TrainingDataMap({
     mapRef.current = map;
 
     map.on('load', () => {
-      for (const id of ['buildings', 'links', 'points', 'selected-buildings', 'selected-m0', 'suggestions', 'selected-suggestion']) {
+      for (const id of ['buildings', 'links', 'points', 'selected-buildings', 'selected-m0', 'suggestions', 'suggestion-footprints', 'selected-suggestion']) {
         map.addSource(id, { type: 'geojson', data: emptyCollection() });
       }
       const roleColor = [
@@ -260,10 +294,33 @@ export default function TrainingDataMap({
       // Suggested numbers: a blue dot on the house (hollow when the
       // neighbors leave no free number), its outline blue when selected.
       map.addLayer({
+        id: 'suggestion-fill',
+        type: 'fill',
+        source: 'suggestion-footprints',
+        paint: {
+          'fill-color': kindColor,
+          'fill-opacity': ['match', ['get', 'kind'], 'none', 0.15, 0.55] as unknown as number,
+        },
+      });
+      map.addLayer({
+        id: 'suggestion-outline',
+        type: 'line',
+        source: 'suggestion-footprints',
+        filter: ['!=', ['get', 'kind'], 'none'],
+        paint: { 'line-color': kindColor, 'line-width': 2 },
+      });
+      map.addLayer({
+        id: 'suggestion-outline-none',
+        type: 'line',
+        source: 'suggestion-footprints',
+        filter: ['==', ['get', 'kind'], 'none'],
+        paint: { 'line-color': SUGGESTION_COLORS.none, 'line-width': 2, 'line-dasharray': [2, 1.5] },
+      });
+      map.addLayer({
         id: 'selected-suggestion',
         type: 'line',
         source: 'selected-suggestion',
-        paint: { 'line-color': SUGGESTION_COLOR, 'line-width': 4 },
+        paint: { 'line-color': '#f1c40f', 'line-width': 4 },
       });
       map.addLayer({
         id: 'suggestions',
@@ -271,9 +328,9 @@ export default function TrainingDataMap({
         source: 'suggestions',
         paint: {
           'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 3, 17, 7] as unknown as number,
-          'circle-color': ['case', ['get', 'numbered'], SUGGESTION_COLOR, '#ffffff'] as unknown as string,
-          'circle-stroke-width': 2,
-          'circle-stroke-color': SUGGESTION_COLOR,
+          'circle-color': ['match', ['get', 'kind'], 'none', '#ffffff', kindColor] as unknown as string,
+          'circle-stroke-width': ['match', ['get', 'kind'], 'none', 2, 1] as unknown as number,
+          'circle-stroke-color': ['match', ['get', 'kind'], 'none', SUGGESTION_COLORS.none, '#ffffff'] as unknown as string,
         },
       });
       map.on('mouseenter', 'suggestions', () => (map.getCanvas().style.cursor = 'pointer'));
@@ -360,7 +417,8 @@ export default function TrainingDataMap({
     const map = mapRef.current;
     if (!map || !ready) return;
     (map.getSource('suggestions') as GeoJSONSource).setData(suggestionPoints(suggestions));
-  }, [suggestions, ready]);
+    (map.getSource('suggestion-footprints') as GeoJSONSource).setData(suggestionFootprints(data.buildings, suggestions));
+  }, [suggestions, data, ready]);
 
   // The selected suggestion: its house outlined, a popup, and the map moved there.
   useEffect(() => {
