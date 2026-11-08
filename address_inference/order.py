@@ -72,6 +72,12 @@ ACCESSORY_MAX_RATIO = 0.2
 # 65.8 / 65.7 / 64.1, and Webster Road stays shifted -- the ranker itself
 # leans one house on there (58: 0.17 on 54's house, 0.07 on its own).
 SMALL_ROOF_M2 = None
+# A footprint lidar measured and found no roof on is no house and takes no
+# number (False = off). Webster Road's 46 is a 71 m2 outline with nothing
+# in the 2020 lidar. Off: 83 of Freeport's 320 no-roof footprints are
+# E911-numbered houses (low or flat roofs, thin coverage); right building
+# TIGER 53.3% -> 52.8%, E911 roads 66.0% -> 65.0%; Webster Road unchanged.
+NO_ROOF = False
 
 # A number with at least this many E911 points is a big complex (141 Main
 # Street: 563 points, one building). It keeps the ranker's own pick and
@@ -617,6 +623,8 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     if accessory is not None and "parcel_size_ratio" in scored.columns:
         shed = (scored["parcel_buildings"].fillna(1) >= 2) & (scored["parcel_size_ratio"] < accessory) & ~home_pool
         scored = scored[~shed]
+    if NO_ROOF and "roof_m2" in scored.columns:
+        scored = scored[~((scored["roof_m2"] == 0) & ~home_pool.reindex(scored.index))]
     if SMALL_ROOF_M2 is not None and "roof_m2" in scored.columns:
         scored = scored[~((scored["roof_m2"] < SMALL_ROOF_M2).fillna(False) & ~home_pool.reindex(scored.index))]
     both_sides = scored  # townhouse streets match both parities together
@@ -878,7 +886,9 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
         lane &= lot.isna() | (df["source_id"] == lot.map(home))
     df["lane_end"] = lane
     if roof_of:
-        df["roof_m2"] = df["source_id"].map(lambda b: (roof_of.get(b) or (None,))[0] or np.nan).astype(float)
+        # measured with no roof -> 0; never measured -> NaN
+        df["roof_m2"] = df["source_id"].map(
+            lambda b: np.nan if b not in roof_of else float(roof_of[b][0] or 0)).astype(float)
     order_by = ["address_id", "place", "lane_end", "p"]
     if WITHIN_LOT is not None and roof_of:
         roof = df["source_id"].map(lambda b: (roof_of.get(b) or (None, None)))
