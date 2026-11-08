@@ -783,7 +783,19 @@ def load_properties(dsn, region, building_ids, gap_m=None) -> dict:
 LOT_MAX_BUILDINGS = 3
 
 
-def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve_p=None, **kwargs) -> dict:
+# Within a lot, which building takes the number after the lane's home:
+# None = the one the ranker liked best; "roof" = the biggest roof (outline,
+# or the lidar roof when bigger -- 42 Flying Point Road's house is a 78 m2
+# outline under trees but a 177 m2 roof); "lidar" = the lidar roof where
+# lidar sees one, else the outline; "height" = the tallest roof. Freeport
+# (TIGER / E911 roads, today 53.8 / 66.5%): lidar 53.3 / 66.5 (fixes 42,
+# ~75 lots swap each way), roof 53.1 / 66.2, height 52.4 / 64.5. Off until
+# the owner decides. Needs roof_of {source_id: (roof_m2, roof_h)}.
+WITHIN_LOT = None
+
+
+def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve_p=None, roof_of=None,
+              **kwargs) -> dict:
     """order_constrained_picks with each multi-building TAX LOT as one place
     along the road (owner's matrix rule: lots are numbered in order, not
     buildings). Lot 42 Brickyard Cove has two houses, one in front of 22's
@@ -812,6 +824,25 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
                 .drop_duplicates("_lot").set_index("_lot")["source_id"])
         lane &= lot.isna() | (df["source_id"] == lot.map(home))
     df["lane_end"] = lane
+    order_by = ["address_id", "place", "lane_end", "p"]
+    if WITHIN_LOT is not None and roof_of:
+        roof = df["source_id"].map(lambda b: (roof_of.get(b) or (None, None)))
+        if WITHIN_LOT == "lidar":
+            seen = roof.map(lambda r: r[0] if r[0] else np.nan).to_numpy(dtype=float)
+            df["_within"] = np.where(np.isnan(seen), df["sqmeters"].fillna(0).to_numpy(), seen)
+        elif WITHIN_LOT == "roof":
+            df["_within"] = np.fmax(df["sqmeters"].fillna(0).to_numpy(),
+                                    roof.map(lambda r: r[0] if r[0] is not None else np.nan).to_numpy(dtype=float))
+        else:
+            df["_within"] = roof.map(lambda r: r[1] if r[1] is not None else 0.0).astype(float)
+        order_by.insert(3, "_within")
+    # Only the named building changes; everything the lot is scored and
+    # placed by (side, distances...) stays as the ranker's order gives it.
+    within_best = None
+    if "_within" in df.columns:
+        within_best = (df.sort_values(order_by, ascending=[True, True, False, False, False], kind="stable")
+                       .drop_duplicates(["address_id", "place"])
+                       .set_index(["address_id", "place"])["source_id"])
     df = df.sort_values(["address_id", "place", "lane_end", "p"], ascending=[True, True, False, False], kind="stable")
     agg_spec = {"p_sum": ("p", "sum"), "best": ("source_id", "first"), "same_side": ("same_side", "first")}
     for col, how in (("dist_vs_nearest_road", "min"), ("d_m0", "min"), ("sqmeters", "max"),
@@ -846,6 +877,8 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
             drop &= ~(agg["drive_best"] == 1).to_numpy()
         agg = agg[~drop].drop(columns="_street")
     best_building = {(a, pl): b for a, pl, b in zip(agg["address_id"], agg["place"], agg["best"])}
+    if within_best is not None:
+        best_building.update({k: within_best[k] for k in best_building if k in within_best.index})
     scored_place = agg.rename(columns={"place": "source_id"}).assign(score=lambda d: np.log(d["p_sum"].clip(lower=1e-12)))
     lists = defaultdict(list)
     for (street, b), along in positions.items():

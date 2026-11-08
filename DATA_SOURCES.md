@@ -188,6 +188,28 @@ geocoding request. Current as of August 2026.
 - **Coverage / currency:** statewide; 2018 imagery, so newer houses and
   driveways are missing.
 
+### 8. USGS 3DEP lidar (experiment only)
+
+- **What it is:** the USGS 3D Elevation Program's airborne lidar point
+  clouds, read from USGS's own copies on AWS Open Data
+  (`s3://usgs-lidar-public/<project>/`, Entwine Point Tile format). Freeport
+  is in `ME_SouthCoastal_1_2020` (flown 2020-05-23, ~6 points/m², classified
+  only ground / not ground -- no building class).
+- **Why it matters:** footprint outlines are traced from aerial photos and
+  stop where trees hide the roof; the laser gets through trees to the ground
+  in places but never through a roof, so `address_inference/lidar.py` finds
+  each building's whole roof (area and height). The experiment then sizes a
+  building by the bigger of outline and lidar roof (42 Flying Point Road:
+  78 m² outline, 181 m² roof, 6 m tall). Files are cached once under
+  `data/lidar/`. **Not used by geocoding today.**
+- **License:** public domain (USGS-produced data). Chosen over NOAA C-CAP's
+  2021 1 m Maine land cover, whose license forbids using it to train,
+  validate, test or evaluate machine-learning algorithms for five years
+  from creation (~2030).
+- **Coverage / currency:** statewide 3DEP QL2 coverage in several projects
+  flown 2020-2022; `lidar.PROJECTS` lists the ones read so far. USGS's
+  rockyweb LAZ download sits behind a bot check -- use the AWS copy.
+
 ## How the data gets in (and stays current)
 
 | Script | What it does |

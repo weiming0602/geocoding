@@ -544,3 +544,22 @@ def test_a_tree_covered_building_is_never_a_shed():
     rows[0] = ("a42", "thin", 2.0, True, 2, 0.15, 0.0, 0.0)  # clear roof: a shed
     picks = order.order_constrained_picks(address_df, pd.DataFrame(rows, columns=cols), positions, {})
     assert picks["a42"] == "big"
+
+
+def test_the_lidar_roof_picks_a_lots_house_when_its_outline_was_cut_short_by_trees(monkeypatch):
+    from address_inference import order
+    # 42's lot: the ranker prefers the 186 m2 outline at the back; the
+    # house's outline is a 78 m2 strip under trees, but lidar sees a 177 m2
+    # roof there and only 135 m2 at the back.
+    address_df = pd.DataFrame([{"id": "a42", "number": 42, "street": "FP", "scorable": True}])
+    positions = {("FP", "house"): 10.0, ("FP", "back"): 12.0}
+    cols = ["address_id", "source_id", "score", "same_side", "sqmeters"]
+    rows = pd.DataFrame([("a42", "house", 1.0, True, 78.0), ("a42", "back", 2.0, True, 186.0)], columns=cols)
+    parcel_of = {"house": "L42", "back": "L42"}
+    roof_of = {"house": (177.0, 6.0), "back": (135.0, 4.0)}
+    monkeypatch.setattr(order, "WITHIN_LOT", None)
+    assert order.lot_picks(address_df, rows, positions, {}, parcel_of, roof_of=roof_of) == {"a42": "back"}
+    monkeypatch.setattr(order, "WITHIN_LOT", "lidar")
+    assert order.lot_picks(address_df, rows, positions, {}, parcel_of, roof_of=roof_of) == {"a42": "house"}
+    # no lidar roof seen: the outline decides
+    assert order.lot_picks(address_df, rows, positions, {}, parcel_of, roof_of={}) == {"a42": "back"}

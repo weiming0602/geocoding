@@ -95,7 +95,18 @@ read-write).
   address_inference.canopy me --town Freeport "dbname=geocoding" [more
   DSNs]` (~1 min) measures trees over each building's outline from the same
   imagery; road order never calls a building 20%+ under trees a shed (as
-  model inputs these measures cost points, so they aren't).
+  model inputs these measures cost points, so they aren't). `python -m
+  address_inference.lidar me --town Freeport "dbname=geocoding" [more
+  DSNs]` finds each building's whole roof (area, height) in USGS 3DEP lidar
+  read from AWS Open Data (public domain, DATA_SOURCES.md §8; cached in
+  `data/lidar/`, finished tiles in `data/lidar/tiles/` -- delete that folder
+  after changing the measurement; ~1 h for Freeport, wrap long runs in
+  `systemd-inhibit --what=sleep:idle` or the laptop suspends mid-run).
+  Both uses are off by default: `dataset.LIDAR_SIZE` (size everywhere)
+  loses 1.5-1.8 points; `order.WITHIN_LOT = "lidar"` (a lot's number goes
+  to its biggest lidar roof) fixes 42 Flying Point Road, TIGER -0.5, E911
+  roads even. Driveways continue a straight visible piece under trees
+  (`driveways.HIDDEN_REACH_M`, owner's rule; Freeport neutral).
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

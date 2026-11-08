@@ -75,12 +75,13 @@ ORDER BY sms.label_street, st.tlid
 # nearest road (any street) for the "is this street even its nearest?" features.
 CANDIDATES_SQL = """
 SELECT sms.label_street, bs.source_id, bs.tlid, bs.side, bs.t, bs.at_end, bs.dist_m,
-       s.sqmeters, s.occ_cls, s.prim_occ, s.outbldg, ST_Y(s.inner_point), ST_X(s.inner_point),
+       {size} AS sqmeters, s.occ_cls, s.prim_occ, s.outbldg, ST_Y(s.inner_point), ST_X(s.inner_point),
        nearest.tlid AS nearest_tlid, nearest.dist_m AS nearest_dist_m
 FROM address_inference.street_match_segments sms
 JOIN address_inference.building_segments bs ON bs.tlid = sms.tlid AND bs.state_fips = %(state_fips)s
 JOIN address_inference.structures s
   ON s.state_fips = bs.state_fips AND s.source = bs.source AND s.source_id = bs.source_id
+{lidar_join}
 -- The building's nearest road among those its tax lot touches (owner's
 -- rule): a road only serves the lots along it, so a closer road the lot
 -- doesn't touch doesn't pull the building off the road its lot runs out to
@@ -187,11 +188,12 @@ def covering_range(number: int, segments):
 PARCELS_SQL = """
 SELECT bp.source_id, bp.parcel_id, ST_Area(p.geom::geography),
        count(*) OVER (PARTITION BY bp.parcel_id),
-       s.sqmeters = max(s.sqmeters) OVER (PARTITION BY bp.parcel_id),
-       s.sqmeters / nullif(max(s.sqmeters) OVER (PARTITION BY bp.parcel_id), 0)
+       {size} = max({size}) OVER (PARTITION BY bp.parcel_id),
+       {size} / nullif(max({size}) OVER (PARTITION BY bp.parcel_id), 0)
 FROM address_inference.building_parcels bp
 JOIN address_inference.parcels p ON p.parcel_id = bp.parcel_id AND p.state_fips = bp.state_fips
 JOIN address_inference.structures s ON s.state_fips = bp.state_fips AND s.source_id = bp.source_id
+{lidar_join}
 WHERE bp.state_fips = %(state_fips)s AND p.town = %(town)s
 ORDER BY bp.source_id
 """
@@ -237,6 +239,26 @@ def load_canopy(conn) -> dict:
     return {sid: (over, ring, width) for sid, over, ring, width in conn.execute(CANOPY_SQL).fetchall()}
 
 
+# A building's size: its footprint outline, or the roof the lidar sees
+# (lidar.py) when that is bigger -- an outline traced from aerial photos
+# stops where trees hide the roof (42 Flying Point Road: 78 m2 outline,
+# 181 m2 roof). Used everywhere size counts: the ranker's inputs, a lot's
+# biggest building, sheds. Off: Freeport TIGER 53.8 -> 52.3%, E911 roads
+# 66.5 -> 64.7% -- a new size reshuffles the whole ranker.
+LIDAR_SIZE = False
+
+
+def sized(sql: str, conn) -> str:
+    """`sql` with {size} / {lidar_join} filled in for this database."""
+    use = LIDAR_SIZE and not conn.execute(
+        "SELECT to_regclass('address_inference.building_lidar') IS NULL").fetchone()[0]
+    if not use:
+        return sql.format(size="s.sqmeters", lidar_join="")
+    return sql.format(size="greatest(s.sqmeters, bl.roof_m2)",
+                      lidar_join="LEFT JOIN address_inference.building_lidar bl\n"
+                                 "  ON bl.state_fips = s.state_fips AND bl.source_id = s.source_id")
+
+
 def load_pools(conn) -> dict:
     if conn.execute("SELECT to_regclass('address_inference.building_pool') IS NULL").fetchone()[0]:
         return {}
@@ -272,7 +294,7 @@ def load_parcels(conn, params) -> dict | None:
         return None
     buildings = {sid: {"parcel": pid, "area": area, "buildings": n, "largest": bool(largest),
                        "size_ratio": ratio}
-                 for sid, pid, area, n, largest, ratio in conn.execute(PARCELS_SQL, params).fetchall()}
+                 for sid, pid, area, n, largest, ratio in conn.execute(sized(PARCELS_SQL, conn), params).fetchall()}
     frontage = defaultdict(dict)
     for pid, tlid, m in conn.execute(FRONTAGE_SQL, params).fetchall():
         frontage[pid][tlid] = m
@@ -286,7 +308,7 @@ def load(dsn, region, town: str):
     with psycopg.connect(dsn) as conn:
         addresses = conn.execute(ADDRESSES_SQL, params).fetchall()
         segments = conn.execute(SEGMENTS_SQL, params).fetchall()
-        candidates = conn.execute(CANDIDATES_SQL, params).fetchall()
+        candidates = conn.execute(sized(CANDIDATES_SQL, conn), params).fetchall()
         parcels = load_parcels(conn, params)
         if parcels is not None:
             parcels["pools"] = load_pools(conn)
