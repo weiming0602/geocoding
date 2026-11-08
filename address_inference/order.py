@@ -360,6 +360,20 @@ PROPERTY_SLOT_BONUS = 0.1  # stronger hurts: widest gaps often aren't lot lines
 EXTRA_SMALL_PENALTY = 0.3
 EXTRA_SIZE_FACTOR = 2.0
 RURAL_MIN_LOT_M2 = 4000
+# Which size says "smallest": "outline" (footprint, cut short by trees) or
+# "lidar" (lidar.py's whole roof where measured, else the outline);
+# RURAL_MIN_LOT_M2 = None applies the rule on every street. Owner's idea
+# (more buildings than numbers: keep the better-sized, leave the smallest),
+# Freeport right building TIGER / E911 roads, ML + road order:
+#   today (outline, rural, <= half median, 0.3)     53.3 / 66.0
+#   lidar size, same conditions                     53.1 / 65.7
+#   lidar, every street                             53.0 / 65.7
+#   lidar, every street, any surplus, 0.3           52.1 / 65.3
+#   lidar, every street, any surplus, left out      49.4 / 63.7
+#   lidar, rural, any surplus, left out             50.4 / 64.1
+# The smallest surplus buildings are often the real houses (camps,
+# cottages); Webster Road 50-58 stayed shifted in every variant.
+EXTRA_SIZE = "outline"
 
 
 # A building holds at most this many numbers of one parity (owner's rule:
@@ -668,6 +682,9 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     if TREE_COVERED is not None and "canopy_over" in scored_df.columns:
         pool_homes |= set(scored_df.loc[scored_df["canopy_over"] >= TREE_COVERED, "source_id"])
     size_of = dict(zip(scored_df["source_id"], scored_df["sqmeters"].fillna(0))) if "sqmeters" in scored_df.columns else {}
+    if EXTRA_SIZE == "lidar" and "roof_m2" in scored_df.columns:
+        roof = dict(zip(scored_df["source_id"], scored_df["roof_m2"]))
+        size_of = {b: (roof[b] if roof.get(b) == roof.get(b) and roof.get(b) else v) for b, v in size_of.items()}
     lot_of = (dict(zip(scored_df["source_id"], scored_df["parcel_area_m2"]))
               if "parcel_area_m2" in scored_df.columns else {})
     lot_of = {b: v for b, v in lot_of.items() if v == v}  # drop NaN (no parcel)
@@ -758,7 +775,7 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
                 P = P + TOWNHOUSE_SLOT_BONUS * (np.arange(len(order))[None, :] == slot[:, None])
             if extra_penalty and not townhouses and k < len(home_buildings):
                 lots = [lot_of.get(b) for b in home_buildings if lot_of.get(b) is not None]
-                if lots and np.median(lots) >= RURAL_MIN_LOT_M2:
+                if RURAL_MIN_LOT_M2 is None or (lots and np.median(lots) >= RURAL_MIN_LOT_M2):
                     median_size = np.median([size_of.get(b, 0) for b in home_buildings])
                     smallest = sorted(home_buildings, key=lambda b: (size_of.get(b, 0), b))[: len(home_buildings) - k]
                     extras = {b for b in smallest if size_of.get(b, 0) * EXTRA_SIZE_FACTOR <= median_size
