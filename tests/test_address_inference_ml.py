@@ -570,6 +570,10 @@ def test_the_assessor_lot_address_picks_the_lots_biggest_building():
     from address_inference import order
     assert order.parse_prop_loc("21 CARRIAGE ROAD") == (21, "CARRIAGE RD")
     assert order.parse_prop_loc("0 CARRIAGE ROAD") is None
+    # tax-roll spellings
+    assert order.parse_prop_loc("47 LWR MAST LANDING ROAD") == (47, "LOWER MAST LNDG RD")
+    assert order.parse_prop_loc("10 MAIN STREET SF") == (10, "MAIN ST S")
+    assert order.parse_prop_loc("5 DESERT RD #UNIT 2") == (5, "DESERT RD")
     address_df = pd.DataFrame([{"id": "a21", "number": 21, "street": "CARRIAGE ROAD"},
                                {"id": "a17", "number": 17, "street": "CARRIAGE ROAD"}])
     lots = {(21, "CARRIAGE RD"): ["lot24"]}

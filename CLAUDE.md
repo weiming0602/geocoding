@@ -121,8 +121,9 @@ read-write).
   address (`parcels.prop_loc`, never a model input) is scored as its own
   mode, saved as method `assessor` (`assessor_e911roads` when copied from
   the E911-roads DB): the biggest building on the lot with the same number
-  and street, else ML + road order -- Freeport TIGER 53.3% -> 79.6%, E911
-  roads 66.4% -> 82.7% right building.
+  and street, else ML + road order -- Freeport TIGER 53.3% -> 80.3%, E911
+  roads 66.4% -> 83.9% right building. Tax-roll spellings are normalized in
+  `order.parse_prop_loc` (LWR -> LOWER, trailing SF -> SOUTH, units dropped).
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

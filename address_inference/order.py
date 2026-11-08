@@ -929,6 +929,13 @@ ORDER BY parcel_id
 """
 
 
+# Tax-roll spellings E911 never uses (Freeport: 169 of 3,621 numbered lots
+# matched no E911 street before these): "LWR MAST LNDG RD" is E911's "LOWER
+# MAST LANDING ROAD"; "MAIN ST SF" (South Freeport) is "MAIN STREET SOUTH".
+TAX_ROLL_WORDS = {"LWR": "LOWER", "UPR": "UPPER"}
+TAX_ROLL_LAST_WORDS = {"SF": "SOUTH"}
+
+
 def parse_prop_loc(prop_loc):
     """("21 CARRIAGE ROAD") -> (21, "CARRIAGE RD"); None without a house number."""
     import re
@@ -936,7 +943,11 @@ def parse_prop_loc(prop_loc):
     m = re.match(r"\s*(\d+)[A-Z]?(?:\s*-\s*\d+[A-Z]?)?\s+(.+)", prop_loc or "")
     if not m or int(m.group(1)) == 0:
         return None
-    return int(m.group(1)), canonical(m.group(2))
+    street = re.sub(r"\s+(?:#\s*)?(?:UNIT|APT|STE|SUITE)\b.*$|\s+#.*$", "", m.group(2).upper())
+    words = [TAX_ROLL_WORDS.get(w, w) for w in street.split()]
+    if len(words) > 1:
+        words[-1] = TAX_ROLL_LAST_WORDS.get(words[-1], words[-1])
+    return int(m.group(1)), canonical(" ".join(words))
 
 
 def load_lot_addresses(dsn, region, town) -> dict:
