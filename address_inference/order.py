@@ -1108,7 +1108,7 @@ def load_lot_addresses(dsn, region, town) -> dict:
 
 
 def assessor_picks(address_df, lot_addresses, parcel_of, size_of, fallback, roof_of=None, positions=None,
-                   scored_df=None):
+                   scored_df=None, lane_neighbors=None):
     """(picks, matched): each address whose number and street the assessor
     gives a tax lot takes that lot's biggest building (lidar roof where seen,
     else its outline); every other address keeps `fallback`'s pick. Only
@@ -1132,7 +1132,10 @@ def assessor_picks(address_df, lot_addresses, parcel_of, size_of, fallback, roof
             ranked = scored_df.assign(p=probabilities(scored_df)).sort_values(
                 ["address_id", "p", "source_id"], ascending=[True, False, True])
             ranker = ranked.drop_duplicates("address_id").set_index("address_id")["source_id"].to_dict()
-        for aid in shifted_runs(picks, matched, address_df, fallback, SHIFT_RUN_MIN, ranker):
+        if SHIFT_NEAR_LANE and lane_neighbors is None:
+            lane_neighbors = {}
+        for aid in shifted_runs(picks, matched, address_df, fallback, SHIFT_RUN_MIN, ranker, parcel_of,
+                                lane_neighbors if SHIFT_NEAR_LANE else None):
             picks[aid] = fallback.get(aid)
             matched.discard(aid)
     if ANCHORED and positions and scored_df is not None:
@@ -1158,9 +1161,49 @@ SHIFT_RUN_MIN = None
 # so a step counts only when the ranker alone (no order) picks road
 # order's building too.
 SHIFT_NEEDS_RANKER = True
+# The owner's trigger: only a run beside a lot the tax roll addresses on a
+# short lane (a street with at most LANE_MAX_LOTS tax lots in town, like
+# "2 DIAMOND DRIVE", the house E911 moved off Curtis Road) -- a new lane
+# address is what pushes the main street's tax-roll numbers a house off.
+# Still off: the strictest trigger (a 1-lot lane, 3 in a row) fixes Curtis
+# 18-28 but its other runs were mostly tax-roll-right (TIGER 44 vs road
+# order 5, E911 roads 63 vs 12): TIGER 80.5% -> 80.0%, E911 roads 83.9% ->
+# 83.1%. Looser triggers cost more (lanes <= 3 lots: 78.5% / 82.7%).
+SHIFT_NEAR_LANE = True
+LANE_MAX_LOTS = 1
+LANE_NEAR_M = 10
+LANE_NEIGHBORS_SQL = """
+SELECT DISTINCT n.parcel_id, l.parcel_id
+FROM address_inference.parcels l
+JOIN address_inference.parcels n
+  ON n.state_fips = l.state_fips AND n.parcel_id <> l.parcel_id
+ AND ST_DWithin(n.geom::geography, l.geom::geography, %(near_m)s)
+ AND n.geom && ST_Expand(l.geom, 0.001)
+WHERE l.state_fips = %(state_fips)s AND l.parcel_id = ANY(%(lanes)s)
+"""
 
 
-def shifted_runs(picks, matched, address_df, fallback, run_min, ranker=None):
+def load_lane_neighbors(dsn, region, lot_addresses, max_lots=None, near_m=None):
+    """{parcel_id: {lane street, ...}}: lots within near_m of a lot the tax
+    roll addresses on a short lane (<= max_lots tax lots on that street)."""
+    max_lots = LANE_MAX_LOTS if max_lots is None else max_lots
+    near_m = LANE_NEAR_M if near_m is None else near_m
+    lots_on = defaultdict(set)
+    for (_, street), lots in lot_addresses.items():
+        lots_on[street].update(lots)
+    lane_of = {lot: street for street, lots in lots_on.items() if len(lots) <= max_lots for lot in lots}
+    if not lane_of:
+        return {}
+    out = defaultdict(set)
+    with psycopg.connect(dsn) as conn:
+        for near, lane in conn.execute(LANE_NEIGHBORS_SQL, {
+                "state_fips": region.state_fips, "lanes": list(lane_of), "near_m": near_m}).fetchall():
+            out[near].add(lane_of[lane])
+    return dict(out)
+
+
+def shifted_runs(picks, matched, address_df, fallback, run_min, ranker=None, parcel_of=None,
+                 lane_neighbors=None):
     """Addresses (ids) in runs of consecutive matched numbers on one street
     and parity where the tax lot's pick differs from road order's and, for
     at least `run_min` of them, is a building road order gives another
@@ -1169,12 +1212,14 @@ def shifted_runs(picks, matched, address_df, fallback, run_min, ranker=None):
     for aid, b in fallback.items():
         if b is not None:
             taken[b].add(aid)
+    from .street_names import canonical
     sides = defaultdict(lambda: defaultdict(list))
     for a in address_df.itertuples():
         if a.id in matched:
             sides[(a.street, int(a.number) % 2)][int(a.number)].append(a.id)
     out = set()
-    for numbers in sides.values():
+    for (street, _), numbers in sides.items():
+        street = canonical(street)
         run, shifted = [], 0
         for n in sorted(numbers) + [None]:
             aid = numbers[n][0] if n is not None else None
@@ -1184,7 +1229,9 @@ def shifted_runs(picks, matched, address_df, fallback, run_min, ranker=None):
                 shifted += bool(taken.get(b, set()) - {aid}) and (
                     ranker is None or ranker.get(aid) == fallback.get(aid))
                 continue
-            if shifted >= run_min:
+            if shifted >= run_min and (lane_neighbors is None or any(
+                    lane_neighbors.get((parcel_of or {}).get(picks.get(numbers[m][0])), set())
+                    - {street} for m in run)):
                 out.update(x for m in run for x in numbers[m])
             run, shifted = [], 0
     return out
