@@ -1135,7 +1135,7 @@ def assessor_picks(address_df, lot_addresses, parcel_of, size_of, fallback, roof
         if SHIFT_NEAR_LANE and lane_neighbors is None:
             lane_neighbors = {}
         for aid in shifted_runs(picks, matched, address_df, fallback, SHIFT_RUN_MIN, ranker, parcel_of,
-                                lane_neighbors if SHIFT_NEAR_LANE else None):
+                                lane_neighbors if SHIFT_NEAR_LANE else None, SHIFT_CONTEXT_SHARE):
             picks[aid] = fallback.get(aid)
             matched.discard(aid)
     if ANCHORED and positions and scored_df is not None:
@@ -1202,8 +1202,18 @@ def load_lane_neighbors(dsn, region, lot_addresses, max_lots=None, near_m=None):
     return dict(out)
 
 
+# The owner's second trigger: a disagreeing run counts only where road order
+# agrees with the tax roll on most of the rest of that street side (it
+# counted the houses right there, so the tax roll is what's off). None = off:
+# best is 90% agreement + 3 in a row, E911 roads 83.9% -> 83.6% (tax roll
+# right 26 vs road order 10 in the runs it unpinned), TIGER 80.5% -> 79.6%
+# (636 vs 1, and Curtis no longer caught); lower shares cost more.
+SHIFT_CONTEXT_SHARE = None
+SHIFT_CONTEXT_MIN = 3
+
+
 def shifted_runs(picks, matched, address_df, fallback, run_min, ranker=None, parcel_of=None,
-                 lane_neighbors=None):
+                 lane_neighbors=None, context_share=None, context_min=None):
     """Addresses (ids) in runs of consecutive matched numbers on one street
     and parity where the tax lot's pick differs from road order's and, for
     at least `run_min` of them, is a building road order gives another
@@ -1218,8 +1228,16 @@ def shifted_runs(picks, matched, address_df, fallback, run_min, ranker=None, par
         if a.id in matched:
             sides[(a.street, int(a.number) % 2)][int(a.number)].append(a.id)
     out = set()
+    context_min = SHIFT_CONTEXT_MIN if context_min is None else context_min
     for (street, _), numbers in sides.items():
         street = canonical(street)
+        agree = {n: picks.get(numbers[n][0]) == fallback.get(numbers[n][0]) for n in numbers}
+
+        def context_ok(run):
+            if context_share is None:
+                return True
+            rest = [agree[n] for n in numbers if n not in run]
+            return len(rest) >= context_min and sum(rest) / len(rest) >= context_share
         run, shifted = [], 0
         for n in sorted(numbers) + [None]:
             aid = numbers[n][0] if n is not None else None
@@ -1229,7 +1247,7 @@ def shifted_runs(picks, matched, address_df, fallback, run_min, ranker=None, par
                 shifted += bool(taken.get(b, set()) - {aid}) and (
                     ranker is None or ranker.get(aid) == fallback.get(aid))
                 continue
-            if shifted >= run_min and (lane_neighbors is None or any(
+            if shifted >= run_min and context_ok(set(run)) and (lane_neighbors is None or any(
                     lane_neighbors.get((parcel_of or {}).get(picks.get(numbers[m][0])), set())
                     - {street} for m in run)):
                 out.update(x for m in run for x in numbers[m])
