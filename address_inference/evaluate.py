@@ -251,9 +251,12 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
         # The assessor's own address for each lot, scored on its own (never a
         # model input): the lot's biggest building, else ML + road order.
         size_of = candidate_df.drop_duplicates("source_id").set_index("source_id")["sqmeters"].to_dict()
+        lot_addresses = order.load_lot_addresses(dsn, region, town)
+        lane_neighbors = (order.load_lane_neighbors(dsn, region, lot_addresses)
+                          if order.SHIFT_RUN_MIN and order.SHIFT_NEAR_LANE else None)
         picks["assessor"], assessor_matched = order.assessor_picks(
-            address_df, order.load_lot_addresses(dsn, region, town), parcel_of, size_of, picks["ML+order"],
-            roof_of=order.load_roofs(dsn), positions=positions, scored_df=scored)
+            address_df, lot_addresses, parcel_of, size_of, picks["ML+order"],
+            roof_of=order.load_roofs(dsn), positions=positions, scored_df=scored, lane_neighbors=lane_neighbors)
 
     property_of = order.load_properties(
         dsn, region, set(candidate_df["source_id"]) | set(address_df["true_building"].dropna()))
