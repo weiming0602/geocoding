@@ -623,3 +623,16 @@ def test_a_number_the_tax_roll_lacks_stays_between_its_pinned_neighbors():
     sizes = {"h51": 105, "shed": 44, "h57": 202, "h59": 81}
     out = order.spread_within_lots(out, address_df, parcel_of, sizes, positions)
     assert out == {"a51": "h51", "a57": "h57", "a59": "h59"}
+
+
+def test_a_tax_roll_one_house_off_is_found_as_a_shifted_run():
+    import pandas as pd
+    from address_inference import order
+    # Curtis Road: the tax lots of 18..26 each hold the house road order gives the number before
+    a = pd.DataFrame({"id": ["a16", "a18", "a20", "a22", "a26"], "number": [16, 18, 20, 22, 26],
+                      "street": ["CURTIS ROAD"] * 5})
+    road = {"a16": "h16", "a18": "h18", "a20": "h20", "a22": "h22", "a26": "h26"}
+    lot = {"a16": "h16", "a18": "hD", "a20": "h18", "a22": "h20", "a26": "h22"}
+    matched = set(a["id"])
+    assert order.shifted_runs(lot, matched, a, road, 3) == {"a18", "a20", "a22", "a26"}
+    assert order.shifted_runs(lot, matched, a, road, 4) == set()

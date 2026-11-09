@@ -1126,12 +1126,68 @@ def assessor_picks(address_df, lot_addresses, parcel_of, size_of, fallback, roof
         if buildings:
             picks[a.id] = max(buildings, key=lambda b: (roof_of[b][0] if b in roof_of and roof_of[b][0] else size_of[b] or 0))
             matched.add(a.id)
+    if SHIFT_RUN_MIN:
+        ranker = None
+        if SHIFT_NEEDS_RANKER and scored_df is not None:
+            ranked = scored_df.assign(p=probabilities(scored_df)).sort_values(
+                ["address_id", "p", "source_id"], ascending=[True, False, True])
+            ranker = ranked.drop_duplicates("address_id").set_index("address_id")["source_id"].to_dict()
+        for aid in shifted_runs(picks, matched, address_df, fallback, SHIFT_RUN_MIN, ranker):
+            picks[aid] = fallback.get(aid)
+            matched.discard(aid)
     if ANCHORED and positions and scored_df is not None:
         picks = anchored_fill(picks, matched, address_df, scored_df, positions, parcel_of)
     if SPREAD_WITHIN_LOT and positions:
         within = {b: (roof_of[b][0] if b in roof_of and roof_of[b][0] else size_of[b] or 0) for b in size_of}
         picks = spread_within_lots(picks, address_df, parcel_of, within, positions)
     return picks, matched
+
+
+# A tax roll out of step with the houses (Curtis Road: the house E911 moved
+# to 2 Diamond Drive kept "18 Curtis Road" on the tax roll, so lots 18-28
+# each carry the number of the house before) shows as a run of numbers on
+# one street side whose tax lot holds the house road order gives a
+# *different* address. Such a run is not pinned; road order keeps it.
+# Off: it fixes Curtis 18-28 but costs points -- TIGER 80.5% -> 77.9%, E911
+# roads 83.9% -> 82.6% at 4 in a row (worse for shorter runs). Of the runs
+# it unpinned, the tax roll was right 714 vs road order 10 (TIGER), 71 vs 12
+# (E911 roads): road order's own chain shifts look the same from the
+# sequence, so it can't tell which source moved.
+SHIFT_RUN_MIN = None
+# Road order makes one-step chain shifts of its own, which look the same;
+# so a step counts only when the ranker alone (no order) picks road
+# order's building too.
+SHIFT_NEEDS_RANKER = True
+
+
+def shifted_runs(picks, matched, address_df, fallback, run_min, ranker=None):
+    """Addresses (ids) in runs of consecutive matched numbers on one street
+    and parity where the tax lot's pick differs from road order's and, for
+    at least `run_min` of them, is a building road order gives another
+    address -- the same houses, numbered one step off."""
+    taken = defaultdict(set)
+    for aid, b in fallback.items():
+        if b is not None:
+            taken[b].add(aid)
+    sides = defaultdict(lambda: defaultdict(list))
+    for a in address_df.itertuples():
+        if a.id in matched:
+            sides[(a.street, int(a.number) % 2)][int(a.number)].append(a.id)
+    out = set()
+    for numbers in sides.values():
+        run, shifted = [], 0
+        for n in sorted(numbers) + [None]:
+            aid = numbers[n][0] if n is not None else None
+            b = picks.get(aid) if aid else None
+            if aid is not None and b != fallback.get(aid):
+                run.append(n)
+                shifted += bool(taken.get(b, set()) - {aid}) and (
+                    ranker is None or ranker.get(aid) == fallback.get(aid))
+                continue
+            if shifted >= run_min:
+                out.update(x for m in run for x in numbers[m])
+            run, shifted = [], 0
+    return out
 
 
 # Numbers the tax roll pins to a lot are fixed points along the street: a
