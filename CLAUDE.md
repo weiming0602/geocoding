@@ -131,7 +131,10 @@ read-write).
   doesn't list stays between the pinned lots around it (`order.ANCHORED`;
   fixed 51/57/59 Lower Mast Landing on E911 roads; TIGER 80.5%, E911 roads
   83.9%). Charging road order for unplaced numbers (`order.SKIP_SCORE`)
-  instead cost 3-5 points, so it's off.
+  instead cost 3-5 points, so it's off. Road order skips buildings on a lot the tax roll
+  addresses on another street (`order.OTHER_STREET_LOTS`, owner's rule; only
+  the tax roll's street names, never its numbers): ML + road order TIGER
+  53.3% -> 55.8%, E911 roads 66.0% -> 67.8%.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

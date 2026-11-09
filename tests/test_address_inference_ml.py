@@ -636,3 +636,9 @@ def test_a_tax_roll_one_house_off_is_found_as_a_shifted_run():
     matched = set(a["id"])
     assert order.shifted_runs(lot, matched, a, road, 3) == {"a18", "a20", "a22", "a26"}
     assert order.shifted_runs(lot, matched, a, road, 4) == set()
+
+
+def test_a_lot_the_tax_roll_puts_on_another_street_is_no_place_in_this_streets_order():
+    from address_inference import order
+    lots = {(18, "CURTIS RD"): ["C"], (2, "DIAMOND DR"): ["D"], (16, "CURTIS RD"): ["B"]}
+    assert order.lot_streets(lots) == {"C": {"CURTIS RD"}, "D": {"DIAMOND DR"}, "B": {"CURTIS RD"}}

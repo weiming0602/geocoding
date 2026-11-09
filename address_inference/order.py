@@ -902,8 +902,28 @@ def load_roofs(dsn) -> dict:
                 conn.execute("SELECT source_id, roof_m2, roof_h FROM address_inference.building_lidar")}
 
 
+# Owner's rule: a lot the tax roll addresses on another street belongs to
+# that street (lot 17/13/2/0, "2 DIAMOND DRIVE", beside Curtis Road), so its
+# buildings are no place in this street's order. Uses only the tax roll's
+# street names, never its numbers. Freeport ML + road order: TIGER 53.3% ->
+# 55.8% right building (right lot 61.8% -> 64.6%), E911 roads 66.0% ->
+# 67.8% (75.3% -> 77.3%); fixes Webster 50 (TIGER) and Curtis 16 (E911
+# roads). 57/59 Lower Mast Landing (TIGER) break: a Mollymauk Lane house had
+# been soaking up a number and hiding a miscount at 41/43.
+OTHER_STREET_LOTS = True
+
+
+def lot_streets(lot_addresses) -> dict:
+    """{parcel_id: {canonical street, ...}} from load_lot_addresses."""
+    out = defaultdict(set)
+    for (_, street), lots in lot_addresses.items():
+        for lot in lots:
+            out[lot].add(street)
+    return dict(out)
+
+
 def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve_p=None, roof_of=None,
-              **kwargs) -> dict:
+              streets_of_lot=None, **kwargs) -> dict:
     """order_constrained_picks with each multi-building TAX LOT as one place
     along the road (owner's matrix rule: lots are numbered in order, not
     buildings). Lot 42 Brickyard Cove has two houses, one in front of 22's
@@ -913,6 +933,13 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
     theirs; the building finally picked is the one the ranker liked best.
     parcel_of: {source_id: parcel id}; buildings without one stay single."""
     df = scored_df.assign(p=probabilities(scored_df))
+    if OTHER_STREET_LOTS and streets_of_lot:
+        from .street_names import canonical
+        street_of = {a: canonical(st) for a, st in zip(address_df["id"], address_df["street"])}
+        lot_of = df["source_id"].map(parcel_of)
+        other = [bool(streets_of_lot.get(lot)) and street_of.get(a) not in streets_of_lot[lot]
+                 for a, lot in zip(df["address_id"], lot_of)]
+        df = df[~np.array(other, dtype=bool)]
     lot_size = defaultdict(int)
     for pid in parcel_of.values():
         lot_size[pid] += 1

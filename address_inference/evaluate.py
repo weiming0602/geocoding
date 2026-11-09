@@ -241,8 +241,11 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     if parcels:
         # Each ordinary multi-building tax lot is one place along the road.
         parcel_of = {sid: info["parcel"] for sid, info in parcels["buildings"].items()}
+        lot_addresses = order.load_lot_addresses(dsn, region, town)
+        # Only the tax roll's street names (order.OTHER_STREET_LOTS), never its numbers.
         picks["ML+order"] = order.lot_picks(address_df, scored, positions, picks["ML"], parcel_of,
-                                            street_order=street_order, roof_of=order.load_roofs(dsn))
+                                            street_order=street_order, roof_of=order.load_roofs(dsn),
+                                            streets_of_lot=order.lot_streets(lot_addresses))
     else:
         picks["ML+order"] = order.order_constrained_picks(address_df, scored, positions, picks["ML"],
                                                           street_order=street_order)
@@ -251,7 +254,6 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
         # The assessor's own address for each lot, scored on its own (never a
         # model input): the lot's biggest building, else ML + road order.
         size_of = candidate_df.drop_duplicates("source_id").set_index("source_id")["sqmeters"].to_dict()
-        lot_addresses = order.load_lot_addresses(dsn, region, town)
         lane_neighbors = (order.load_lane_neighbors(dsn, region, lot_addresses)
                           if order.SHIFT_RUN_MIN and order.SHIFT_NEAR_LANE else None)
         picks["assessor"], assessor_matched = order.assessor_picks(
