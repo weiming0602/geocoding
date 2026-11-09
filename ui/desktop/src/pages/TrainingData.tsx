@@ -462,7 +462,71 @@ export default function TrainingData() {
             )}
           </div>
 
-          <div ref={mapBoxRef} style={{ scrollMarginTop: 'var(--space-4)' }}>
+          <div ref={mapBoxRef} style={{ scrollMarginTop: 'var(--space-4)', position: 'relative' }}>
+            {/* Search over the map's top-left corner (zoom buttons are top-right):
+                no scrolling down to the table on a small screen. Same filter as the table. */}
+            <div
+              className="card elev-sm"
+              style={{
+                position: 'absolute',
+                top: 8,
+                left: 8,
+                zIndex: 2,
+                width: 'min(280px, calc(100% - 64px))',
+                padding: 6,
+                margin: 0,
+              }}
+            >
+              <input
+                className="input"
+                style={{ width: '100%' }}
+                placeholder="Find an address, e.g. 33 HARRASEEKET"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                aria-label="Find an address on the map"
+              />
+              {search.trim() !== '' && (
+                <div style={{ maxHeight: 220, overflowY: 'auto', marginTop: 4, fontSize: 13 }}>
+                  {listed.length === 0 && (
+                    <div className="text-muted" style={{ padding: '4px 6px' }}>
+                      No match among the results ticked above
+                    </div>
+                  )}
+                  {listed.slice(0, 8).map((a) => (
+                    <button
+                      key={a.id}
+                      type="button"
+                      onClick={() => {
+                        selectAddress(a);
+                        setFocusNonce((n) => n + 1);
+                      }}
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6,
+                        width: '100%',
+                        textAlign: 'left',
+                        padding: '4px 6px',
+                        border: 0,
+                        borderRadius: 4,
+                        cursor: 'pointer',
+                        color: 'inherit',
+                        font: 'inherit',
+                        background: selected?.id === a.id ? 'var(--color-accent-100)' : 'transparent',
+                      }}
+                    >
+                      <Swatch color={STATUS_COLORS[a.status]} />
+                      {addressLabel(a)}
+                    </button>
+                  ))}
+                  {listed.length > 8 && (
+                    <div className="text-muted" style={{ padding: '4px 6px' }}>
+                      {listed.length - 8} more in the table below
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
             <TrainingDataMap
               data={mapData ?? data}
               visible={visible}
