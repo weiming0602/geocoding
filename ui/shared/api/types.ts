@@ -601,6 +601,15 @@ export type AddressInferenceReviewResponse = {
   addresses: TrainingAddress[];
   // Absent from older servers.
   suggestions?: SuggestedNumber[];
+  // Tax lots (the tax roll's address per lot); absent from older servers.
+  parcels?: {
+    type: 'FeatureCollection';
+    features: {
+      type: 'Feature';
+      geometry: { type: 'MultiPolygon' | 'Polygon'; coordinates: unknown };
+      properties: { id: string; lot: string | null; address: string | null; updated: string | null };
+    }[];
+  };
   buildings: {
     type: 'FeatureCollection';
     features: {

@@ -112,6 +112,25 @@ async function getAddressInferenceReview(db, town, method) {
         )
       : { rows: [] };
 
+    // Tax lots around the same addresses (python -m address_inference.parcels):
+    // outlines with the tax roll's address, so a pick can be checked against
+    // the lot it sits on.
+    const { rows: [{ has_parcels }] } = await db.query(
+      "SELECT to_regclass('address_inference.parcels') IS NOT NULL AS has_parcels"
+    );
+    const { rows: parcels } = has_parcels
+      ? await db.query(
+          `WITH bbox AS (
+             SELECT ST_SetSRID(ST_Expand(ST_Extent(ST_MakePoint(e911_lon, e911_lat))::geometry, 0.002), 4326) AS g
+             FROM address_inference.ml_predictions WHERE region_id = $1 AND town = $2 AND method = $3
+           )
+           SELECT p.parcel_id, p.map_bk_lot, p.prop_loc, p.updated, ST_AsGeoJSON(p.geom, 6) AS geojson
+           FROM address_inference.parcels p, bbox
+           WHERE p.geom && bbox.g`,
+          [selected.region, selected.town, selectedMethod]
+        )
+      : { rows: [] };
+
     const summary = {};
     for (const r of rows) summary[r.status] = (summary[r.status] ?? 0) + 1;
 
@@ -152,6 +171,14 @@ async function getAddressInferenceReview(db, town, method) {
         latitude: r.lat,
         longitude: r.lon,
       })),
+      parcels: {
+        type: 'FeatureCollection',
+        features: parcels.map((p) => ({
+          type: 'Feature',
+          geometry: JSON.parse(p.geojson),
+          properties: { id: p.parcel_id, lot: p.map_bk_lot, address: p.prop_loc, updated: p.updated },
+        })),
+      },
       buildings: {
         type: 'FeatureCollection',
         features: buildings.map((b) => ({

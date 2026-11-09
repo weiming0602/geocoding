@@ -24,6 +24,8 @@ export const BUILDING_COLORS = {
   both: '#8e44ad', // the true building of one address and the wrong pick of another
   other: '#9aa0a6',
 };
+// Tax lot outlines: warm, thin, under the footprints.
+export const PARCEL_COLOR = '#d35400';
 // Suggested numbers (houses E911 never numbered), by kind: never an E911
 // color. 'none' = the neighbors leave no free number (drawn hollow/dashed).
 export type SuggestionKind = 'second' | 'lot' | 'none';
@@ -57,6 +59,7 @@ type Props = {
   suggestions: SuggestedNumber[];
   selectedSuggestion: SuggestedNumber | null;
   onSelectSuggestion: (suggestion: SuggestedNumber) => void;
+  showParcels: boolean;
 };
 
 type Buildings = AddressInferenceReviewResponse['buildings'];
@@ -118,6 +121,11 @@ function links(addresses: TrainingAddress[]): GeoJSON.FeatureCollection {
         properties: { status: a.status },
       })),
   };
+}
+
+export function describeParcel(p: { lot?: string | null; address?: string | null; updated?: string | null }): string {
+  const address = p.address ? p.address : 'no address on the tax roll';
+  return `Tax lot ${p.lot ?? '?'}: ${address}${p.updated ? ` (tax roll ${p.updated})` : ''}`;
 }
 
 export function describeSuggestion(s: SuggestedNumber): string {
@@ -185,10 +193,12 @@ export default function TrainingDataMap({
   suggestions,
   selectedSuggestion,
   onSelectSuggestion,
+  showParcels,
 }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
   const popupRef = useRef<Popup | null>(null);
+  const parcelPopupRef = useRef<Popup | null>(null);
   const [ready, setReady] = useState(false);
   const byIdRef = useRef(new Map<string, TrainingAddress>());
   const onSelectRef = useRef(onSelect);
@@ -209,7 +219,7 @@ export default function TrainingDataMap({
     mapRef.current = map;
 
     map.on('load', () => {
-      for (const id of ['buildings', 'links', 'points', 'selected-buildings', 'selected-m0', 'suggestions', 'suggestion-footprints', 'selected-suggestion']) {
+      for (const id of ['parcels', 'selected-parcel', 'buildings', 'links', 'points', 'selected-buildings', 'selected-m0', 'suggestions', 'suggestion-footprints', 'selected-suggestion']) {
         map.addSource(id, { type: 'geojson', data: emptyCollection() });
       }
       const roleColor = [
@@ -223,6 +233,30 @@ export default function TrainingDataMap({
         BUILDING_COLORS.both,
         BUILDING_COLORS.other,
       ] as unknown as string;
+      // Tax lots first, so every footprint and dot draws over them. The
+      // near-transparent fill is what a click inside a lot hits.
+      map.addLayer({
+        id: 'parcels-fill',
+        type: 'fill',
+        source: 'parcels',
+        paint: { 'fill-color': PARCEL_COLOR, 'fill-opacity': 0.02 },
+      });
+      map.addLayer({
+        id: 'parcels-outline',
+        type: 'line',
+        source: 'parcels',
+        paint: {
+          'line-color': PARCEL_COLOR,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 13, 0.5, 17, 1.5] as unknown as number,
+          'line-opacity': 0.8,
+        },
+      });
+      map.addLayer({
+        id: 'selected-parcel',
+        type: 'line',
+        source: 'selected-parcel',
+        paint: { 'line-color': PARCEL_COLOR, 'line-width': 3.5 },
+      });
       map.addLayer({
         id: 'buildings-fill',
         type: 'fill',
@@ -341,6 +375,27 @@ export default function TrainingDataMap({
         if (suggestion) onSelectSuggestionRef.current(suggestion);
       });
 
+      // A click inside a lot (not on a dot) names the lot and its tax-roll address.
+      map.on('click', (e) => {
+        if (map.queryRenderedFeatures(e.point, { layers: ['points', 'suggestions'] }).length > 0) return;
+        const lot = map.queryRenderedFeatures(e.point, { layers: ['parcels-fill'] })[0];
+        parcelPopupRef.current?.remove();
+        const highlight = map.getSource('selected-parcel') as GeoJSONSource;
+        if (!lot) {
+          highlight.setData(emptyCollection());
+          return;
+        }
+        highlight.setData({
+          type: 'FeatureCollection',
+          features: [{ type: 'Feature', geometry: lot.geometry, properties: {} }],
+        });
+        parcelPopupRef.current = new Popup({ closeButton: true, maxWidth: '280px' })
+          .setLngLat(e.lngLat)
+          .setText(describeParcel(lot.properties as { lot?: string; address?: string; updated?: string }))
+          .addTo(map);
+        parcelPopupRef.current.on('close', () => highlight.setData(emptyCollection()));
+      });
+
       map.on('mouseenter', 'points', () => (map.getCanvas().style.cursor = 'pointer'));
       map.on('mouseleave', 'points', () => (map.getCanvas().style.cursor = ''));
       map.on('click', 'points', (e) => {
@@ -366,6 +421,22 @@ export default function TrainingDataMap({
     for (const a of data.addresses) bounds.extend([a.e911.longitude, a.e911.latitude]);
     if (!bounds.isEmpty()) map.fitBounds(bounds, { padding: 30, animate: false });
   }, [data, ready]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    (map.getSource('parcels') as GeoJSONSource).setData(
+      (data.parcels as unknown as GeoJSON.FeatureCollection | undefined) ?? emptyCollection()
+    );
+  }, [data, ready]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !ready) return;
+    const visibility = showParcels ? 'visible' : 'none';
+    for (const id of ['parcels-fill', 'parcels-outline', 'selected-parcel']) map.setLayoutProperty(id, 'visibility', visibility);
+    if (!showParcels) parcelPopupRef.current?.remove();
+  }, [showParcels, ready]);
 
   useEffect(() => {
     const map = mapRef.current;

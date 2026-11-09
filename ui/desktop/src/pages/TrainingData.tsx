@@ -12,6 +12,7 @@ import AccountTabs, { ADMIN_PASSCODE_STORAGE_KEY } from '../components/AccountTa
 import PageHeader from '../components/PageHeader';
 import TrainingDataMap, {
   BUILDING_COLORS,
+  PARCEL_COLOR,
   STATUS_COLORS,
   SUGGESTION_COLORS,
   type SuggestionKind,
@@ -112,6 +113,7 @@ export default function TrainingData() {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<TrainingAddress | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(true);
+  const [showParcels, setShowParcels] = useState(true);
   const [shownKinds, setShownKinds] = useState<Set<SuggestionKind>>(() => new Set(['second', 'lot', 'none']));
   const [selectedSuggestion, setSelectedSuggestion] = useState<SuggestedNumber | null>(null);
   const [focusNonce, setFocusNonce] = useState(0);
@@ -451,6 +453,13 @@ export default function TrainingData() {
               <span>Colored footprint + dot: a house with no E911 point (click the dot; dashed = no free number)</span>
             )}
             <span>Dashed line: E911 point → picked building · white ring: today's interpolation</span>
+            {(data.parcels?.features.length ?? 0) > 0 && (
+              <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
+                <input type="checkbox" checked={showParcels} onChange={(e) => setShowParcels(e.target.checked)} />
+                <Swatch color={PARCEL_COLOR} square />
+                Tax lots ({data.parcels!.features.length.toLocaleString()}; click inside one for its tax-roll address)
+              </label>
+            )}
           </div>
 
           <div ref={mapBoxRef} style={{ scrollMarginTop: 'var(--space-4)' }}>
@@ -463,6 +472,7 @@ export default function TrainingData() {
               suggestions={showSuggestions ? suggestions : []}
               selectedSuggestion={selectedSuggestion}
               onSelectSuggestion={selectSuggestion}
+              showParcels={showParcels}
             />
           </div>
 

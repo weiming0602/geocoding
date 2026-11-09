@@ -83,8 +83,9 @@ test('GET /admin/address-inference/review returns each address with its true and
         // Only footprints near the town's addresses.
         assert.deepEqual(body.buildings.features.map((f) => f.properties), [{ id: 'b1', sqmeters: 140 }]);
         assert.equal(body.buildings.features[0].geometry.type, 'MultiPolygon');
-        // suggest.py never ran here
+        // suggest.py and parcels.py never ran here
         assert.deepEqual(body.suggestions, []);
+        assert.deepEqual(body.parcels.features, []);
       }),
     { seedStreets: false, geoOptions: { postgis: true }, geoSeed: seedPredictions }
   ));
@@ -172,6 +173,36 @@ test('GET /admin/address-inference/review compares the assessor mode against ML 
           INSERT INTO address_inference.ml_predictions VALUES
             ('me', 'Freeport', 'assessor', 'a1', 12, 'MAIN ST', 43.857, -70.103, 43.8571, -70.1031, 'b1', 'b1', 43.857, -70.103, 4.2, 'right', 30, '2026-11-08'),
             ('me', 'Freeport', 'assessor', 'a2', 14, 'MAIN ST', 43.858, -70.103, 43.8581, -70.1031, 'b2', 'b2', 43.858, -70.103, 3.0, 'right', 30, '2026-11-08')`);
+      },
+    }
+  ));
+
+test('GET /admin/address-inference/review includes the tax lots around the addresses', () =>
+  withTestServer(
+    async ({ port }) =>
+      withPasscode(async () => {
+        const response = await fetch(`http://127.0.0.1:${port}/admin/address-inference/review?passcode=correct-horse`);
+        const body = await response.json();
+        assert.deepEqual(body.parcels.features.map((f) => f.properties), [
+          { id: 'p1', lot: '17/13/2/0', address: '2 DIAMOND DRIVE', updated: '2022' },
+        ]);
+        assert.equal(body.parcels.features[0].geometry.type, 'MultiPolygon');
+      }),
+    {
+      seedStreets: false,
+      geoOptions: { postgis: true },
+      geoSeed: async (pool) => {
+        await seedPredictions(pool);
+        await pool.query(`
+          CREATE TABLE address_inference.parcels (
+            state_fips TEXT, source TEXT, parcel_id TEXT, town TEXT, map_bk_lot TEXT, prop_loc TEXT,
+            prop_num INTEGER, updated TEXT, geom geometry(MultiPolygon, 4326))`);
+        await pool.query(`
+          INSERT INTO address_inference.parcels VALUES
+            ('23', 'me', 'p1', 'Freeport', '17/13/2/0', '2 DIAMOND DRIVE', 0, '2022',
+             ST_GeomFromText('MULTIPOLYGON(((-70.1032 43.8568, -70.1028 43.8568, -70.1028 43.8572, -70.1032 43.8572, -70.1032 43.8568)))', 4326)),
+            ('23', 'me', 'far', 'Durham', '1/1', '1 FAR ROAD', 0, '2022',
+             ST_GeomFromText('MULTIPOLYGON(((-69.0 44.0, -68.99 44.0, -68.99 44.01, -69.0 44.0)))', 4326))`);
       },
     }
   ));
