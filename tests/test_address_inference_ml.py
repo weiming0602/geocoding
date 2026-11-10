@@ -140,6 +140,17 @@ def test_prediction_rows_record_the_pick_and_its_error():
     assert row[2:6] == ("ml", "e1", 51, "MAIN STREET")
     assert row[10:12] == ("h2", "h1") and row[15] == "wrong" and row[16] == 5
     assert row[14] == pytest.approx(240, abs=5)  # h1 sits ~0.003 deg west of the E911 point
+    assert row[18] is None  # tax_roll: only assessor methods carry it
+
+
+def test_prediction_rows_flag_the_numbers_the_tax_roll_pinned():
+    from datetime import date
+    address_df, cand = build_one(51, "h2")
+    (pinned,) = evaluate.prediction_rows("me", "Freeport", "assessor", address_df, cand, {"e1": "h2"},
+                                         date(2026, 11, 9), tax_roll={"e1"})
+    (fallback,) = evaluate.prediction_rows("me", "Freeport", "assessor", address_df, cand, {"e1": "h1"},
+                                           date(2026, 11, 9), tax_roll=set())
+    assert pinned[18] is True and fallback[18] is False
 
 
 # --- road order (order.py) ------------------------------------------------------

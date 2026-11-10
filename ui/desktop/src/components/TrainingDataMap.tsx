@@ -24,6 +24,10 @@ export const BUILDING_COLORS = {
   both: '#8e44ad', // the true building of one address and the wrong pick of another
   other: '#9aa0a6',
 };
+// Assessor methods: an E911 number the tax roll doesn't list (no tax lot
+// with that number and street, with a building) -- a thick ring around the
+// usual status-colored dot. Never a status, building or lot color.
+export const UNLISTED_COLOR = '#e6007e';
 // Tax lot outlines: warm, thin, under the footprints.
 export const PARCEL_COLOR = '#d35400';
 // Suggested numbers (houses E911 never numbered), by kind: never an E911
@@ -98,7 +102,7 @@ function points(addresses: TrainingAddress[]): GeoJSON.FeatureCollection {
     features: addresses.map((a) => ({
       type: 'Feature',
       geometry: { type: 'Point', coordinates: [a.e911.longitude, a.e911.latitude] },
-      properties: { id: a.id, status: a.status },
+      properties: { id: a.id, status: a.status, unlisted: a.taxRoll === false },
     })),
   };
 }
@@ -297,7 +301,11 @@ export default function TrainingDataMap({
         type: 'circle',
         source: 'points',
         paint: {
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 12, 2.5, 17, 6] as unknown as number,
+          'circle-radius': [
+            'interpolate', ['linear'], ['zoom'],
+            12, ['case', ['get', 'unlisted'], 3.5, 2.5],
+            17, ['case', ['get', 'unlisted'], 8, 6],
+          ] as unknown as number,
           'circle-color': [
             'match',
             ['get', 'status'],
@@ -309,8 +317,8 @@ export default function TrainingDataMap({
             STATUS_COLORS.missed,
             STATUS_COLORS.no_building,
           ] as unknown as string,
-          'circle-stroke-width': 1,
-          'circle-stroke-color': '#ffffff',
+          'circle-stroke-width': ['case', ['get', 'unlisted'], 3, 1] as unknown as number,
+          'circle-stroke-color': ['case', ['get', 'unlisted'], UNLISTED_COLOR, '#ffffff'] as unknown as string,
         },
       });
       map.addLayer({

@@ -549,6 +549,14 @@ export type TrainingAddress = {
   errorMeters: number;
   status: TrainingStatus;
   candidates: number;
+  // Assessor methods: true = the tax roll pinned this number to a tax lot;
+  // false = no tax-roll lot (with a building) for it, so it fell back to
+  // ML + road order. null for other methods (and older servers' rows).
+  taxRoll?: boolean | null;
+  // The street's pattern and the method it was numbered with
+  // (address_inference/patterns.py); null where it wasn't run.
+  pattern?: 'park' | 'townhouse' | 'rural' | null;
+  patternMethod?: 'drive_rule' | 'ml_order' | 'assessor' | null;
   // What the ranker alone did -- differs from status/pickedBuilding only
   // for method 'ml_order', where road order may have changed the pick.
   mlStatus: TrainingStatus;
@@ -571,7 +579,10 @@ export type TrainingMethod =
   | 'ml_ranges'
   | 'ml_order_ranges'
   | 'assessor'
-  | 'assessor_e911roads';
+  | 'assessor_e911roads'
+  // dead-end streets only, each by its pattern (address_inference/patterns.py)
+  | 'pattern'
+  | 'pattern_ml';
 
 export type TrainingTown = { region: string; town: string; runDate: string; addresses: number };
 

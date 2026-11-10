@@ -16,6 +16,7 @@ import TrainingDataMap, {
   STATUS_COLORS,
   SUGGESTION_COLORS,
   type SuggestionKind,
+  UNLISTED_COLOR,
   addressLabel,
   describe,
   describeSuggestion,
@@ -48,6 +49,8 @@ const METHOD_LABELS: Record<TrainingMethod, string> = {
   ml_ranges: 'Correct ranges: ML alone',
   assessor: "Assessor's lot address",
   assessor_e911roads: "E911 roads: assessor's lot address",
+  pattern: 'Pattern (dead ends): park / townhouse / rural',
+  pattern_ml: 'Pattern + ML membership (dead ends)',
 };
 const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   ml_order: 'ml',
@@ -63,9 +66,25 @@ const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   // compared against ML + road order, the pick it replaces
   assessor: 'ml_order',
   assessor_e911roads: 'ml_order_e911roads',
+  // compared against the tax roll everywhere
+  pattern: 'assessor',
+  pattern_ml: 'assessor',
 };
 const isAssessorMethod = (m: TrainingMethod) => m.startsWith('assessor');
 const isOrderMethod = (m: TrainingMethod) => BASE_METHOD[m] !== m;
+const isPatternMethod = (m: TrainingMethod) => m.startsWith('pattern');
+type StreetPattern = 'park' | 'townhouse' | 'rural';
+const PATTERNS: { pattern: StreetPattern; label: string; color: string }[] = [
+  { pattern: 'park', label: "Community park -> your drive rule", color: '#e6007e' },
+  { pattern: 'townhouse', label: 'Townhouse complex -> ML + road order', color: '#e67e22' },
+  { pattern: 'rural', label: 'Rural -> tax roll', color: '#2471a3' },
+];
+const PATTERN_LABEL: Record<StreetPattern, string> = { park: 'park', townhouse: 'townhouse', rural: 'rural' };
+const PATTERN_METHOD_LABEL: Record<string, string> = {
+  drive_rule: 'the drive rule (evens on the right going in, odds on the right coming back)',
+  ml_order: 'ML + road order',
+  assessor: "the tax roll's lot address, else ML + road order",
+};
 const STATUS_ORDER: TrainingStatus[] = ['wrong', 'missed', 'right', 'no_building'];
 const LIST_LIMIT = 200;
 const SUGGESTION_KINDS: { kind: SuggestionKind; label: string }[] = [
@@ -80,6 +99,25 @@ function readPasscode(): string | null {
   } catch {
     return null;
   }
+}
+
+// A status dot with the unlisted ring, as the map draws it.
+function UnlistedSwatch({ color = '#ffffff' }: { color?: string }) {
+  return (
+    <span
+      style={{
+        display: 'inline-block',
+        width: 10,
+        height: 10,
+        borderRadius: '50%',
+        background: color,
+        border: `3px solid ${UNLISTED_COLOR}`,
+        marginRight: 6,
+        verticalAlign: '-2px',
+        flex: 'none',
+      }}
+    />
+  );
 }
 
 function Swatch({ color, square = false }: { color: string; square?: boolean }) {
@@ -106,6 +144,8 @@ export default function TrainingData() {
   const [town, setTown] = useState<string | null>(null);
   const [method, setMethod] = useState<TrainingMethod>('ml_order');
   const [changedOnly, setChangedOnly] = useState(false);
+  const [unlistedOnly, setUnlistedOnly] = useState(false);
+  const [shownPatterns, setShownPatterns] = useState<Set<StreetPattern>>(() => new Set(['park', 'townhouse', 'rural']));
   const [data, setData] = useState<AddressInferenceReviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -173,15 +213,61 @@ export default function TrainingData() {
     return data.addresses
       .filter((a) => visible.has(a.status))
       .filter((a) => !changedOnly || a.changedFromMl)
+      .filter((a) => !unlistedOnly || a.taxRoll === false)
+      .filter((a) => !isPatternMethod(data.method) || !a.pattern || shownPatterns.has(a.pattern))
       .filter((a) => !needle || addressLabel(a).toUpperCase().includes(needle))
       .sort((a, b) => b.errorMeters - a.errorMeters);
-  }, [data, visible, search, changedOnly]);
+  }, [data, visible, search, changedOnly, unlistedOnly, shownPatterns]);
 
-  // The map shows the same addresses as the list's status + changed filters.
+  // The map shows the same addresses as the list's status + changed + unlisted filters.
   const mapData = useMemo(
-    () => (data && changedOnly ? { ...data, addresses: data.addresses.filter((a) => a.changedFromMl) } : data),
-    [data, changedOnly]
+    () => {
+      const patternOk = (a: TrainingAddress) =>
+        !data || !isPatternMethod(data.method) || !a.pattern || shownPatterns.has(a.pattern);
+      return data && (changedOnly || unlistedOnly || isPatternMethod(data.method))
+        ? {
+            ...data,
+            addresses: data.addresses.filter(
+              (a) => (!changedOnly || a.changedFromMl) && (!unlistedOnly || a.taxRoll === false) && patternOk(a)
+            ),
+          }
+        : data;
+    },
+    [data, changedOnly, unlistedOnly, shownPatterns]
   );
+  // Pattern method: per pattern, streets and street numbers (each once) right.
+  const patternCounts = useMemo(() => {
+    const out: Record<StreetPattern, { streets: Set<string>; numbers: Map<string, boolean> }> = {
+      park: { streets: new Set(), numbers: new Map() },
+      townhouse: { streets: new Set(), numbers: new Map() },
+      rural: { streets: new Set(), numbers: new Map() },
+    };
+    for (const a of data?.addresses ?? []) {
+      if (!a.pattern) continue;
+      const bucket = out[a.pattern];
+      bucket.streets.add(a.street);
+      if (a.status === 'no_building') continue;
+      const key = `${a.street}|${a.number}`;
+      bucket.numbers.set(key, (bucket.numbers.get(key) ?? false) || a.status === 'right');
+    }
+    return out;
+  }, [data]);
+  // Assessor methods: the E911 numbers the tax roll doesn't list, which fall
+  // back to ML + road order. Counted per point and per street number.
+  const unlistedCounts = useMemo(() => {
+    const unlisted = (data?.addresses ?? []).filter((a) => a.taxRoll === false);
+    const labelled = unlisted.filter((a) => a.status !== 'no_building');
+    const right = labelled.filter((a) => a.status === 'right').length;
+    return {
+      points: unlisted.length,
+      numbers: new Set(unlisted.map((a) => `${a.street}|${a.number}`)).size,
+      byStatus: Object.fromEntries(STATUS_ORDER.map((st) => [st, unlisted.filter((a) => a.status === st).length])) as Record<
+        TrainingStatus,
+        number
+      >,
+      rightShare: labelled.length ? `${((100 * right) / labelled.length).toFixed(1)}%` : '–',
+    };
+  }, [data]);
   const changedCounts = useMemo(() => {
     const changed = (data?.addresses ?? []).filter((a) => a.changedFromMl);
     return {
@@ -331,6 +417,7 @@ export default function TrainingData() {
                   onClick={() => {
                     setMethod(m);
                     if (!isOrderMethod(m)) setChangedOnly(false);
+                    if (!isAssessorMethod(m)) setUnlistedOnly(false);
                   }}
                   disabled={loading}
                 >
@@ -343,12 +430,98 @@ export default function TrainingData() {
             <label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 'var(--space-3)' }}>
               <input type="checkbox" checked={changedOnly} onChange={(e) => setChangedOnly(e.target.checked)} />
               <span>
-                Only addresses where {isAssessorMethod(data.method) ? "the assessor's lot address" : 'road order'} changed
+                Only addresses where{' '}
+                {isPatternMethod(data.method)
+                  ? "the street's pattern"
+                  : isAssessorMethod(data.method)
+                    ? "the assessor's lot address"
+                    : 'road order'}{' '}
+                changed
                 the pick ({changedCounts.total.toLocaleString()}:{' '}
                 <span style={{ color: STATUS_COLORS.right }}>{changedCounts.fixed.toLocaleString()} now right</span>,{' '}
                 <span style={{ color: STATUS_COLORS.wrong }}>{changedCounts.broke.toLocaleString()} were right before</span>)
               </span>
             </label>
+          )}
+
+          {isPatternMethod(data.method) && (
+            <div className="card elev-sm" style={{ margin: '0 0 var(--space-3)' }}>
+              <div className="card-kicker" style={{ margin: 0 }}>
+                Dead-end streets only, each numbered by its kind of place
+              </div>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-4)', marginTop: 'var(--space-2)' }}>
+                {PATTERNS.map(({ pattern, label, color }) => {
+                  const c = patternCounts[pattern];
+                  const right = [...c.numbers.values()].filter(Boolean).length;
+                  return (
+                    <label
+                      key={pattern}
+                      style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', opacity: shownPatterns.has(pattern) ? 1 : 0.55 }}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={shownPatterns.has(pattern)}
+                        onChange={() =>
+                          setShownPatterns((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(pattern)) next.delete(pattern);
+                            else next.add(pattern);
+                            return next;
+                          })
+                        }
+                      />
+                      <Swatch color={color} square />
+                      <span>
+                        {label}:{' '}
+                        <strong style={{ fontVariantNumeric: 'tabular-nums' }}>
+                          {right}/{c.numbers.size}
+                        </strong>{' '}
+                        numbers right ({c.streets.size} streets)
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
+              <div className="text-muted" style={{ fontSize: 13, marginTop: 4 }}>
+                A park is a community whose homes share one big tax lot (half its buildings on a lot with more than 3)
+                and about one building per number; a townhouse complex has more than 1.5 numbers per building.
+                {data.method === 'pattern_ml'
+                  ? ' Here the drive rule only uses the buildings a machine-learning model says belong to the street (gaps to neighbours, setback, the other road, size), not every building whose nearest road is the street.'
+                  : ''}{' '}
+                Tick
+                "where ... changed the pick" below to see only where this differs from the tax roll everywhere.
+              </div>
+            </div>
+          )}
+
+          {isAssessorMethod(data.method) && unlistedCounts.points > 0 && (
+            <div className="card elev-sm" style={{ margin: '0 0 var(--space-3)' }}>
+              <label style={{ display: 'flex', gap: 8, alignItems: 'center', cursor: 'pointer' }}>
+                <input type="checkbox" checked={unlistedOnly} onChange={(e) => setUnlistedOnly(e.target.checked)} />
+                <UnlistedSwatch />
+                <span>
+                  Only numbers the tax roll doesn't list:{' '}
+                  <strong style={{ fontVariantNumeric: 'tabular-nums' }}>
+                    {unlistedCounts.numbers.toLocaleString()} numbers
+                  </strong>{' '}
+                  ({unlistedCounts.points.toLocaleString()} E911 points; {unlistedCounts.rightShare} of points with a building
+                  right)
+                </span>
+              </label>
+              <div className="text-muted" style={{ fontSize: 13, marginTop: 4 }}>
+                No tax lot with that number and street (with a building on it), so the pick fell back to ML + road order.
+                Ringed in magenta on the map whether or not this is ticked:{' '}
+                {STATUS_ORDER.map((st, i) => (
+                  <span key={st}>
+                    {i > 0 ? ' · ' : ''}
+                    <span style={{ color: STATUS_COLORS[st] }}>
+                      {unlistedCounts.byStatus[st].toLocaleString()} {STATUS_LABELS[st].toLowerCase()}
+                    </span>
+                  </span>
+                ))}
+                . The status checkboxes below still apply.
+              </div>
+            </div>
           )}
 
           <div
@@ -453,6 +626,12 @@ export default function TrainingData() {
               <span>Colored footprint + dot: a house with no E911 point (click the dot; dashed = no free number)</span>
             )}
             <span>Dashed line: E911 point → picked building · white ring: today's interpolation</span>
+            {(isAssessorMethod(data.method) || isPatternMethod(data.method)) && unlistedCounts.points > 0 && (
+              <span>
+                <UnlistedSwatch />
+                Magenta ring: number the tax roll doesn't list
+              </span>
+            )}
             {(data.parcels?.features.length ?? 0) > 0 && (
               <label style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer' }}>
                 <input type="checkbox" checked={showParcels} onChange={(e) => setShowParcels(e.target.checked)} />
@@ -560,8 +739,21 @@ export default function TrainingData() {
               {isOrderMethod(data.method) && (
                 <div style={{ fontSize: 13, marginTop: 4 }}>
                   {selected.changedFromMl
-                    ? `${isAssessorMethod(data.method) ? "The assessor's lot address" : 'Road order'} changed the pick. Without it: ${STATUS_LABELS[selected.mlStatus].toLowerCase()}.`
+                    ? `${isPatternMethod(data.method) ? "The street's pattern" : isAssessorMethod(data.method) ? "The assessor's lot address" : 'Road order'} changed the pick. With the tax roll everywhere instead: ${STATUS_LABELS[selected.mlStatus].toLowerCase()}.`
                     : 'Same pick as ML alone.'}
+                </div>
+              )}
+              {selected.pattern && (
+                <div style={{ fontSize: 13, marginTop: 4 }}>
+                  <Swatch color={PATTERNS.find((p) => p.pattern === selected.pattern)!.color} square />
+                  {selected.street} is a {PATTERN_LABEL[selected.pattern]} street, numbered by{' '}
+                  {PATTERN_METHOD_LABEL[selected.patternMethod ?? ''] ?? selected.patternMethod}.
+                </div>
+              )}
+              {selected.taxRoll === false && (
+                <div style={{ fontSize: 13, marginTop: 4 }}>
+                  <UnlistedSwatch color={STATUS_COLORS[selected.status]} />
+                  The tax roll doesn't list this number on this street, so this is the ML + road order pick.
                 </div>
               )}
               {selected.placement && (
@@ -616,7 +808,13 @@ export default function TrainingData() {
                   <th>Result</th>
                   <th>Off by</th>
                   {isOrderMethod(data.method) && (
-                    <th>{isAssessorMethod(data.method) ? 'ML + road order' : 'Without road order'}</th>
+                    <th>
+                      {isPatternMethod(data.method)
+                        ? 'Tax roll everywhere'
+                        : isAssessorMethod(data.method)
+                          ? 'ML + road order'
+                          : 'Without road order'}
+                    </th>
                   )}
                   <th>Candidates</th>
                 </tr>
@@ -637,6 +835,27 @@ export default function TrainingData() {
                   >
                     <td>
                       {addressLabel(a)}
+                      {a.pattern && a.pattern !== 'rural' && (
+                        <span
+                          className="tag tag-neutral"
+                          style={{
+                            marginLeft: 6,
+                            borderColor: PATTERNS.find((p) => p.pattern === a.pattern)!.color,
+                            color: PATTERNS.find((p) => p.pattern === a.pattern)!.color,
+                          }}
+                        >
+                          {PATTERN_LABEL[a.pattern]}
+                        </span>
+                      )}
+                      {a.taxRoll === false && (
+                        <span
+                          className="tag tag-neutral"
+                          style={{ marginLeft: 6, borderColor: UNLISTED_COLOR, color: UNLISTED_COLOR }}
+                          title="The tax roll doesn't list this number on this street"
+                        >
+                          not on tax roll
+                        </span>
+                      )}
                       {a.placement && !a.placement.startsWith('Structure') && (
                         <span className="tag tag-neutral" style={{ marginLeft: 6 }} title="How E911 placed this point">
                           {a.placement}

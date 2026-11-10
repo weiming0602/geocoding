@@ -26,9 +26,14 @@ const UNDEFINED_TABLE = '42P01';
 // assessor / assessor_e911roads: each address takes the biggest building on
 // the tax lot whose assessor address (parcels.prop_loc) is the same number
 // and street, else ML + road order's pick -- compared against ML + road order.
+// pattern: dead-end streets only, each numbered by its kind of place
+// (python -m address_inference.patterns): parks by the owner's drive rule,
+// townhouse complexes by ML + road order, rural streets by the tax roll --
+// compared against the tax roll everywhere (assessor).
 const METHODS = [
   'ml_order', 'ml',
   'assessor', 'assessor_e911roads',
+  'pattern', 'pattern_ml',
   'ml_order_e911roads', 'ml_e911roads',
   'ml_order_auto', 'ml_auto',
   'ml_order_list', 'ml_list',
@@ -36,7 +41,10 @@ const METHODS = [
 ];
 // What "changed by road order" compares each method against.
 const BASE_METHOD = Object.fromEntries(
-  METHODS.map((m) => [m, m.startsWith('assessor') ? m.replace('assessor', 'ml_order') : m.replace('ml_order', 'ml')])
+  METHODS.map((m) => [
+    m,
+    m.startsWith('pattern') ? 'assessor' : m.startsWith('assessor') ? m.replace('assessor', 'ml_order') : m.replace('ml_order', 'ml'),
+  ])
 );
 
 async function listReviewTowns(db) {
@@ -70,12 +78,38 @@ async function getAddressInferenceReview(db, town, method) {
     const details = has_details
       ? 'LEFT JOIN address_inference.e911_point_details d ON d.site_uid = p.address_id'
       : 'LEFT JOIN (SELECT NULL::text AS site_uid, NULL::text AS unit, NULL::text AS placement) d ON false';
+    // Tables saved before evaluate.py added tax_roll lack the column.
+    const { rows: [{ has_tax_roll }] } = await db.query(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'address_inference'
+         AND table_name = 'ml_predictions' AND column_name = 'tax_roll') AS has_tax_roll`
+    );
+    const taxRoll = has_tax_roll ? 'p.tax_roll' : 'NULL::boolean';
+    // Each street's pattern (python -m address_inference.patterns), when run.
+    const { rows: [{ has_patterns }] } = await db.query(
+      "SELECT to_regclass('address_inference.street_patterns') IS NOT NULL AS has_patterns"
+    );
+    // One set of street patterns per rule (pattern = the plain drive rule,
+    // pattern_<rule> otherwise); tables from before the rule column are plain.
+    const { rows: [{ has_rule }] } = has_patterns
+      ? await db.query(
+          `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'address_inference'
+             AND table_name = 'street_patterns' AND column_name = 'rule') AS has_rule`
+        )
+      : { rows: [{ has_rule: false }] };
+    const rule = selectedMethod === 'pattern' || !selectedMethod.startsWith('pattern_') ? 'plain' : selectedMethod.slice('pattern_'.length);
+    const patterns = has_patterns
+      ? `LEFT JOIN address_inference.street_patterns sp
+           ON sp.region_id = p.region_id AND sp.town = p.town AND sp.street = p.street
+          ${has_rule ? `AND sp.rule = '${rule.replace(/[^a-z_]/g, '')}'` : ''}`
+      : 'LEFT JOIN (SELECT NULL::text AS pattern, NULL::text AS method) sp ON false';
     const { rows } = await db.query(
       `SELECT p.address_id, p.address_number, p.street, p.e911_lat, p.e911_lon, p.m0_lat, p.m0_lon,
-              p.true_building, p.picked_building, p.picked_lat, p.picked_lon, p.error_m, p.status, p.candidates,
-              base.status AS ml_status, base.picked_building AS ml_pick, d.unit, d.placement
+              p.true_building, p.picked_building, p.picked_lat, p.picked_lon, p.error_m, p.status, p.candidates, ${taxRoll} AS tax_roll,
+              base.status AS ml_status, base.picked_building AS ml_pick, d.unit, d.placement,
+              sp.pattern, sp.method AS pattern_method
        FROM address_inference.ml_predictions p
        ${details}
+       ${patterns}
        LEFT JOIN address_inference.ml_predictions base
          ON base.region_id = p.region_id AND base.town = p.town AND base.method = $4
         AND base.address_id = p.address_id
@@ -157,6 +191,13 @@ async function getAddressInferenceReview(db, town, method) {
         errorMeters: Math.round(r.error_m),
         status: r.status,
         candidates: r.candidates,
+        // Assessor methods: true = the tax roll pinned this number to a lot,
+        // false = it fell back to ML + road order. null for other methods.
+        taxRoll: r.tax_roll ?? null,
+        // The street's pattern (park / townhouse / rural) and the method it
+        // was numbered with, from address_inference.patterns; null if not run.
+        pattern: r.pattern ?? null,
+        patternMethod: r.pattern_method ?? null,
         mlStatus: r.ml_status ?? r.status,
         changedFromMl: r.ml_pick !== null && r.ml_pick !== undefined && r.ml_pick !== r.picked_building,
       })),

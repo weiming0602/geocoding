@@ -161,6 +161,10 @@ CREATE TABLE IF NOT EXISTS address_inference.ml_predictions (
     status TEXT NOT NULL,
     candidates INTEGER NOT NULL,
     run_date DATE NOT NULL,
+    -- assessor methods only: the tax roll pinned this number to a lot with
+    -- a candidate building (else it fell back to ML + road order). NULL for
+    -- every other method.
+    tax_roll BOOLEAN,
     PRIMARY KEY (region_id, town, method, address_id)
 )
 """
@@ -183,7 +187,8 @@ def prediction_status(true_building, pick, true_in_candidates):
     return "wrong" if true_in_candidates else "missed"
 
 
-def prediction_rows(region_id, town, method, address_df, candidate_df, picks, run_date):
+def prediction_rows(region_id, town, method, address_df, candidate_df, picks, run_date, tax_roll=None):
+    """tax_roll: the address ids the tax roll pinned (assessor methods), else None."""
     coords = candidate_df.drop_duplicates("source_id").set_index("source_id")[["lat", "lon"]]
     counts = candidate_df.groupby("address_id").size()
     in_candidates = set(candidate_df.loc[candidate_df["label"] == 1, "address_id"])
@@ -199,6 +204,7 @@ def prediction_rows(region_id, town, method, address_df, candidate_df, picks, ru
             float(dataset.haversine_m(a.true_lat, a.true_lon, lat, lon)),
             prediction_status(true_building, pick, a.id in in_candidates),
             int(counts.get(a.id, 0)), run_date,
+            (a.id in tax_roll) if tax_roll is not None else None,
         ))
     return rows
 
@@ -213,12 +219,13 @@ def save_predictions(dsn, region_id, town, rows, methods):
         if not has_method:
             conn.execute("DROP TABLE IF EXISTS address_inference.ml_predictions")
         conn.execute(CREATE_PREDICTIONS_SQL)
+        conn.execute("ALTER TABLE address_inference.ml_predictions ADD COLUMN IF NOT EXISTS tax_roll BOOLEAN")
         conn.execute("DELETE FROM address_inference.ml_predictions WHERE region_id = %s AND town = %s "
                      "AND method = ANY(%s)", (region_id, town, methods))
         with conn.cursor() as cur:
             cur.executemany(
                 "INSERT INTO address_inference.ml_predictions VALUES "
-                "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 rows,
             )
 
@@ -294,7 +301,8 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
         suffix = "" if ranges == "tiger" else f"_{ranges}"
         saved = {name: method for name, method in SAVED_METHODS.items() if name in picks}
         for name, method in saved.items():
-            rows += prediction_rows(region.id, town, method + suffix, address_df, candidate_df, picks[name], date.today())
+            rows += prediction_rows(region.id, town, method + suffix, address_df, candidate_df, picks[name], date.today(),
+                                    tax_roll=assessor_matched if name == "assessor" else None)
         save_predictions(dsn, region.id, town, rows, [m + suffix for m in saved.values()])
     return pd.DataFrame(table), coverage, importance
 

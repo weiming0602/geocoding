@@ -105,8 +105,35 @@ test('GET /admin/address-inference/review defaults to ML + road order and flags 
         assert.equal(a2.placement, 'Structure - Interior Unit');
         assert.equal(body.addresses.find((a) => a.id === 'a1').unit, null);
         assert.equal(body.addresses.find((a) => a.id === 'a1').changedFromMl, false);
+        // A table saved before tax_roll existed still loads.
+        assert.equal(a2.taxRoll, null);
       }),
     { seedStreets: false, geoOptions: { postgis: true }, geoSeed: seedPredictions }
+  ));
+
+test('GET /admin/address-inference/review says which assessor picks the tax roll pinned', () =>
+  withTestServer(
+    async ({ port }) =>
+      withPasscode(async () => {
+        const url = `http://127.0.0.1:${port}/admin/address-inference/review?passcode=correct-horse`;
+        const assessor = await (await fetch(`${url}&method=assessor`)).json();
+        assert.equal(assessor.addresses.find((a) => a.id === 'a1').taxRoll, true);
+        assert.equal(assessor.addresses.find((a) => a.id === 'a2').taxRoll, false);
+        const order = await (await fetch(`${url}&method=ml_order`)).json();
+        assert.equal(order.addresses.find((a) => a.id === 'a1').taxRoll, null);
+      }),
+    {
+      seedStreets: false,
+      geoOptions: { postgis: true },
+      geoSeed: async (pool) => {
+        await seedPredictions(pool);
+        await pool.query('ALTER TABLE address_inference.ml_predictions ADD COLUMN tax_roll BOOLEAN');
+        await pool.query(`
+          INSERT INTO address_inference.ml_predictions VALUES
+            ('me', 'Freeport', 'assessor', 'a1', 12, 'MAIN ST', 43.857, -70.103, 43.8571, -70.1031, 'b1', 'b1', 43.857, -70.103, 4.2, 'right', 30, '2026-11-03', true),
+            ('me', 'Freeport', 'assessor', 'a2', 14, 'MAIN ST', 43.858, -70.103, 43.8581, -70.1031, 'b2', 'b2', 43.858, -70.103, 3.0, 'right', 30, '2026-11-03', false)`);
+      },
+    }
   ));
 
 test('GET /admin/address-inference/review includes numbers suggested for unnumbered houses', () =>
