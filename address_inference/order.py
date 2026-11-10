@@ -353,6 +353,16 @@ TOWNHOUSE_SLOT_BONUS = 1.0
 # of the parity's slots between its lowest and highest number are taken):
 # townhouse rows are numbered 26, 28, 30, 32...; rural roads jump.
 TOWNHOUSE_MIN_DENSITY = 0.8
+# ...and only where the side's home buildings are big enough to hold several
+# homes (median outline m2; None = any size). Juniper Drive's mobile homes
+# (67-114 m2; two of them missing from the footprints) looked like a
+# townhouse row -- 4 odd numbers, 2 buildings -- and took two numbers each;
+# real townhouse rows (Harvest Ridge, Chase Court, Unity Lane, Gideons Way)
+# are 137 m2 and up. Off: Freeport neutral (135 m2: ML + road order TIGER
+# 55.8% -> 56.0%, E911 roads 67.8% -> 68.0%; assessor 80.5% -> 80.4%, 83.7%
+# -> 83.5%) and Juniper isn't fixed -- with two houses missing, its odd side
+# shifts one house instead of doubling up. Missing footprints, not order.
+TOWNHOUSE_MIN_M2 = None
 # More home buildings than numbers on a side (owner's rule): the extra
 # buildings belong to someone's property. The side's home buildings are
 # split, in road order, at the k-1 widest gaps into k properties (k =
@@ -680,6 +690,14 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
                 locked_buildings[street].add(b)
         addr = addr[points < lock]  # the rest of the street is assigned around them
     number_of = dict(zip(addr["id"], addr["number"]))
+    size_of = (dict(zip(scored["source_id"], scored["sqmeters"])) if "sqmeters" in scored.columns else {})
+
+    def big_enough(buildings):
+        if TOWNHOUSE_MIN_M2 is None:
+            return True
+        sizes = [size_of[b] for b in buildings if b in size_of and size_of[b] == size_of[b]]
+        return bool(sizes) and float(np.median(sizes)) >= TOWNHOUSE_MIN_M2
+
     by_address = defaultdict(list)
     for row in scored[["address_id", "source_id", "p"]].itertuples(index=False):
         by_address[row.address_id].append((row.source_id, row.p))
@@ -735,7 +753,8 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
                 blds = {b for aid in group["id"] for b, _ in by_address.get(aid, []) if (street, b) in positions}
                 homes = [b for b in blds if (street, b) in home]
                 dens = len(nums) / ((nums[-1] - nums[0]) / 2 + 1) if len(nums) > 1 else 0.0
-                side_ok |= bool(homes) and len(nums) >= townhouse_ratio * len(homes) and dens >= TOWNHOUSE_MIN_DENSITY
+                side_ok |= (bool(homes) and len(nums) >= townhouse_ratio * len(homes) and dens >= TOWNHOUSE_MIN_DENSITY
+                            and big_enough(homes))
             # ...AND the whole street has several numbers per home building
             # (Harvest Ridge Road: 15 numbers, 7 buildings), unlike a street
             # of houses numbered 1, 2, 3, 4... across both sides.
@@ -787,7 +806,7 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         home_buildings = [b for b in buildings if (street, b) in home]
         density = k / ((numbers[-1] - numbers[0]) / 2 + 1) if k > 1 else 0.0
         townhouses = (len(home_buildings) > 0 and k >= townhouse_ratio * len(home_buildings)
-                      and density >= TOWNHOUSE_MIN_DENSITY)
+                      and density >= TOWNHOUSE_MIN_DENSITY and big_enough(home_buildings))
         share = townhouse_share_penalty if townhouses else None
         candidates = home_buildings if townhouses else buildings
         best = None
