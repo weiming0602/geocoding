@@ -411,13 +411,16 @@ export default function TrainingData() {
             }}
           >
             {data.towns.length > 1 ? (
-              <select className="input" style={{ width: 'auto' }} value={data.town} onChange={(e) => setTown(e.target.value)}>
-                {data.towns.map((t) => (
-                  <option key={t.town} value={t.town}>
-                    {t.town}
-                  </option>
-                ))}
-              </select>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                <strong>Town:</strong>
+                <select className="input" style={{ width: 'auto' }} value={data.town} onChange={(e) => setTown(e.target.value)}>
+                  {data.towns.map((t) => (
+                    <option key={t.town} value={t.town}>
+                      {t.town} ({t.addresses.toLocaleString()})
+                    </option>
+                  ))}
+                </select>
+              </label>
             ) : (
               <strong>{data.town}</strong>
             )}
