@@ -584,6 +584,7 @@ export type TrainingMethod =
   | 'assessor_e911roads'
   // dead-end streets only, each by its pattern (address_inference/patterns.py)
   | 'pattern'
+  | 'pattern_pairs'
   | 'pattern_ml';
 
 export type TrainingTown = { region: string; town: string; runDate: string; addresses: number };

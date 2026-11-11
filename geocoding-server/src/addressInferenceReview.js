@@ -33,7 +33,7 @@ const UNDEFINED_TABLE = '42P01';
 const METHODS = [
   'ml_order', 'ml',
   'assessor', 'assessor_e911roads',
-  'pattern', 'pattern_ml',
+  'pattern', 'pattern_pairs', 'pattern_ml',
   'ml_order_e911roads', 'ml_e911roads',
   'ml_order_auto', 'ml_auto',
   'ml_order_list', 'ml_list',

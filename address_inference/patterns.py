@@ -252,6 +252,78 @@ def across_from_partner(numbers, picks, house_point, line, evens):
     return out
 
 
+# rule "pairs" (owner's rule, Lajoie Drive): homes sit in a line along the
+# road, so a building set back far out of line with the street's homes is
+# not one of them (Lajoie's 64 m-back building among homes 11-20 m back) ...
+SETBACK_OUT_OF_LINE = 2.5   # x the side's median setback (and at least 25 m more)
+# ... and the odd numbers sit across the road from their even partners (odd n
+# across from n + 1): number the complete side by the drive order, then match
+# the other side's houses to their partners' places in order; a number whose
+# partner place has no house is left for an estimated point (across_from_partner).
+PAIR_SKIP = 0.6             # cost of leaving a number or a house out, x the typical gap
+
+
+def in_line(houses, house_point, line):
+    """houses (id, along, side) whose setback is in line with their side's homes."""
+    import statistics
+    out = []
+    for side in ("left", "right"):
+        hs = [h for h in houses if h[2] == side]
+        if not hs:
+            continue
+        med = statistics.median(line.distance(house_point[h[0]]) for h in hs)
+        limit = max(SETBACK_OUT_OF_LINE * med, med + 25 * 1.385)
+        out += [h for h in hs if line.distance(house_point[h[0]]) <= limit]
+    return out
+
+
+def pair_rule(numbers, houses, evens):
+    """{number: house id}: the side whose houses cover its numbers by the drive
+    order; the other side's numbers matched (in order, any may be skipped) to
+    its houses by the place of each number's partner across the road."""
+    import numpy as np
+    sides = {0: evens, 1: "left" if evens == "right" else "right"}
+    by_par = {par: sorted(n for n in numbers if n % 2 == par) for par in (0, 1)}
+    hs = {par: sorted((h for h in houses if h[2] == side), key=lambda h: h[1]) for par, side in sides.items()}
+    # primary: the side with the most houses per number
+    primary = max((0, 1), key=lambda par: (len(hs[par]) / max(len(by_par[par]), 1), par == 0))
+    other = 1 - primary
+    picks = drive_rule([n for n in numbers if n % 2 == primary], houses, evens)
+    placed = sorted((n, h[1]) for n in picks for h in hs[primary] if h[0] == picks[n])
+    nums, cand = by_par[other], hs[other]
+    if not nums or not cand or len(placed) < 2:
+        picks.update({n: h for n, h in drive_rule(numbers, houses, evens).items() if n % 2 == other})
+        return picks
+    xs, ys = [n for n, _ in placed], [a for _, a in placed]
+    partner = [float(np.interp(n + (1 if other == 1 else -1), xs, ys)) for n in nums]
+    gaps = np.diff(sorted(h[1] for h in houses)) if len(houses) > 1 else np.array([20.0])
+    skip = PAIR_SKIP * max(float(np.median(gaps)), 5.0) * 2
+    INF = float("inf")
+    n, m = len(nums), len(cand)
+    cost = [[INF] * (m + 1) for _ in range(n + 1)]
+    back = [[None] * (m + 1) for _ in range(n + 1)]
+    cost[0][0] = 0.0
+    for i in range(n + 1):
+        for j in range(m + 1):
+            c = cost[i][j]
+            if c == INF:
+                continue
+            for di, dj, add in ((1, 0, skip), (0, 1, skip)):
+                if i + di <= n and j + dj <= m and c + add < cost[i + di][j + dj]:
+                    cost[i + di][j + dj], back[i + di][j + dj] = c + add, (i, j, None)
+            if i < n and j < m:
+                d = c + abs(cand[j][1] - partner[i])
+                if d < cost[i + 1][j + 1]:
+                    cost[i + 1][j + 1], back[i + 1][j + 1] = d, (i, j, (nums[i], cand[j][0]))
+    i, j = n, m
+    while back[i][j] is not None:
+        pi, pj, pair = back[i][j]
+        if pair:
+            picks[pair[0]] = pair[1]
+        i, j = pi, pj
+    return picks
+
+
 def to_lat_lon(p):
     import math
     lon = p.x * 180 / 20037508.34
@@ -423,6 +495,9 @@ def run(dsn, region, town, save=False, rule=None, all_dead_ends=False):
             picks = None
         elif rule == "slots":
             picks = slot_rule(numbers, houses, evens)
+        elif rule == "pairs":
+            pts = {sid: p for sid, (near, p) in houses_of[street].items()}
+            picks = pair_rule(numbers, in_line(houses, pts, line), evens)
         elif rule in ("cut", "ml"):
             picks = drive_rule(numbers, main_run(houses)[0] if rule == "cut" else houses, evens)
         else:
@@ -459,8 +534,9 @@ def run(dsn, region, town, save=False, rule=None, all_dead_ends=False):
     by = defaultdict(int)
     for p in patterns:
         by[p[4]] += 1
-    juniper = sorted((r["address_number"], r["status"], r["error_m"]) for r in rows if r["street"].startswith("JUNIPER"))
-    print("Juniper:", " ".join(f"{n}:{st}" + (f"({e:.0f} m)" if st == "estimated" else "") for n, st, e in juniper))
+    for name in ("JUNIPER DRIVE", "LAJOIE DRIVE"):
+        sample = sorted((r["address_number"], r["status"], r["error_m"]) for r in rows if r["street"] == name)
+        print(f"{name.title()}:", " ".join(f"{n}:{st}" + (f"({e:.0f} m)" if st == "estimated" else "") for n, st, e in sample))
     est = {}
     for r in rows:
         if r["status"] == "estimated":
@@ -504,7 +580,7 @@ def main():
     parser.add_argument("region")
     parser.add_argument("--town", required=True)
     parser.add_argument("--save", action="store_true")
-    parser.add_argument("--rule", choices=["plain", "cut", "slots", "ml"], default=None,
+    parser.add_argument("--rule", choices=["plain", "cut", "slots", "ml", "pairs"], default=None,
                         help=f"how park streets are numbered (default {RULE})")
     parser.add_argument("dsn")
     args = parser.parse_args()

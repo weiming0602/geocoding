@@ -51,6 +51,7 @@ const METHOD_LABELS: Record<TrainingMethod, string> = {
   assessor: "Assessor's lot address",
   assessor_e911roads: "E911 roads: assessor's lot address",
   pattern: 'Pattern (dead ends): park / townhouse / rural',
+  pattern_pairs: 'Pattern + pairs across the road (dead ends)',
   pattern_ml: 'Pattern + ML membership (dead ends)',
 };
 const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
@@ -69,6 +70,7 @@ const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   assessor_e911roads: 'ml_order_e911roads',
   // compared against the tax roll everywhere
   pattern: 'assessor',
+  pattern_pairs: 'assessor',
   pattern_ml: 'assessor',
 };
 const isAssessorMethod = (m: TrainingMethod) => m.startsWith('assessor');
@@ -499,6 +501,9 @@ export default function TrainingData() {
               <div className="text-muted" style={{ fontSize: 13, marginTop: 4 }}>
                 A park is a community whose homes share one big tax lot (half its buildings on a lot with more than 3)
                 and about one building per number; a townhouse complex has more than 1.5 numbers per building.
+                {data.method === 'pattern_pairs'
+                  ? ' Here a park\'s complete side is numbered by the drive rule and the other side\'s houses by their partner across the road (odd n across from n + 1); buildings set back far out of line with the homes are left out, and a number whose partner place has no house gets an estimated point.'
+                  : ''}
                 {data.method === 'pattern_ml'
                   ? ' Here the drive rule only uses the buildings a machine-learning model says belong to the street (gaps to neighbours, setback, the other road, size), not every building whose nearest road is the street.'
                   : ''}{' '}
