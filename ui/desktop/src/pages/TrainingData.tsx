@@ -93,6 +93,9 @@ const HOUSE_SHAPE_LABEL: Record<string, string> = {
   ml: "nothing at the spot: ML + road order's pick",
   estimated: 'no house: point estimated at the spot, set back like the neighbors',
   unplaced: 'not placed',
+  'lane road': 'house on a short lane: the lane is its driveway to this street (old lot split once)',
+  split: 'lot split once: the old lot keeps the smaller (old) number, the split-off lot the bigger',
+  displaced: "its in-order number went to a neighbour: nearest leftover number",
   park: "park street: owner's drive rule",
 };
 const isAssessorMethod = (m: TrainingMethod) => m.startsWith('assessor');
