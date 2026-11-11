@@ -134,7 +134,11 @@ read-write).
   instead cost 3-5 points, so it's off. Road order skips buildings on a lot the tax roll
   addresses on another street (`order.OTHER_STREET_LOTS`, owner's rule; only
   the tax roll's street names, never its numbers): ML + road order TIGER
-  53.3% -> 55.8%, E911 roads 66.0% -> 67.8%.
+  53.3% -> 55.8%, E911 roads 66.0% -> 67.8%. The tax roll's lot wins
+  wherever it is (`order.ASSESSOR_ANY_BUILDING`): a matched lot gives its
+  biggest building even when TIGER draws the street too far away for it to be
+  a candidate (Dune Drive's TIGER line turns into the sand; 87-143 were
+  "missed"): assessor TIGER 80.5% -> 82.2%, E911 roads 83.7% -> 83.8%.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

@@ -143,6 +143,18 @@ def test_prediction_rows_record_the_pick_and_its_error():
     assert row[18] is None  # tax_roll: only assessor methods carry it
 
 
+def test_a_pick_outside_the_candidates_is_located_by_extra_coords():
+    # order.ASSESSOR_ANY_BUILDING: the tax roll's lot can hold a building too
+    # far from the street's TIGER line to be a candidate (Dune Drive).
+    from datetime import date
+    address_df, cand = build_one(51, "h2")
+    (row,) = evaluate.prediction_rows("me", "Freeport", "assessor", address_df, cand, {"e1": "far"},
+                                      date(2026, 11, 10), tax_roll={"e1"}, extra_coords={"far": (43.86, -70.10)})
+    assert row[11] == "far" and row[12:14] == (43.86, -70.10)
+    scored = evaluate.score_method(address_df, cand, {"e1": "far"}, extra_coords={"far": (43.86, -70.10)})
+    assert len(scored) == 1 and not scored["right_building"].iloc[0]
+
+
 def test_prediction_rows_flag_the_numbers_the_tax_roll_pinned():
     from datetime import date
     address_df, cand = build_one(51, "h2")

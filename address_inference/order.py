@@ -1153,6 +1153,32 @@ def load_lot_addresses(dsn, region, town) -> dict:
     return dict(out)
 
 
+# The tax roll's lot wins wherever the lot is: a lot whose number and street
+# match takes its biggest building even when no building there is a
+# candidate (more than 200 m from the street's TIGER line). Dune Drive's TIGER
+# line turns north into the sand at 46 while the real road runs west: the
+# tax roll lists 87-143 Dune Drive, each on its own lot, 190-440 m from
+# TIGER, and all were "missed".
+ASSESSOR_ANY_BUILDING = True
+
+LOT_BUILDINGS_SQL = """
+SELECT bp.source_id, s.sqmeters, ST_Y(s.inner_point), ST_X(s.inner_point)
+FROM address_inference.building_parcels bp
+JOIN address_inference.parcels p ON p.parcel_id = bp.parcel_id AND p.state_fips = bp.state_fips
+JOIN address_inference.structures s ON s.state_fips = bp.state_fips AND s.source_id = bp.source_id
+WHERE bp.state_fips = %(state_fips)s AND p.town = %(town)s
+"""
+
+
+def load_lot_buildings(dsn, region, town) -> dict:
+    """{source_id: (outline m2, lat, lon)} for every building on a tax lot in town."""
+    with psycopg.connect(dsn) as conn:
+        if conn.execute("SELECT to_regclass('address_inference.building_parcels') IS NULL").fetchone()[0]:
+            return {}
+        return {sid: (m2, lat, lon) for sid, m2, lat, lon in conn.execute(
+            LOT_BUILDINGS_SQL, {"state_fips": region.state_fips, "town": town}).fetchall()}
+
+
 def assessor_picks(address_df, lot_addresses, parcel_of, size_of, fallback, roof_of=None, positions=None,
                    scored_df=None, lane_neighbors=None):
     """(picks, matched): each address whose number and street the assessor
