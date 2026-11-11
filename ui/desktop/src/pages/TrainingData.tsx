@@ -53,6 +53,7 @@ const METHOD_LABELS: Record<TrainingMethod, string> = {
   pattern: 'Pattern (dead ends): park / townhouse / rural',
   pattern_pairs: 'Pattern + pairs across the road (dead ends)',
   pattern_ml: 'Pattern + ML membership (dead ends)',
+  rural_shapes: 'Rural shapes: drive the road, no tax roll',
 };
 const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   ml_order: 'ml',
@@ -72,6 +73,27 @@ const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   pattern: 'assessor',
   pattern_pairs: 'assessor',
   pattern_ml: 'assessor',
+  // compared against ML + road order: neither uses the tax roll
+  rural_shapes: 'ml_order',
+};
+// Rural shapes (data/session_2026-11-11_pownal/rural_shapes.py): what decided each number.
+const ROAD_SHAPE_LABEL: Record<string, string> = {
+  distance: 'numbered by distance from the road start',
+  shifted: 'numbered by distance, start slid to fit',
+  pieces: 'fork: each piece its own start',
+  sequential: 'not by distance: ML + road order',
+  park: "dead-end park: owner's drive rule",
+  'no TIGER': 'no TIGER line: ML + road order',
+};
+const HOUSE_SHAPE_LABEL: Record<string, string> = {
+  house: 'the one house on its lot at the spot',
+  farm: 'farm lot: the biggest roof, barns skipped',
+  lane: 'house far back: where its driveway meets the road',
+  second: 'second house on a nearby lot',
+  ml: "nothing at the spot: ML + road order's pick",
+  estimated: 'no house: point estimated at the spot, set back like the neighbors',
+  unplaced: 'not placed',
+  park: "park street: owner's drive rule",
 };
 const isAssessorMethod = (m: TrainingMethod) => m.startsWith('assessor');
 const isOrderMethod = (m: TrainingMethod) => BASE_METHOD[m] !== m;
@@ -761,12 +783,20 @@ export default function TrainingData() {
               <div>{describe(selected)}</div>
               {isOrderMethod(data.method) && (
                 <div style={{ fontSize: 13, marginTop: 4 }}>
-                  {selected.changedFromMl
+                  {selected.changedFromMl && data.method === 'rural_shapes'
+                    ? `Rural shapes changed the pick. ML + road order instead: ${STATUS_LABELS[selected.mlStatus].toLowerCase()}.`
+                    : selected.changedFromMl
                     ? `${isPatternMethod(data.method) ? "The street's pattern" : isAssessorMethod(data.method) ? "The assessor's lot address" : 'Road order'} changed the pick. With the tax roll everywhere instead: ${STATUS_LABELS[selected.mlStatus].toLowerCase()}.`
                     : 'Same pick as ML alone.'}
                 </div>
               )}
-              {selected.pattern && (
+              {data.method === 'rural_shapes' && selected.roadShape && (
+                <div style={{ fontSize: 13, marginTop: 4 }}>
+                  Road shape: <strong>{ROAD_SHAPE_LABEL[selected.roadShape] ?? selected.roadShape}</strong>. House shape:{' '}
+                  <strong>{HOUSE_SHAPE_LABEL[selected.houseShape ?? ''] ?? selected.houseShape}</strong>.
+                </div>
+              )}
+              {selected.pattern && data.method !== 'rural_shapes' && (
                 <div style={{ fontSize: 13, marginTop: 4 }}>
                   <Swatch color={PATTERNS.find((p) => p.pattern === selected.pattern)!.color} square />
                   {selected.street} is a {PATTERN_LABEL[selected.pattern]} street, numbered by{' '}

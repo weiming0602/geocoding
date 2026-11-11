@@ -559,6 +559,11 @@ export type TrainingAddress = {
   // (address_inference/patterns.py); null where it wasn't run.
   pattern?: 'park' | 'townhouse' | 'rural' | null;
   patternMethod?: 'drive_rule' | 'ml_order' | 'assessor' | null;
+  // Rural shapes method only: the road shape (distance / shifted / pieces /
+  // sequential / park) and house shape (house / farm / lane / second / ml /
+  // estimated / unplaced) that decided this number.
+  roadShape?: string | null;
+  houseShape?: string | null;
   // What the ranker alone did -- differs from status/pickedBuilding only
   // for method 'ml_order', where road order may have changed the pick.
   mlStatus: TrainingStatus;
@@ -585,7 +590,9 @@ export type TrainingMethod =
   // dead-end streets only, each by its pattern (address_inference/patterns.py)
   | 'pattern'
   | 'pattern_pairs'
-  | 'pattern_ml';
+  | 'pattern_ml'
+  // every street, no tax roll: drive the road by Maine's distance numbering
+  | 'rural_shapes';
 
 export type TrainingTown = { region: string; town: string; runDate: string; addresses: number };
 
