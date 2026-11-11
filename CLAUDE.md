@@ -95,7 +95,50 @@ read-write).
   address_inference.canopy me --town Freeport "dbname=geocoding" [more
   DSNs]` (~1 min) measures trees over each building's outline from the same
   imagery; road order never calls a building 20%+ under trees a shed (as
-  model inputs these measures cost points, so they aren't).
+  model inputs these measures cost points, so they aren't). `python -m
+  address_inference.lidar me --town Freeport "dbname=geocoding" [more
+  DSNs]` finds each building's whole roof (area, height) in USGS 3DEP lidar
+  read from AWS Open Data (public domain, DATA_SOURCES.md §8; cached in
+  `data/lidar/`, finished tiles in `data/lidar/tiles/` -- delete that folder
+  after changing the measurement; ~1 h for Freeport, wrap long runs in
+  `systemd-inhibit --what=sleep:idle` or the laptop suspends mid-run).
+  `dataset.LIDAR_SIZE` (size everywhere) is off: it loses 1.5-1.8 points.
+  `order.WITHIN_LOT = "lidar"` is on by the owner's call (imagery first): a
+  lot's number goes to its biggest lidar roof, fixing 42 Flying Point Road;
+  Freeport TIGER 53.3%, E911 roads 66.4%. Driveways continue a straight visible piece under trees
+  (`driveways.HIDDEN_REACH_M`, owner's rule; Freeport neutral). `python -m
+  address_inference.suggest me --town Freeport "dbname=geocoding" --save`
+  suggests numbers for houses E911 never numbered (44 Flying Point Road:
+  second house on 42's lot, suggested 44 between 42 and 48): residential,
+  house-sized lidar roof, on a lot with no E911 point or a second house on a
+  numbered lot; the free number of its side's parity nearest to where it
+  falls between its neighbors (TIGER streets + public E911 points only).
+  Leave-one-out on Freeport's numbered houses: 43.5% exact number. Saved to
+  `address_inference.suggested_numbers`; the Training data map shows them
+  as blue dots, never as E911. Lot first (owner's rule): a house's place along
+  the street is kept inside its tax lot's frontage, in suggest (44.1% vs
+  43.5% exact) and road order (`order.BY_LOT = "within"`, Freeport neutral). The assessor's lot
+  address (`parcels.prop_loc`, never a model input) is scored as its own
+  mode, saved as method `assessor` (`assessor_e911roads` when copied from
+  the E911-roads DB): the biggest building on the lot with the same number
+  and street, else ML + road order -- Freeport TIGER 53.3% -> 80.3%, E911
+  roads 66.4% -> 83.9% right building. Tax-roll spellings are normalized in
+  `order.parse_prop_loc` (LWR -> LOWER, trailing SF -> SOUTH, units dropped). A lot
+  with several numbers on one street gives them to that many of its houses,
+  in order along the street (`order.SPREAD_WITHIN_LOT`; 57/59 Lower Mast
+  Landing Road; Freeport neutral, E911 roads ML + road order -0.4). In
+  assessor mode the tax roll's pinned numbers are anchors: a number it
+  doesn't list stays between the pinned lots around it (`order.ANCHORED`;
+  fixed 51/57/59 Lower Mast Landing on E911 roads; TIGER 80.5%, E911 roads
+  83.9%). Charging road order for unplaced numbers (`order.SKIP_SCORE`)
+  instead cost 3-5 points, so it's off. Road order skips buildings on a lot the tax roll
+  addresses on another street (`order.OTHER_STREET_LOTS`, owner's rule; only
+  the tax roll's street names, never its numbers): ML + road order TIGER
+  53.3% -> 55.8%, E911 roads 66.0% -> 67.8%. The tax roll's lot wins
+  wherever it is (`order.ASSESSOR_ANY_BUILDING`): a matched lot gives its
+  biggest building even when TIGER draws the street too far away for it to be
+  a candidate (Dune Drive's TIGER line turns into the sand; 87-143 were
+  "missed"): assessor TIGER 80.5% -> 82.2%, E911 roads 83.7% -> 83.8%.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

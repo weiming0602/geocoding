@@ -23,15 +23,29 @@ const UNDEFINED_TABLE = '42P01';
 // *_e911roads: Maine E911 road centerlines instead of TIGER (a RESTRICTED
 // source -- loaded by the owner for internal verification only; this
 // owner-only page is the only place it shows).
+// assessor / assessor_e911roads: each address takes the biggest building on
+// the tax lot whose assessor address (parcels.prop_loc) is the same number
+// and street, else ML + road order's pick -- compared against ML + road order.
+// pattern: dead-end streets only, each numbered by its kind of place
+// (python -m address_inference.patterns): parks by the owner's drive rule,
+// townhouse complexes by ML + road order, rural streets by the tax roll --
+// compared against the tax roll everywhere (assessor).
 const METHODS = [
   'ml_order', 'ml',
+  'assessor', 'assessor_e911roads',
+  'pattern', 'pattern_pairs', 'pattern_ml',
   'ml_order_e911roads', 'ml_e911roads',
   'ml_order_auto', 'ml_auto',
   'ml_order_list', 'ml_list',
   'ml_order_ranges', 'ml_ranges',
 ];
 // What "changed by road order" compares each method against.
-const BASE_METHOD = Object.fromEntries(METHODS.map((m) => [m, m.replace('ml_order', 'ml')]));
+const BASE_METHOD = Object.fromEntries(
+  METHODS.map((m) => [
+    m,
+    m.startsWith('pattern') ? 'assessor' : m.startsWith('assessor') ? m.replace('assessor', 'ml_order') : m.replace('ml_order', 'ml'),
+  ])
+);
 
 async function listReviewTowns(db) {
   const { rows } = await db.query(
@@ -64,12 +78,38 @@ async function getAddressInferenceReview(db, town, method) {
     const details = has_details
       ? 'LEFT JOIN address_inference.e911_point_details d ON d.site_uid = p.address_id'
       : 'LEFT JOIN (SELECT NULL::text AS site_uid, NULL::text AS unit, NULL::text AS placement) d ON false';
+    // Tables saved before evaluate.py added tax_roll lack the column.
+    const { rows: [{ has_tax_roll }] } = await db.query(
+      `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'address_inference'
+         AND table_name = 'ml_predictions' AND column_name = 'tax_roll') AS has_tax_roll`
+    );
+    const taxRoll = has_tax_roll ? 'p.tax_roll' : 'NULL::boolean';
+    // Each street's pattern (python -m address_inference.patterns), when run.
+    const { rows: [{ has_patterns }] } = await db.query(
+      "SELECT to_regclass('address_inference.street_patterns') IS NOT NULL AS has_patterns"
+    );
+    // One set of street patterns per rule (pattern = the plain drive rule,
+    // pattern_<rule> otherwise); tables from before the rule column are plain.
+    const { rows: [{ has_rule }] } = has_patterns
+      ? await db.query(
+          `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'address_inference'
+             AND table_name = 'street_patterns' AND column_name = 'rule') AS has_rule`
+        )
+      : { rows: [{ has_rule: false }] };
+    const rule = selectedMethod === 'pattern' || !selectedMethod.startsWith('pattern_') ? 'plain' : selectedMethod.slice('pattern_'.length);
+    const patterns = has_patterns
+      ? `LEFT JOIN address_inference.street_patterns sp
+           ON sp.region_id = p.region_id AND sp.town = p.town AND sp.street = p.street
+          ${has_rule ? `AND sp.rule = '${rule.replace(/[^a-z_]/g, '')}'` : ''}`
+      : 'LEFT JOIN (SELECT NULL::text AS pattern, NULL::text AS method) sp ON false';
     const { rows } = await db.query(
       `SELECT p.address_id, p.address_number, p.street, p.e911_lat, p.e911_lon, p.m0_lat, p.m0_lon,
-              p.true_building, p.picked_building, p.picked_lat, p.picked_lon, p.error_m, p.status, p.candidates,
-              base.status AS ml_status, base.picked_building AS ml_pick, d.unit, d.placement
+              p.true_building, p.picked_building, p.picked_lat, p.picked_lon, p.error_m, p.status, p.candidates, ${taxRoll} AS tax_roll,
+              base.status AS ml_status, base.picked_building AS ml_pick, d.unit, d.placement,
+              sp.pattern, sp.method AS pattern_method
        FROM address_inference.ml_predictions p
        ${details}
+       ${patterns}
        LEFT JOIN address_inference.ml_predictions base
          ON base.region_id = p.region_id AND base.town = p.town AND base.method = $4
         AND base.address_id = p.address_id
@@ -91,6 +131,39 @@ async function getAddressInferenceReview(db, town, method) {
        WHERE s.geom && ST_SetSRID(bbox.g, 4326)`,
       [selected.region, selected.town, selectedMethod]
     );
+
+    // Numbers suggested for houses E911 never numbered (python -m
+    // address_inference.suggest ... --save): a suggestion, never E911.
+    const { rows: [{ has_suggestions }] } = await db.query(
+      "SELECT to_regclass('address_inference.suggested_numbers') IS NOT NULL AS has_suggestions"
+    );
+    const { rows: suggestions } = has_suggestions
+      ? await db.query(
+          `SELECT source_id, street, number, tier, before_number, after_number, reason, lat, lon
+           FROM address_inference.suggested_numbers WHERE region_id = $1 AND town = $2
+           ORDER BY street, number NULLS LAST, source_id`,
+          [selected.region, selected.town]
+        )
+      : { rows: [] };
+
+    // Tax lots around the same addresses (python -m address_inference.parcels):
+    // outlines with the tax roll's address, so a pick can be checked against
+    // the lot it sits on.
+    const { rows: [{ has_parcels }] } = await db.query(
+      "SELECT to_regclass('address_inference.parcels') IS NOT NULL AS has_parcels"
+    );
+    const { rows: parcels } = has_parcels
+      ? await db.query(
+          `WITH bbox AS (
+             SELECT ST_SetSRID(ST_Expand(ST_Extent(ST_MakePoint(e911_lon, e911_lat))::geometry, 0.002), 4326) AS g
+             FROM address_inference.ml_predictions WHERE region_id = $1 AND town = $2 AND method = $3
+           )
+           SELECT p.parcel_id, p.map_bk_lot, p.prop_loc, p.updated, ST_AsGeoJSON(p.geom, 6) AS geojson
+           FROM address_inference.parcels p, bbox
+           WHERE p.geom && bbox.g`,
+          [selected.region, selected.town, selectedMethod]
+        )
+      : { rows: [] };
 
     const summary = {};
     for (const r of rows) summary[r.status] = (summary[r.status] ?? 0) + 1;
@@ -118,9 +191,35 @@ async function getAddressInferenceReview(db, town, method) {
         errorMeters: Math.round(r.error_m),
         status: r.status,
         candidates: r.candidates,
+        // Assessor methods: true = the tax roll pinned this number to a lot,
+        // false = it fell back to ML + road order. null for other methods.
+        taxRoll: r.tax_roll ?? null,
+        // The street's pattern (park / townhouse / rural) and the method it
+        // was numbered with, from address_inference.patterns; null if not run.
+        pattern: r.pattern ?? null,
+        patternMethod: r.pattern_method ?? null,
         mlStatus: r.ml_status ?? r.status,
         changedFromMl: r.ml_pick !== null && r.ml_pick !== undefined && r.ml_pick !== r.picked_building,
       })),
+      suggestions: suggestions.map((r) => ({
+        building: r.source_id,
+        street: r.street,
+        number: r.number,
+        tier: r.tier,
+        before: r.before_number,
+        after: r.after_number,
+        reason: r.reason,
+        latitude: r.lat,
+        longitude: r.lon,
+      })),
+      parcels: {
+        type: 'FeatureCollection',
+        features: parcels.map((p) => ({
+          type: 'Feature',
+          geometry: JSON.parse(p.geojson),
+          properties: { id: p.parcel_id, lot: p.map_bk_lot, address: p.prop_loc, updated: p.updated },
+        })),
+      },
       buildings: {
         type: 'FeatureCollection',
         features: buildings.map((b) => ({

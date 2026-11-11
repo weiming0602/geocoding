@@ -77,18 +77,27 @@ def cross_validated_picks(candidate_df):
     return top_picks(scored), importance
 
 
-def score_method(address_df, candidate_df, picks, property_of=None):
+def _coords(candidate_df, extra_coords=None):
+    """{source_id: (lat, lon)}: the candidates', plus buildings picked from
+    outside the candidate set (order.ASSESSOR_ANY_BUILDING)."""
+    out = dict(extra_coords or {})
+    df = candidate_df.drop_duplicates("source_id")
+    out.update(zip(df["source_id"], zip(df["lat"], df["lon"])))
+    return out
+
+
+def score_method(address_df, candidate_df, picks, property_of=None, extra_coords=None):
     """Error (m), right-building and right-property flags per scorable
     address. An address with no pick (no candidate buildings) falls back to
     its M0 point. Right property: the pick is the E911 building or another
     building of the same small group (order.load_properties) -- a house's
     barn or garage."""
     prop = (lambda b: property_of.get(b, b)) if property_of else (lambda b: b)
-    coords = candidate_df.drop_duplicates("source_id").set_index("source_id")[["lat", "lon"]]
+    coords = _coords(candidate_df, extra_coords)
     rows = []
     for a in address_df[address_df["scorable"]].itertuples():
         pick = picks.get(a.id) if picks is not None else None
-        lat, lon = (coords.at[pick, "lat"], coords.at[pick, "lon"]) if pick is not None else (a.m0_lat, a.m0_lon)
+        lat, lon = coords[pick] if pick is not None else (a.m0_lat, a.m0_lon)
         rows.append({
             "street": a.street, "number": a.number,
             "error_m": float(dataset.haversine_m(a.true_lat, a.true_lon, lat, lon)),
@@ -161,12 +170,16 @@ CREATE TABLE IF NOT EXISTS address_inference.ml_predictions (
     status TEXT NOT NULL,
     candidates INTEGER NOT NULL,
     run_date DATE NOT NULL,
+    -- assessor methods only: the tax roll pinned this number to a lot with
+    -- a candidate building (else it fell back to ML + road order). NULL for
+    -- every other method.
+    tax_roll BOOLEAN,
     PRIMARY KEY (region_id, town, method, address_id)
 )
 """
 
 # Saved methods: the ranker alone, and the ranker + road order (order.py).
-SAVED_METHODS = {"ML": "ml", "ML+order": "ml_order"}
+SAVED_METHODS = {"ML": "ml", "ML+order": "ml_order", "assessor": "assessor"}
 
 STATUSES = ("right", "wrong", "missed", "no_building")
 
@@ -183,14 +196,16 @@ def prediction_status(true_building, pick, true_in_candidates):
     return "wrong" if true_in_candidates else "missed"
 
 
-def prediction_rows(region_id, town, method, address_df, candidate_df, picks, run_date):
-    coords = candidate_df.drop_duplicates("source_id").set_index("source_id")[["lat", "lon"]]
+def prediction_rows(region_id, town, method, address_df, candidate_df, picks, run_date, tax_roll=None,
+                    extra_coords=None):
+    """tax_roll: the address ids the tax roll pinned (assessor methods), else None."""
+    coords = _coords(candidate_df, extra_coords)
     counts = candidate_df.groupby("address_id").size()
     in_candidates = set(candidate_df.loc[candidate_df["label"] == 1, "address_id"])
     rows = []
     for a in address_df[address_df["scorable"]].itertuples():
         pick = picks.get(a.id)
-        lat, lon = (coords.at[pick, "lat"], coords.at[pick, "lon"]) if pick is not None else (a.m0_lat, a.m0_lon)
+        lat, lon = coords[pick] if pick is not None else (a.m0_lat, a.m0_lon)
         true_building = a.true_building if isinstance(a.true_building, str) else None
         rows.append((
             region_id, town, method, a.id, int(a.number), a.street, float(a.true_lat), float(a.true_lon),
@@ -199,6 +214,7 @@ def prediction_rows(region_id, town, method, address_df, candidate_df, picks, ru
             float(dataset.haversine_m(a.true_lat, a.true_lon, lat, lon)),
             prediction_status(true_building, pick, a.id in in_candidates),
             int(counts.get(a.id, 0)), run_date,
+            (a.id in tax_roll) if tax_roll is not None else None,
         ))
     return rows
 
@@ -213,12 +229,13 @@ def save_predictions(dsn, region_id, town, rows, methods):
         if not has_method:
             conn.execute("DROP TABLE IF EXISTS address_inference.ml_predictions")
         conn.execute(CREATE_PREDICTIONS_SQL)
+        conn.execute("ALTER TABLE address_inference.ml_predictions ADD COLUMN IF NOT EXISTS tax_roll BOOLEAN")
         conn.execute("DELETE FROM address_inference.ml_predictions WHERE region_id = %s AND town = %s "
                      "AND method = ANY(%s)", (region_id, town, methods))
         with conn.cursor() as cur:
             cur.executemany(
                 "INSERT INTO address_inference.ml_predictions VALUES "
-                "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 rows,
             )
 
@@ -241,11 +258,29 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     if parcels:
         # Each ordinary multi-building tax lot is one place along the road.
         parcel_of = {sid: info["parcel"] for sid, info in parcels["buildings"].items()}
+        lot_addresses = order.load_lot_addresses(dsn, region, town)
+        # Only the tax roll's street names (order.OTHER_STREET_LOTS), never its numbers.
         picks["ML+order"] = order.lot_picks(address_df, scored, positions, picks["ML"], parcel_of,
-                                            street_order=street_order)
+                                            street_order=street_order, roof_of=order.load_roofs(dsn),
+                                            streets_of_lot=order.lot_streets(lot_addresses))
     else:
         picks["ML+order"] = order.order_constrained_picks(address_df, scored, positions, picks["ML"],
                                                           street_order=street_order)
+    assessor_matched = set()
+    extra_coords = None
+    if parcels:
+        # The assessor's own address for each lot, scored on its own (never a
+        # model input): the lot's biggest building, else ML + road order.
+        size_of = candidate_df.drop_duplicates("source_id").set_index("source_id")["sqmeters"].to_dict()
+        if order.ASSESSOR_ANY_BUILDING:
+            lot_buildings = order.load_lot_buildings(dsn, region, town)
+            extra_coords = {sid: (lat, lon) for sid, (_m2, lat, lon) in lot_buildings.items()}
+            size_of = {**{sid: m2 for sid, (m2, _lat, _lon) in lot_buildings.items()}, **size_of}
+        lane_neighbors = (order.load_lane_neighbors(dsn, region, lot_addresses)
+                          if order.SHIFT_RUN_MIN and order.SHIFT_NEAR_LANE else None)
+        picks["assessor"], assessor_matched = order.assessor_picks(
+            address_df, lot_addresses, parcel_of, size_of, picks["ML+order"],
+            roof_of=order.load_roofs(dsn), positions=positions, scored_df=scored, lane_neighbors=lane_neighbors)
 
     property_of = order.load_properties(
         dsn, region, set(candidate_df["source_id"]) | set(address_df["true_building"].dropna()))
@@ -256,8 +291,16 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     table = [summarize("M0 interpolation (today)", score_method(address_df, candidate_df, None, property_of))]
     for name, label in (("M1", "M1 snap to building"), ("M2", "M2 rank order"),
                         ("M3", "M3 rank order, no outbuildings"), ("ML", "ML ranker (LightGBM)"),
-                        ("ML+order", "ML + road order (one-to-one)")):
-        table.append(summarize(label, score_method(address_df, candidate_df, picks[name], property_of)))
+                        ("ML+order", "ML + road order (one-to-one)"),
+                        ("assessor", "Assessor's lot address, else ML + road order")):
+        if name in picks:
+            table.append(summarize(label, score_method(address_df, candidate_df, picks[name], property_of, extra_coords)))
+    if assessor_matched:
+        # The same comparison on just the addresses the assessor has a lot for.
+        on = address_df[address_df["id"].isin(assessor_matched)]
+        for name, label in (("ML+order", "  on assessor-matched addresses: ML + road order"),
+                            ("assessor", "  on assessor-matched addresses: assessor's lot")):
+            table.append(summarize(label, score_method(on, candidate_df, picks[name], property_of, extra_coords)))
 
     coverage = {
         "E911 addresses on matched streets": len(address_df),
@@ -265,13 +308,17 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
         "  with a true building within 30 m": int(with_truth.sum()),
         "  true building among the candidates (ceiling for right-building %)": len(in_candidates),
         "candidate rows": len(candidate_df),
+        "  scorable with an assessor lot of the same number and street": int(
+            address_df["scorable"][address_df["id"].isin(assessor_matched)].sum()),
     }
     if save:
         rows = []
         suffix = "" if ranges == "tiger" else f"_{ranges}"
-        for name, method in SAVED_METHODS.items():
-            rows += prediction_rows(region.id, town, method + suffix, address_df, candidate_df, picks[name], date.today())
-        save_predictions(dsn, region.id, town, rows, [m + suffix for m in SAVED_METHODS.values()])
+        saved = {name: method for name, method in SAVED_METHODS.items() if name in picks}
+        for name, method in saved.items():
+            rows += prediction_rows(region.id, town, method + suffix, address_df, candidate_df, picks[name], date.today(),
+                                    tax_roll=assessor_matched if name == "assessor" else None, extra_coords=extra_coords)
+        save_predictions(dsn, region.id, town, rows, [m + suffix for m in saved.values()])
     return pd.DataFrame(table), coverage, importance
 
 

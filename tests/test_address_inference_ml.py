@@ -140,6 +140,29 @@ def test_prediction_rows_record_the_pick_and_its_error():
     assert row[2:6] == ("ml", "e1", 51, "MAIN STREET")
     assert row[10:12] == ("h2", "h1") and row[15] == "wrong" and row[16] == 5
     assert row[14] == pytest.approx(240, abs=5)  # h1 sits ~0.003 deg west of the E911 point
+    assert row[18] is None  # tax_roll: only assessor methods carry it
+
+
+def test_a_pick_outside_the_candidates_is_located_by_extra_coords():
+    # order.ASSESSOR_ANY_BUILDING: the tax roll's lot can hold a building too
+    # far from the street's TIGER line to be a candidate (Dune Drive).
+    from datetime import date
+    address_df, cand = build_one(51, "h2")
+    (row,) = evaluate.prediction_rows("me", "Freeport", "assessor", address_df, cand, {"e1": "far"},
+                                      date(2026, 11, 10), tax_roll={"e1"}, extra_coords={"far": (43.86, -70.10)})
+    assert row[11] == "far" and row[12:14] == (43.86, -70.10)
+    scored = evaluate.score_method(address_df, cand, {"e1": "far"}, extra_coords={"far": (43.86, -70.10)})
+    assert len(scored) == 1 and not scored["right_building"].iloc[0]
+
+
+def test_prediction_rows_flag_the_numbers_the_tax_roll_pinned():
+    from datetime import date
+    address_df, cand = build_one(51, "h2")
+    (pinned,) = evaluate.prediction_rows("me", "Freeport", "assessor", address_df, cand, {"e1": "h2"},
+                                         date(2026, 11, 9), tax_roll={"e1"})
+    (fallback,) = evaluate.prediction_rows("me", "Freeport", "assessor", address_df, cand, {"e1": "h1"},
+                                           date(2026, 11, 9), tax_roll=set())
+    assert pinned[18] is True and fallback[18] is False
 
 
 # --- road order (order.py) ------------------------------------------------------
@@ -544,3 +567,101 @@ def test_a_tree_covered_building_is_never_a_shed():
     rows[0] = ("a42", "thin", 2.0, True, 2, 0.15, 0.0, 0.0)  # clear roof: a shed
     picks = order.order_constrained_picks(address_df, pd.DataFrame(rows, columns=cols), positions, {})
     assert picks["a42"] == "big"
+
+
+def test_the_lidar_roof_picks_a_lots_house_when_its_outline_was_cut_short_by_trees(monkeypatch):
+    from address_inference import order
+    # 42's lot: the ranker prefers the 186 m2 outline at the back; the
+    # house's outline is a 78 m2 strip under trees, but lidar sees a 177 m2
+    # roof there and only 135 m2 at the back.
+    address_df = pd.DataFrame([{"id": "a42", "number": 42, "street": "FP", "scorable": True}])
+    positions = {("FP", "house"): 10.0, ("FP", "back"): 12.0}
+    cols = ["address_id", "source_id", "score", "same_side", "sqmeters"]
+    rows = pd.DataFrame([("a42", "house", 1.0, True, 78.0), ("a42", "back", 2.0, True, 186.0)], columns=cols)
+    parcel_of = {"house": "L42", "back": "L42"}
+    roof_of = {"house": (177.0, 6.0), "back": (135.0, 4.0)}
+    monkeypatch.setattr(order, "WITHIN_LOT", None)
+    assert order.lot_picks(address_df, rows, positions, {}, parcel_of, roof_of=roof_of) == {"a42": "back"}
+    monkeypatch.setattr(order, "WITHIN_LOT", "lidar")
+    assert order.lot_picks(address_df, rows, positions, {}, parcel_of, roof_of=roof_of) == {"a42": "house"}
+    # no lidar roof seen: the outline decides
+    assert order.lot_picks(address_df, rows, positions, {}, parcel_of, roof_of={}) == {"a42": "back"}
+
+
+def test_the_assessor_lot_address_picks_the_lots_biggest_building():
+    import pandas as pd
+    from address_inference import order
+    assert order.parse_prop_loc("21 CARRIAGE ROAD") == (21, "CARRIAGE RD")
+    assert order.parse_prop_loc("0 CARRIAGE ROAD") is None
+    # tax-roll spellings
+    assert order.parse_prop_loc("47 LWR MAST LANDING ROAD") == (47, "LOWER MAST LNDG RD")
+    assert order.parse_prop_loc("10 MAIN STREET SF") == (10, "MAIN ST S")
+    assert order.parse_prop_loc("5 DESERT RD #UNIT 2") == (5, "DESERT RD")
+    address_df = pd.DataFrame([{"id": "a21", "number": 21, "street": "CARRIAGE ROAD"},
+                               {"id": "a17", "number": 17, "street": "CARRIAGE ROAD"}])
+    lots = {(21, "CARRIAGE RD"): ["lot24"]}
+    parcel_of = {"house": "lot24", "barn": "lot24", "other": "lot26"}
+    size_of = {"house": 150, "barn": 200, "other": 120}
+    roof_of = {"house": (260, 7.0), "barn": (190, 5.0)}   # trees hid half the house's outline
+    picks, matched = order.assessor_picks(address_df, lots, parcel_of, size_of, {"a21": "other", "a17": "other"},
+                                          roof_of=roof_of)
+    assert picks == {"a21": "house", "a17": "other"} and matched == {"a21"}
+
+
+def test_a_lot_with_two_numbers_gives_one_to_each_house_in_road_order():
+    # 57 and 59 Lower Mast Landing Road: two houses on one tax lot; the
+    # biggest-roof rule put both numbers on 57's (bigger) house.
+    import pandas as pd
+    from address_inference import order
+    address_df = pd.DataFrame([{"id": "a51", "number": 51, "street": "LML"},
+                               {"id": "a57", "number": 57, "street": "LML"},
+                               {"id": "a59", "number": 59, "street": "LML"},
+                               {"id": "a63", "number": 63, "street": "LML"}])
+    parcel_of = {"h51": "C", "big": "D", "small": "D", "shed": "D", "h63": "B"}
+    size_of = {"h51": 60, "big": 133, "small": 70, "shed": 12, "h63": 100}
+    positions = {("LML", "h51"): 100.0, ("LML", "big"): 160.0, ("LML", "small"): 190.0,
+                 ("LML", "shed"): 175.0, ("LML", "h63"): 240.0}
+    picks = {"a51": "h51", "a57": "big", "a59": "big", "a63": "h63"}
+    out = order.spread_within_lots(picks, address_df, parcel_of, size_of, positions)
+    assert out == {"a51": "h51", "a57": "big", "a59": "small", "a63": "h63"}
+
+
+def test_a_number_the_tax_roll_lacks_stays_between_its_pinned_neighbors():
+    # E911 roads, Lower Mast Landing Road: the tax roll pins 51 (lot C) and
+    # 59 (lot D, two houses); road order had shifted 57 onto 51's house.
+    import pandas as pd
+    from address_inference import order
+    address_df = pd.DataFrame([{"id": f"a{n}", "number": n, "street": "LML"} for n in (51, 57, 59)])
+    parcel_of = {"h51": "C", "shed": "C", "h57": "D", "h59": "D"}
+    positions = {("LML", "shed"): 811.0, ("LML", "h51"): 826.0, ("LML", "h57"): 898.0, ("LML", "h59"): 929.0}
+    scored = pd.DataFrame([
+        {"address_id": "a57", "source_id": "h51", "score": 2.0, "same_side": True},
+        {"address_id": "a57", "source_id": "h59", "score": 0.5, "same_side": True},
+        {"address_id": "a57", "source_id": "shed", "score": -3.0, "same_side": True},
+    ])
+    picks = {"a51": "h51", "a57": "h51", "a59": "h57"}
+    out = order.anchored_fill(picks, {"a51", "a59"}, address_df, scored, positions, parcel_of)
+    assert out["a57"] == "h59"
+    # then the lot's two numbers go to its two houses in road order
+    sizes = {"h51": 105, "shed": 44, "h57": 202, "h59": 81}
+    out = order.spread_within_lots(out, address_df, parcel_of, sizes, positions)
+    assert out == {"a51": "h51", "a57": "h57", "a59": "h59"}
+
+
+def test_a_tax_roll_one_house_off_is_found_as_a_shifted_run():
+    import pandas as pd
+    from address_inference import order
+    # Curtis Road: the tax lots of 18..26 each hold the house road order gives the number before
+    a = pd.DataFrame({"id": ["a16", "a18", "a20", "a22", "a26"], "number": [16, 18, 20, 22, 26],
+                      "street": ["CURTIS ROAD"] * 5})
+    road = {"a16": "h16", "a18": "h18", "a20": "h20", "a22": "h22", "a26": "h26"}
+    lot = {"a16": "h16", "a18": "hD", "a20": "h18", "a22": "h20", "a26": "h22"}
+    matched = set(a["id"])
+    assert order.shifted_runs(lot, matched, a, road, 3) == {"a18", "a20", "a22", "a26"}
+    assert order.shifted_runs(lot, matched, a, road, 4) == set()
+
+
+def test_a_lot_the_tax_roll_puts_on_another_street_is_no_place_in_this_streets_order():
+    from address_inference import order
+    lots = {(18, "CURTIS RD"): ["C"], (2, "DIAMOND DR"): ["D"], (16, "CURTIS RD"): ["B"]}
+    assert order.lot_streets(lots) == {"C": {"CURTIS RD"}, "D": {"DIAMOND DR"}, "B": {"CURTIS RD"}}

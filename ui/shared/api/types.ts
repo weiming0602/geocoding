@@ -531,7 +531,9 @@ export type TransactionsResponse = {
 // another although the true one was a candidate; missed = the true
 // building was never a candidate; no_building = no footprint within 30 m
 // of the E911 point (no label).
-export type TrainingStatus = 'right' | 'wrong' | 'missed' | 'no_building';
+// estimated: a number with no house got an estimated point instead of a
+// building (address_inference/patterns.py: across from its partner).
+export type TrainingStatus = 'right' | 'wrong' | 'missed' | 'no_building' | 'estimated';
 
 export type TrainingAddress = {
   id: string;
@@ -549,6 +551,14 @@ export type TrainingAddress = {
   errorMeters: number;
   status: TrainingStatus;
   candidates: number;
+  // Assessor methods: true = the tax roll pinned this number to a tax lot;
+  // false = no tax-roll lot (with a building) for it, so it fell back to
+  // ML + road order. null for other methods (and older servers' rows).
+  taxRoll?: boolean | null;
+  // The street's pattern and the method it was numbered with
+  // (address_inference/patterns.py); null where it wasn't run.
+  pattern?: 'park' | 'townhouse' | 'rural' | null;
+  patternMethod?: 'drive_rule' | 'ml_order' | 'assessor' | null;
   // What the ranker alone did -- differs from status/pickedBuilding only
   // for method 'ml_order', where road order may have changed the pick.
   mlStatus: TrainingStatus;
@@ -569,9 +579,30 @@ export type TrainingMethod =
   | 'ml_list'
   | 'ml_order_list'
   | 'ml_ranges'
-  | 'ml_order_ranges';
+  | 'ml_order_ranges'
+  | 'assessor'
+  | 'assessor_e911roads'
+  // dead-end streets only, each by its pattern (address_inference/patterns.py)
+  | 'pattern'
+  | 'pattern_pairs'
+  | 'pattern_ml';
 
 export type TrainingTown = { region: string; town: string; runDate: string; addresses: number };
+
+// A number suggested for a house E911 never numbered (address_inference/
+// suggest.py): free numbers of its side's parity between its neighbors.
+// number is null when the neighbors leave no room (reason says why).
+export type SuggestedNumber = {
+  building: string;
+  street: string;
+  number: number | null;
+  tier: 'unnumbered lot' | 'second house';
+  before: number | null;
+  after: number | null;
+  reason: string;
+  latitude: number;
+  longitude: number;
+};
 
 export type AddressInferenceReviewResponse = {
   towns: TrainingTown[];
@@ -582,6 +613,17 @@ export type AddressInferenceReviewResponse = {
   methods: TrainingMethod[];
   summary: Partial<Record<TrainingStatus, number>>;
   addresses: TrainingAddress[];
+  // Absent from older servers.
+  suggestions?: SuggestedNumber[];
+  // Tax lots (the tax roll's address per lot); absent from older servers.
+  parcels?: {
+    type: 'FeatureCollection';
+    features: {
+      type: 'Feature';
+      geometry: { type: 'MultiPolygon' | 'Polygon'; coordinates: unknown };
+      properties: { id: string; lot: string | null; address: string | null; updated: string | null };
+    }[];
+  };
   buildings: {
     type: 'FeatureCollection';
     features: {
