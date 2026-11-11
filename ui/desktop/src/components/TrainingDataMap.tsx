@@ -17,6 +17,7 @@ export const STATUS_COLORS: Record<TrainingStatus, string> = {
   wrong: '#c0392b',
   missed: '#d68910',
   no_building: '#7f8c8d',
+  estimated: '#6c3483',
 };
 export const BUILDING_COLORS = {
   truth: '#2e7d4f', // the building E911 says the address is
@@ -156,6 +157,8 @@ export function describe(a: TrainingAddress): string {
       return `${where}: right building (${a.errorMeters} m from the E911 point)`;
     case 'wrong':
       return `${where}: wrong building, ${a.errorMeters} m from the E911 point (${a.candidates} candidates)`;
+    case 'estimated':
+      return `${where}: no house for this number; estimated across the road from its partner, ${a.errorMeters} m from the E911 point`;
     case 'missed':
       return `${where}: the E911 building was not among the ${a.candidates} candidates; ${a.errorMeters} m off`;
     default:
@@ -281,7 +284,8 @@ export default function TrainingDataMap({
         type: 'line',
         source: 'links',
         paint: {
-          'line-color': ['match', ['get', 'status'], 'wrong', STATUS_COLORS.wrong, 'missed', STATUS_COLORS.missed, STATUS_COLORS.no_building] as unknown as string,
+          'line-color': ['match', ['get', 'status'], 'wrong', STATUS_COLORS.wrong, 'missed', STATUS_COLORS.missed,
+            'estimated', STATUS_COLORS.estimated, STATUS_COLORS.no_building] as unknown as string,
           'line-width': 1.5,
           'line-dasharray': [2, 1.5],
           'line-opacity': 0.8,
@@ -315,6 +319,8 @@ export default function TrainingDataMap({
             STATUS_COLORS.wrong,
             'missed',
             STATUS_COLORS.missed,
+            'estimated',
+            STATUS_COLORS.estimated,
             STATUS_COLORS.no_building,
           ] as unknown as string,
           'circle-stroke-width': ['case', ['get', 'unlisted'], 3, 1] as unknown as number,

@@ -218,6 +218,52 @@ def slot_rule(numbers, houses, evens):
     return picks
 
 
+def across_from_partner(numbers, picks, house_point, line, evens):
+    """{number: EPSG:3857 Point} for each number with no house (owner's rule):
+    across the road from its partner's house -- odd n from n + 1, even n from
+    n - 1 (then the other neighbour) -- set back by its own side's usual
+    distance. Juniper Drive: 1 across from 2 lands 14 m from E911's 1, 3
+    across from 4 16 m from E911's 3 (no E911 input)."""
+    import statistics
+    from shapely.geometry import Point
+    sides = {0: evens, 1: "left" if evens == "right" else "right"}
+    setback = {}
+    for parity, side in sides.items():
+        ds = [line.distance(house_point[h]) for n, h in picks.items() if n % 2 == parity]
+        others = [line.distance(house_point[h]) for h in picks.values()]
+        setback[parity] = statistics.median(ds or others) if (ds or others) else None
+    out = {}
+    for n in numbers:
+        if n in picks or setback[n % 2] is None:
+            continue
+        partners = (n + 1, n - 1) if n % 2 else (n - 1, n + 1)
+        partner = next((m for m in partners if m in picks), None)
+        if partner is None:
+            continue
+        along = line.project(house_point[picks[partner]])
+        a, b = line.interpolate(max(along - 1, 0)), line.interpolate(min(along + 1, line.length))
+        dx, dy = b.x - a.x, b.y - a.y
+        norm = (dx * dx + dy * dy) ** 0.5 or 1.0
+        nx, ny = -dy / norm, dx / norm  # left of travel
+        if sides[n % 2] == "right":
+            nx, ny = -nx, -ny
+        o = line.interpolate(along)
+        out[n] = Point(o.x + nx * setback[n % 2], o.y + ny * setback[n % 2])
+    return out
+
+
+def to_lat_lon(p):
+    import math
+    lon = p.x * 180 / 20037508.34
+    lat = math.degrees(2 * math.atan(math.exp(p.y * math.pi / 20037508.34)) - math.pi / 2)
+    return lat, lon
+
+
+# Numbers a park street's drive rule leaves without a house get an estimated
+# point (across_from_partner), status 'estimated', scored by distance.
+ESTIMATE_MISSING = True
+
+
 def classify(houses, numbers, lot_of, lot_size):
     if not houses:
         return "rural", 0.0
@@ -381,14 +427,22 @@ def run(dsn, region, town, save=False, rule=None, all_dead_ends=False):
             picks = drive_rule(numbers, main_run(houses)[0] if rule == "cut" else houses, evens)
         else:
             picks = drive_rule(numbers, houses, evens)
+        estimates = {}
+        if picks is not None and ESTIMATE_MISSING:
+            estimates = across_from_partner(numbers, picks, {sid: p for sid, (near, p) in houses_of[street].items()},
+                                            line, evens)
         for r in preds["assessor" if method == "drive_rule" else method][street]:
             r = dict(r, method=saved_method, run_date=date.today())
             if picks is not None:
                 pick = picks.get(r["address_number"])
-                lat, lon = where[pick] if pick else (r["m0_lat"], r["m0_lon"])
-                r.update(picked_building=pick, picked_lat=lat if pick else None, picked_lon=lon if pick else None,
+                est = estimates.get(r["address_number"]) if pick is None else None
+                lat, lon = where[pick] if pick else to_lat_lon(est) if est is not None else (r["m0_lat"], r["m0_lon"])
+                r.update(picked_building=pick, picked_lat=lat if (pick or est is not None) else None,
+                         picked_lon=lon if (pick or est is not None) else None,
                          error_m=float(dataset.haversine_m(r["e911_lat"], r["e911_lon"], lat, lon)))
-                if r["true_building"] is None:
+                if est is not None:
+                    r["status"] = "estimated"
+                elif r["true_building"] is None:
                     r["status"] = "no_building"
                 elif pick == r["true_building"]:
                     r["status"] = "right"
@@ -405,8 +459,15 @@ def run(dsn, region, town, save=False, rule=None, all_dead_ends=False):
     by = defaultdict(int)
     for p in patterns:
         by[p[4]] += 1
-    juniper = sorted((r["address_number"], r["status"]) for r in rows if r["street"].startswith("JUNIPER"))
-    print("Juniper:", " ".join(f"{n}:{st}" for n, st in juniper))
+    juniper = sorted((r["address_number"], r["status"], r["error_m"]) for r in rows if r["street"].startswith("JUNIPER"))
+    print("Juniper:", " ".join(f"{n}:{st}" + (f"({e:.0f} m)" if st == "estimated" else "") for n, st, e in juniper))
+    est = {}
+    for r in rows:
+        if r["status"] == "estimated":
+            est[(r["street"], r["address_number"])] = min(est.get((r["street"], r["address_number"]), 1e9), r["error_m"])
+    if est:
+        print(f"  estimated points for numbers with no house: {len(est)}, within 25 m {sum(e <= 25 for e in est.values())}, "
+              f"within 50 m {sum(e <= 50 for e in est.values())}")
     park_numbers = {k for k in scored if any(p[3] == k[0] and p[4] == "park" for p in patterns)}
     pr = sum(1 for k in park_numbers if True in scored[k]["ok"])
     print(f"  park streets: {pr}/{len(park_numbers)} right")

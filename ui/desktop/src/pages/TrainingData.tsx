@@ -35,6 +35,7 @@ const STATUS_LABELS: Record<TrainingStatus, string> = {
   wrong: 'Wrong building',
   missed: 'True building not a candidate',
   no_building: 'No building at the E911 point',
+  estimated: 'Estimated point (no house)',
 };
 const METHOD_LABELS: Record<TrainingMethod, string> = {
   ml_order: 'ML + road order',
@@ -85,7 +86,7 @@ const PATTERN_METHOD_LABEL: Record<string, string> = {
   ml_order: 'ML + road order',
   assessor: "the tax roll's lot address, else ML + road order",
 };
-const STATUS_ORDER: TrainingStatus[] = ['wrong', 'missed', 'right', 'no_building'];
+const STATUS_ORDER: TrainingStatus[] = ['wrong', 'missed', 'right', 'no_building', 'estimated'];
 const LIST_LIMIT = 200;
 const SUGGESTION_KINDS: { kind: SuggestionKind; label: string }[] = [
   { kind: 'second', label: 'Second house on a numbered lot' },
@@ -149,7 +150,7 @@ export default function TrainingData() {
   const [data, setData] = useState<AddressInferenceReviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [visible, setVisible] = useState<Set<TrainingStatus>>(() => new Set(['wrong', 'missed']));
+  const [visible, setVisible] = useState<Set<TrainingStatus>>(() => new Set(['wrong', 'missed', 'estimated']));
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<TrainingAddress | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(true);
@@ -340,7 +341,20 @@ export default function TrainingData() {
       return base ? `${((100 * (sums[status] ?? 0)) / base).toFixed(1)}%` : '';
     };
   }, [data]);
-  const share = (status: TrainingStatus) => weightedShare(status);
+  const estimatedWithin = useMemo(() => {
+    const best = new Map<string, number>();
+    for (const a of data?.addresses ?? []) {
+      if (a.status !== 'estimated') continue;
+      const key = `${a.street}|${a.number}`;
+      best.set(key, Math.min(best.get(key) ?? Infinity, a.errorMeters));
+    }
+    const all = [...best.values()];
+    return { n: all.length, m25: all.filter((e) => e <= 25).length, m50: all.filter((e) => e <= 50).length };
+  }, [data]);
+  const share = (status: TrainingStatus) =>
+    status === 'estimated'
+      ? `${estimatedWithin.m25}/${estimatedWithin.n} within 25 m, ${estimatedWithin.m50} within 50 m`
+      : weightedShare(status);
 
   return (
     <div>
@@ -532,7 +546,7 @@ export default function TrainingData() {
               marginBottom: 'var(--space-4)',
             }}
           >
-            {STATUS_ORDER.map((status) => {
+            {STATUS_ORDER.filter((status) => status !== 'estimated' || (data.summary.estimated ?? 0) > 0).map((status) => {
               const n = data.summary[status] ?? 0;
               return (
                 <label
@@ -550,7 +564,8 @@ export default function TrainingData() {
                   <div style={{ fontFamily: 'var(--font-heading)', fontSize: 22, fontVariantNumeric: 'tabular-nums' }}>
                     {n.toLocaleString()}{' '}
                     <span className="text-muted" style={{ fontSize: 14 }}>
-                      {share(status)} of numbers
+                      {share(status)}
+                      {status === 'estimated' ? '' : ' of numbers'}
                     </span>
                   </div>
                 </label>

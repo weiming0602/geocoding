@@ -531,7 +531,9 @@ export type TransactionsResponse = {
 // another although the true one was a candidate; missed = the true
 // building was never a candidate; no_building = no footprint within 30 m
 // of the E911 point (no label).
-export type TrainingStatus = 'right' | 'wrong' | 'missed' | 'no_building';
+// estimated: a number with no house got an estimated point instead of a
+// building (address_inference/patterns.py: across from its partner).
+export type TrainingStatus = 'right' | 'wrong' | 'missed' | 'no_building' | 'estimated';
 
 export type TrainingAddress = {
   id: string;
