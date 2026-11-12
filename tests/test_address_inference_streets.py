@@ -101,6 +101,31 @@ def test_unmatched_reasons():
     assert match_street("NOWHERE LANE", 3, []).unmatched_reason == "no_road_nearby"
 
 
+def test_road_under_another_name_is_a_candidate_only_when_it_covers_most_points():
+    # Basin Point Road: its own name on 2 of 10 points, the whole road named Basin Cove Rd.
+    rows = cands("Basin Point Rd", [1, 2], tlid="tip") + cands("Basin Cove Rd", range(1, 10), tlid="cove")
+    m = match_street("BASIN POINT ROAD", 10, rows)
+    assert (m.method, m.tlids) == ("exact", ("tip",))
+    assert (m.other_candidate, m.other_tlids) == ("Basin Cove Rd", ("cove",))
+    # The own name covering half or more: no candidate.
+    rows = cands("Basin Point Rd", range(1, 6), tlid="tip") + cands("Basin Cove Rd", range(1, 10), tlid="cove")
+    assert match_street("BASIN POINT ROAD", 10, rows).other_candidate is None
+    # The other name on too few points: no candidate.
+    rows = cands("Basin Point Rd", [1, 2], tlid="tip") + cands("Basin Cove Rd", range(1, 7), tlid="cove")
+    assert match_street("BASIN POINT ROAD", 10, rows).other_candidate is None
+
+
+def test_crammed_pieces_are_short_pieces_packing_far_more_numbers_per_meter():
+    from address_inference.street_match import crammed_pieces
+    rows = [("long1", 700, 28), ("long2", 370, 46), ("long3", 250, 104),  # ~0.04-0.4 numbers/m
+            ("stub", 31, 198),        # 6.4/m, short: dropped
+            ("short_ok", 40, 6),      # short but normal density: kept
+            ("long_dense", 574, 297), # dense but long: kept
+            ("no_range", 20, None)]
+    assert crammed_pieces(rows) == {"stub"}
+    assert crammed_pieces([("stub", 31, 198)]) == set()  # nothing to compare with
+
+
 # --- against Postgres ------------------------------------------------------
 
 
@@ -137,6 +162,37 @@ def test_match_town_ignores_zip_and_replaces_previous_rows(dsn):
         ("ROGERS ROAD", "matched", "exact", None),
     ]
     assert segments == [("ROGERS ROAD", "100")]
+
+
+def test_match_town_adds_the_road_under_another_name_only_along_it(dsn):
+    with psycopg.connect(dsn) as conn:
+        conn.execute(CREATE_TABLE_SQL)
+        conn.execute(CREATE_STREET_NAMES_TABLE_SQL)
+        conn.execute(CREATE_ADDRESS_POINTS_TABLE_SQL)
+        # Cove Rd runs east 1 km; TIGER names only a short piece at its far end Point Rd.
+        # Side Ln's points run north off Cove Rd, all within 150 m of it; TIGER's Side Ln
+        # piece is drawn only past them, so the other name is a candidate there too.
+        for tlid, name, wkt in (("cove", "Cove Rd", "LINESTRING(-70.100 43.850, -70.0876 43.850)"),
+                                ("tip", "Point Rd", "LINESTRING(-70.0876 43.850, -70.0870 43.850)"),
+                                ("side", "Side Ln", "LINESTRING(-70.095 43.8525, -70.095 43.8530)")):
+            conn.execute(
+                """INSERT INTO streets (tlid, fullname, state_abbr, geometry, geom)
+                   VALUES (%s, %s, 'ME', %s, ST_GeomFromText(%s, 4326))""", (tlid, name, wkt, wkt))
+        pts = [(f"p{i}", 2 * i, "POINT ROAD", -0.0995 + 0.0012 * i, 43.8503) for i in range(10)]
+        pts += [(f"s{i}", 2 * i, "SIDE LANE", -0.095, 43.8501 + 0.0003 * i) for i in range(5)]
+        for uid, n, st, lon, lat in pts:
+            conn.execute(
+                """INSERT INTO address_points (site_uid, address_number, street_fullname, town, state_abbr, geom)
+                   VALUES (%s, %s, %s, 'Harpswell', 'ME', ST_SetSRID(ST_MakePoint(%s, %s), 4326))""",
+                (uid, n, st, lon - 70, lat))
+
+    match_town(dsn, ME, "Harpswell")
+
+    with psycopg.connect(dsn) as conn:
+        other = dict(conn.execute("SELECT label_street, other_tiger_name FROM address_inference.street_matches").fetchall())
+        segs = conn.execute("SELECT label_street, tlid FROM address_inference.street_match_segments ORDER BY 1, 2").fetchall()
+    assert other == {"POINT ROAD": "Cove Rd", "SIDE LANE": None}  # Side Lane: rejected by spread
+    assert ("POINT ROAD", "cove") in segs and ("SIDE LANE", "cove") not in segs
 
 
 def test_match_town_rejects_unknown_town(dsn):
