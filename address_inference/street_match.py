@@ -51,6 +51,12 @@ MIN_SUPPORT_BASE_NAME = 0.5
 # an unmatched street is reported as missing from TIGER rather than as a
 # naming problem.
 MIN_ROAD_COVERAGE = 0.5
+# A street left unmatched whose exact name TIGER has only farther away: TIGER
+# drew a short stub off the real road (Harpswell's KALM HARBOUR ROAD: a 12 m
+# "Kalm Harbour Rd" 191 m from its point). Unmatched, its buildings were free
+# for the next street's numbers (37 and 89 Mallard Pond Road went to 34 Kalm
+# Harbour Road's buildings), so the stub is taken within FAR_RADIUS_M.
+FAR_RADIUS_M = 500
 # Near-miss spelling ("WOLFS" vs "WOLFES"): needs a close name AND most of
 # the street's points beside it, since a fuzzy name alone is weak evidence.
 MIN_SIMILARITY_FUZZY = 0.85
@@ -84,7 +90,7 @@ CREATE TABLE IF NOT EXISTS address_inference.street_matches (
     label_street TEXT NOT NULL,
     label_points INTEGER NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('matched', 'unmatched')),
-    method TEXT,                 -- exact | alias | fuzzy | base_name (matched only)
+    method TEXT,                 -- exact | alias | fuzzy | base_name | exact_far (matched only)
     unmatched_reason TEXT,       -- no_road_nearby | name_mismatch (unmatched only)
     road_coverage DOUBLE PRECISION, -- share of points with any TIGER segment nearby
     tiger_name TEXT,
@@ -231,6 +237,34 @@ def match_street(label_street: str, label_points: int, candidates) -> StreetMatc
     return result
 
 
+# Named TIGER segments within FAR_RADIUS_M of a street's points (any of their names).
+FAR_SQL = f"""
+SELECT DISTINCT s.tlid, n.name
+FROM address_points a
+JOIN streets s
+  ON s.geom && ST_Expand(a.geom, 0.008)
+ AND ST_DWithin(s.geom::geography, a.geom::geography, {FAR_RADIUS_M})
+CROSS JOIN LATERAL (
+    SELECT s.fullname AS name UNION SELECT sn.fullname FROM street_names sn WHERE sn.tlid = s.tlid
+) n
+WHERE a.town = %(town)s AND a.state_abbr = %(state)s AND upper(a.street_fullname) = %(street)s
+  AND n.name IS NOT NULL AND n.name <> ''
+"""
+
+
+def match_far(conn, params, m) -> None:
+    """An unmatched street takes TIGER segments with its exact name within FAR_RADIUS_M."""
+    if m.status != "unmatched":
+        return
+    want = canonical(m.label_street)
+    rows = conn.execute(FAR_SQL, {**params, "street": m.label_street}).fetchall()
+    tlids = sorted({tlid for tlid, name in rows if canonical(name) == want})
+    if tlids:
+        m.status, m.method, m.unmatched_reason = "matched", "exact_far", None
+        m.tiger_name = next(name for tlid, name in rows if canonical(name) == want)
+        m.name_similarity, m.support, m.tlids = 1.0, 0.0, tuple(tlids)
+
+
 # Each segment's length (m) and the span of numbers its ranges claim.
 RANGES_SQL = """
 SELECT tlid, ST_Length(geom::geography),
@@ -290,6 +324,7 @@ def match_town(dsn, region, town: str) -> list[StreetMatch]:
         matches = [match_street(street, count, per_street.get(street, [])) for street, count in sorted(streets.items())]
         for m in matches:
             add_other_name(conn, params, m)
+            match_far(conn, params, m)
 
         key = {"region": region.id, "town": town}
         conn.execute("DELETE FROM address_inference.street_matches WHERE region_id = %(region)s AND town = %(town)s", key)
@@ -319,7 +354,7 @@ def summarize(matches) -> str:
     total_streets = len(matches)
     total_points = sum(m.label_points for m in matches)
     lines = []
-    for category in ("exact", "alias", "fuzzy", "base_name", "no_road_nearby", "name_mismatch"):
+    for category in ("exact", "alias", "fuzzy", "base_name", "exact_far", "no_road_nearby", "name_mismatch"):
         group = [m for m in matches if (m.method or m.unmatched_reason) == category]
         points = sum(m.label_points for m in group)
         lines.append(

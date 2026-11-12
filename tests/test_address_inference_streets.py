@@ -195,6 +195,33 @@ def test_match_town_adds_the_road_under_another_name_only_along_it(dsn):
     assert ("POINT ROAD", "cove") in segs and ("SIDE LANE", "cove") not in segs
 
 
+def test_match_town_takes_a_far_stub_with_the_exact_name(dsn):
+    with psycopg.connect(dsn) as conn:
+        conn.execute(CREATE_TABLE_SQL)
+        conn.execute(CREATE_STREET_NAMES_TABLE_SQL)
+        conn.execute(CREATE_ADDRESS_POINTS_TABLE_SQL)
+        # Kalm Harbour Rd: a 12 m stub ~190 m from its only point; Mallard Pond Rd runs past the point.
+        for tlid, name, wkt in (("stub", "Kalm Harbour Rd", "LINESTRING(-70.1000 43.8517, -70.1000 43.8518)"),
+                                ("mallard", "Mallard Pond Rd", "LINESTRING(-70.1010 43.8500, -70.0990 43.8500)"),
+                                ("other", "Lonely Ln", "LINESTRING(-70.1000 43.8600, -70.1000 43.8601)")):
+            conn.execute(
+                """INSERT INTO streets (tlid, fullname, state_abbr, geometry, geom)
+                   VALUES (%s, %s, 'ME', %s, ST_GeomFromText(%s, 4326))""", (tlid, name, wkt, wkt))
+        for uid, n, st in (("k", 34, "KALM HARBOUR ROAD"), ("z", 5, "LONELY LANE")):
+            conn.execute(
+                """INSERT INTO address_points (site_uid, address_number, street_fullname, town, state_abbr, geom)
+                   VALUES (%s, %s, %s, 'Harpswell', 'ME', ST_SetSRID(ST_MakePoint(-70.1000, 43.8500), 4326))""",
+                (uid, n, st))
+
+    match_town(dsn, ME, "Harpswell")
+
+    with psycopg.connect(dsn) as conn:
+        rows = dict(conn.execute("SELECT label_street, method FROM address_inference.street_matches").fetchall())
+        segs = conn.execute("SELECT label_street, tlid FROM address_inference.street_match_segments").fetchall()
+    assert rows == {"KALM HARBOUR ROAD": "exact_far", "LONELY LANE": None}  # Lonely Ln is ~1.1 km away
+    assert segs == [("KALM HARBOUR ROAD", "stub")]
+
+
 def test_match_town_rejects_unknown_town(dsn):
     with psycopg.connect(dsn) as conn:
         conn.execute(CREATE_ADDRESS_POINTS_TABLE_SQL)
