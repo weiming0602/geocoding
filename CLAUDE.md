@@ -43,7 +43,11 @@ read-write).
   segments by canonical name + location, never ZIP: `python -m
   address_inference.street_match "dbname=geocoding" me --town Freeport`
   (Freeport: 90.7% of addresses matched; the rest are on roads TIGER
-  lacks). Stage 2 attaches every building to each addressable TIGER
+  lacks). When TIGER gives a street's own name to pieces near under half
+  its points but another name runs along 80%+ of them, that name's
+  segments are added (`street_match.OTHER_NAME_*`; Harpswell's Basin Point
+  Road is TIGER's Basin Cove Rd), minus stubs under 60 m packing 10x+ the
+  street's numbers per meter (`CRAMMED_*`): Harpswell 51.1% -> 52.7%. Stage 2 attaches every building to each addressable TIGER
   segment within 200 m (side/position/distance): `python -m
   address_inference.attach "dbname=geocoding" me --town Freeport`. Stages
   3-4 train a LightGBM ranker on E911 labels and score it against today's

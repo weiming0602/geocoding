@@ -465,7 +465,7 @@ def monotone_assign(P, share_penalty=None, max_per_building=None, skip_score=Non
             D[i, j], back_d[i, j] = best, how
     out, i, j = {}, k, m
     while i > 0:
-        how = back_d[i, j]
+        how = int(back_d[i, j])  # int8 arithmetic would overflow past 127 numbers (NumPy 2)
         if how == 0:
             i -= 1
         elif how == 1:
