@@ -6,7 +6,7 @@
 # without it, cron silently discards output and you won't notice a break
 # until addresses stop resolving.
 
-0 3 1 12 * cd /home/my_ai/projects/geocoding && .venv/bin/python -m geocoding.annual_update "dbname=geocoding" >> /home/my_ai/projects/geocoding/annual_update.log 2>&1
+0 3 1 12 * cd /home/my_ai/projects/geocoding && .venv/bin/python -m geocoding.annual_update "dbname=geocoding" --states ME NH >> /home/my_ai/projects/geocoding/annual_update.log 2>&1
 
 # Alternative to geocoding-feedback-cleanup.timer -- deletes feedback
 # comments older than 90 days. Runs weekly (Sunday 4am); adjust the "90"
