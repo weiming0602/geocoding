@@ -25,7 +25,9 @@ read-write).
   connection string, e.g. `dbname=geocoding user=my_ai`)
 - Annual maintenance (all states' TIGER/Line streets + Maine's E911 address
   points, insert-only/safe to re-run): `.venv\Scripts\python -m
-  geocoding.annual_update "dbname=geocoding"` -- see `ops/` for the
+  geocoding.annual_update "dbname=geocoding" --states ME NH` (without
+  `--states` it also loads all of Texas, which `geocoding/states.py` lists
+  but nothing uses -- several GB the database can't spare) -- see `ops/` for the
   systemd timer/service pair and a crontab alternative to schedule it.
   Also refreshes OpenStreetMap one-way restrictions for routing (downloads
   Geofabrik's ~90MB/state extracts to `data/osm/`; `--skip-osm-oneway` to

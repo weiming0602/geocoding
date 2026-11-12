@@ -30,4 +30,7 @@ WorkingDirectory=/home/my_ai/geocoding
 # in production (host/port/user/password), not the local Unix socket used
 # in dev -- see CLAUDE.md's "Environment / data layout".
 Environment=GEOCODING_DSN=dbname=geocoding
-ExecStart=/home/my_ai/geocoding/.venv/bin/python -m geocoding.annual_update "${GEOCODING_DSN}"
+# Maine and New Hampshire only: geocoding.states.STATES also lists Texas,
+# whose full TIGER load is several GB the database can't spare and that no
+# one uses (2026-11-12: a default run started loading all of Texas).
+ExecStart=/home/my_ai/geocoding/.venv/bin/python -m geocoding.annual_update "${GEOCODING_DSN}" --states ME NH
