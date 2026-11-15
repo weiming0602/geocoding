@@ -80,6 +80,12 @@ ON CONFLICT (state_fips, source, parcel_id) DO UPDATE SET
 """
 
 # Each building in the town's parcels -> the parcel holding its inner point.
+# Road right-of-way polygons in the tax map are not lots: Harpswell's "ROW-ALL" is
+# one 284-acre polygon touching 596 road segments, so a building on it became a
+# "deep lot" candidate for every street (11 Atlantic Place went to a building
+# 2.7 km away). Any map/block/lot with ROW as its own token is left out.
+NOT_ROW = "NOT coalesce(p.map_bk_lot, '') ~* '(^|[^A-Z])ROW([^A-Z]|$)'"
+
 BUILDING_PARCELS_SQL = """
 DELETE FROM address_inference.building_parcels bp
 USING address_inference.parcels p
@@ -89,10 +95,10 @@ SELECT DISTINCT ON (s.source_id) s.state_fips, s.source_id, p.parcel_id
 FROM address_inference.parcels p
 JOIN address_inference.structures s
   ON s.state_fips = p.state_fips AND s.inner_point && p.geom AND ST_Intersects(p.geom, s.inner_point)
-WHERE p.town = %(town)s AND p.state_fips = %(state_fips)s
+WHERE p.town = %(town)s AND p.state_fips = %(state_fips)s AND {not_row}
 ORDER BY s.source_id, ST_Area(p.geom)
 ON CONFLICT (state_fips, source_id) DO UPDATE SET parcel_id = EXCLUDED.parcel_id;
-"""
+""".format(not_row=NOT_ROW)
 
 # Meters of each nearby street segment running within the buffer of a lot.
 FRONTAGE_SQL = f"""
@@ -105,7 +111,7 @@ SELECT p.parcel_id, st.tlid,
 FROM address_inference.parcels p
 JOIN streets st ON st.geom && ST_Expand(p.geom, 0.0003)
  AND ST_DWithin(st.geom::geography, p.geom::geography, {FRONTAGE_BUFFER_M})
-WHERE p.town = %(town)s AND p.state_fips = %(state_fips)s
+WHERE p.town = %(town)s AND p.state_fips = %(state_fips)s AND {NOT_ROW}
 ON CONFLICT (parcel_id, tlid) DO NOTHING;
 DELETE FROM address_inference.parcel_frontage WHERE frontage_m < 1;
 """

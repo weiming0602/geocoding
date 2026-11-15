@@ -15,21 +15,19 @@ National Address Database).
 
 from collections import Counter, defaultdict
 
+import math
+
 import numpy as np
 import pandas as pd
 import psycopg
 
-# Distance along each Stage 1b street, merged into one line. Streets whose
-# segments don't merge into a single line (forks, gaps) get no positions
-# and keep the ranker's own picks.
+from .street_lines import street_lines
+
+# Distance along each Stage 1b street, merged into one line
+# (street_lines.py: forks' short spurs trimmed, gaps chained -- before that,
+# such streets got no positions and kept the ranker's own picks).
 POSITIONS_SQL = """
-WITH lines AS (
-    SELECT sms.label_street AS street, ST_LineMerge(ST_Union(s.geom)) AS g
-    FROM address_inference.street_match_segments sms
-    JOIN streets s ON s.tlid = sms.tlid
-    WHERE sms.region_id = %(region)s AND sms.town = %(town)s
-    GROUP BY sms.label_street
-)
+WITH lines AS (SELECT street, g FROM street_lines)
 SELECT l.street, st.source_id,
        ST_LineLocatePoint(l.g, st.inner_point) * ST_Length(l.g::geography)
 FROM lines l
@@ -101,6 +99,11 @@ DRIVEWAY_RULES = True
 DRIVEWAY_CLEAR_RATIO = 1.5
 DRIVEWAY_CORNER_RATIO = 3.0
 DRIVEWAY_SET_BACK_M = 40
+# ...and only when this street is at least this much costlier in absolute terms
+# (path cost ~ meters): a corner house 1 vs 4 from two roads is a 4x "ratio" but
+# no evidence (Harpswell: 297 E911 houses dropped as "driveway to another road",
+# most of them corners like 1 Anns Place, 199 Ash Point Road). 0 = ratio only.
+DRIVEWAY_MIN_MARGIN = 100  # 0 / 25 / 50 / 100 tested 2026-11-12: 100 best -- Harpswell 51.79 -> 52.06, Freeport 56.73 -> 56.91, Pownal 46.08 -> 46.24, Topsham and New Gloucester unchanged
 
 POOL_HOME_M = 15
 # Owner's rule: a long lane you can see in the imagery is expensive -- nobody
@@ -139,7 +142,7 @@ LOT_RESERVE_MIN_P = 0.0
 STREET_CLASS_SQL = """
 SELECT sms.label_street, array_agg(DISTINCT s.mtfcc)
 FROM address_inference.street_match_segments sms
-JOIN streets s ON s.tlid = sms.tlid
+JOIN address_inference.streets_ext s ON s.tlid = sms.tlid
 WHERE sms.region_id = %(region)s AND sms.town = %(town)s
 GROUP BY sms.label_street
 """
@@ -168,13 +171,7 @@ def street_priority(address_df, street_classes) -> list:
 # deep behind lot 42, projects to 336 m, after lot 42's front house (315 m).
 LOT_FRONTAGE_M = 15
 LOT_POSITIONS_SQL = f"""
-WITH lines AS (
-    SELECT sms.label_street AS street, ST_LineMerge(ST_Union(s.geom)) AS g
-    FROM address_inference.street_match_segments sms
-    JOIN streets s ON s.tlid = sms.tlid
-    WHERE sms.region_id = %(region)s AND sms.town = %(town)s
-    GROUP BY sms.label_street
-), touch AS (
+WITH lines AS (SELECT street, g FROM street_lines), touch AS (
     SELECT l.street, p.parcel_id,
            ST_LineLocatePoint(l.g, ST_Centroid(ST_Intersection(l.g, ST_Buffer(p.geom::geography, {LOT_FRONTAGE_M})::geometry)))
              * ST_Length(l.g::geography) AS along,
@@ -210,13 +207,7 @@ ORDER BY t.street, bp.source_id
 COASTAL_END_M = 150
 DEEP_LOT_M = 50
 COASTAL_DEAD_ENDS_SQL = f"""
-WITH lines AS (
-    SELECT sms.label_street AS street, ST_LineMerge(ST_Union(s.geom)) AS g
-    FROM address_inference.street_match_segments sms
-    JOIN streets s ON s.tlid = sms.tlid
-    WHERE sms.region_id = %(region)s AND sms.town = %(town)s
-    GROUP BY sms.label_street
-), ends AS (
+WITH lines AS (SELECT street, g FROM street_lines), ends AS (
     SELECT street, g, ST_StartPoint(g) AS p, ST_LineInterpolatePoint(g, 0.01) AS inner_p FROM lines
     WHERE ST_GeometryType(g) = 'ST_LineString'
     UNION ALL
@@ -243,13 +234,7 @@ def coastal_dead_ends(conn, params) -> set:
 # ENTRY_SNAP_M of) the street line count; the caller checks the entry's
 # road is this street.
 ENTRY_POSITIONS_SQL = """
-WITH lines AS (
-    SELECT sms.label_street AS street, ST_LineMerge(ST_Union(s.geom)) AS g
-    FROM address_inference.street_match_segments sms
-    JOIN streets s ON s.tlid = sms.tlid
-    WHERE sms.region_id = %(region)s AND sms.town = %(town)s
-    GROUP BY sms.label_street
-), entries AS (
+WITH lines AS (SELECT street, g FROM street_lines), entries AS (
     SELECT d.source_id, d.road, ST_SetSRID(ST_MakePoint(d.entry_lon, d.entry_lat), 4326) AS pt
     FROM address_inference.building_driveways d
     WHERE d.state_fips = %(state_fips)s AND d.entry_lat IS NOT NULL
@@ -285,6 +270,20 @@ ENTRY_MIN_BACK_M = None
 BY_LOT = "within"
 
 
+LANE_POSITIONS = True
+LANE_POSITIONS_SQL = """
+SELECT DISTINCT ON (sms.label_street, bs.source_id) sms.label_street, bs.source_id,
+       ST_LineLocatePoint(l.g, ST_LineInterpolatePoint(s.geom, bs.t)) * ST_Length(l.g::geography)
+FROM address_inference.building_segments bs
+JOIN address_inference.street_match_segments sms ON sms.tlid = bs.tlid
+JOIN address_inference.streets_ext s ON s.tlid = bs.tlid
+JOIN street_lines l ON l.street = sms.label_street
+WHERE bs.state_fips = %(state_fips)s AND bs.rank = 99
+  AND sms.region_id = %(region)s AND sms.town = %(town)s
+ORDER BY sms.label_street, bs.source_id, bs.dist_m
+"""
+
+
 def load_positions(dsn, region, town, by_lot=BY_LOT, entry_min_back_m=None, entry_max_off_m=None) -> dict:
     """{(street, source_id): meters along the street}. by_lot: on which
     streets a building on an ordinary tax lot that fronts the street takes
@@ -293,6 +292,7 @@ def load_positions(dsn, region, town, by_lot=BY_LOT, entry_min_back_m=None, entr
     elsewhere the projection kept inside the lot's frontage), True (all), False."""
     params = {"region": region.id, "town": town, "state_fips": region.state_fips}
     with psycopg.connect(dsn) as conn:
+        street_lines(conn, params)
         rows = conn.execute(POSITIONS_SQL, params).fetchall()
         out = {(street, source_id): along for street, source_id, along in rows}
         if by_lot and not conn.execute("SELECT to_regclass('address_inference.building_parcels') IS NULL").fetchone()[0]:
@@ -313,6 +313,13 @@ def load_positions(dsn, region, town, by_lot=BY_LOT, entry_min_back_m=None, entr
                     # elsewhere the building's own place, kept inside its
                     # lot's stretch of the street
                     out[(street, source_id)] = min(max(out[(street, source_id)], lo), hi)
+        if LANE_POSITIONS:
+            # A lane house (attach.LANE_SQL, rank 99) sits where its lane meets the
+            # street, not straight across from its roof (33 Williams Road: lane joins
+            # at ~245 m, the roof projects to 364 m, past 39's house).
+            for street, source_id, along in conn.execute(LANE_POSITIONS_SQL, params).fetchall():
+                if (street, source_id) in out and along is not None:
+                    out[(street, source_id)] = along
         min_back = ENTRY_MIN_BACK_M if entry_min_back_m is None else entry_min_back_m
         if min_back is not None and not conn.execute(
                 "SELECT to_regclass('address_inference.building_driveways') IS NULL").fetchone()[0]:
@@ -333,7 +340,7 @@ def load_positions(dsn, region, town, by_lot=BY_LOT, entry_min_back_m=None, entr
 # houses: 349 of Freeport's 3,731 numbers, in 152 buildings) at this cost.
 # Strict one-number-per-building pushed every later number on that side
 # off by one.
-SHARE_PENALTY = float("inf")
+SHARE_PENALTY = 1.0  # 2026-11-13 Harpswell (headline count): inf 2,376 | 0.3 2,262 | 0.6 2,372 | 1.0 2,387 -- Basin Cove 74/82 share a building; strict one-per-building shifted the even side
 
 
 # Townhouses (Harvest Ridge Road: 18-19-20, 23-25, 26-28 ... one building
@@ -431,6 +438,12 @@ def lane_end(df) -> pd.Series:
 # (assessor_picks) fix that run instead.
 SKIP_SCORE = None
 
+# Bayview Road 220: its E911 point is the campus entrance, no building within
+# 156 m; road order gave it 246's house and every number after it slid one
+# house on. A number whose nearest same-side candidate is more than this far
+# from its interpolated point (d_m0) is left unplaced -> review. None = off.
+NO_HOUSE_NEAR_M = None
+
 
 def monotone_assign(P, share_penalty=None, max_per_building=None, skip_score=None):
     """P[i, j]: score for number i (ascending) on building j (in road
@@ -442,8 +455,9 @@ def monotone_assign(P, share_penalty=None, max_per_building=None, skip_score=Non
     penalty = SHARE_PENALTY if share_penalty is None else share_penalty
     skip = SKIP_SCORE if skip_score is None else skip_score
     skip = 0.0 if skip is None else skip
-    cap = (MAX_PER_BUILDING if max_per_building is None else max_per_building) if np.isfinite(penalty) else 1
     k, m = P.shape
+    pen = np.broadcast_to(np.asarray(penalty, dtype=float), (m,))  # per building (scalar = all)
+    cap = (MAX_PER_BUILDING if max_per_building is None else max_per_building) if np.isfinite(pen).any() else 1
     NEG = -np.inf
     # D[i, j]: best for numbers < i using buildings < j.
     # M[c, i, j]: best for numbers < i with number i-1 the (c+1)-th number on building j-1.
@@ -454,7 +468,7 @@ def monotone_assign(P, share_penalty=None, max_per_building=None, skip_score=Non
         for j in range(1, m + 1):
             M[0, i, j] = D[i - 1, j - 1] + P[i - 1, j - 1]
             for c in range(1, cap):
-                M[c, i, j] = M[c - 1, i - 1, j] + P[i - 1, j - 1] - penalty
+                M[c, i, j] = M[c - 1, i - 1, j] + P[i - 1, j - 1] - pen[j - 1]
         for j in range(m + 1):
             best, how = D[i - 1, j] + skip, 0
             if j > 0 and D[i, j - 1] > best:
@@ -561,6 +575,53 @@ def _assign_townhouse_street(street, rows, p_both, side_of, positions, home, cla
 DIRECTION_MIN_CORR = 0.5
 
 
+# Each street side's direction straight from TIGER's ranges: on each piece,
+# does the side's range grow or shrink along the street line? Votes are
+# weighted by piece length; a side is decided when SIDE_DIRECTION_MIN_SHARE
+# of its ranged length agrees. Used before _range_directions' guess (which
+# mixes both parities: Shady Acres' even side runs 98 -> 2 against its odd
+# side's 1 -> 99, so 3 numbers voted the street backwards and 7/21 swapped).
+SIDE_DIRECTIONS = True
+SIDE_DIRECTION_MIN_SHARE = 0.7
+SIDE_DIRECTIONS_SQL = """
+SELECT sms.label_street, s.lfromadd, s.ltoadd, s.rfromadd, s.rtoadd,
+       ST_LineLocatePoint(l.g, ST_StartPoint(s.geom)), ST_LineLocatePoint(l.g, ST_EndPoint(s.geom)),
+       ST_Length(s.geom::geography)
+FROM address_inference.street_match_segments sms
+JOIN address_inference.streets_ext s ON s.tlid = sms.tlid
+JOIN street_lines l ON l.street = sms.label_street
+WHERE sms.region_id = %(region)s AND sms.town = %(town)s
+"""
+
+
+def _house_number(v):
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def load_side_directions(dsn, region, town) -> dict:
+    """{(street, parity): +1/-1}: +1 = that side's numbers grow along the street line."""
+    params = {"region": region.id, "town": town, "state_fips": region.state_fips}
+    votes = defaultdict(lambda: [0.0, 0.0])  # (street, parity) -> [signed, total]
+    with psycopg.connect(dsn) as conn:
+        street_lines(conn, params)
+        for street, lf, lt, rf, rt, a0, a1, length in conn.execute(SIDE_DIRECTIONS_SQL, params).fetchall():
+            if a0 is None or a1 is None or a0 == a1:
+                continue
+            along = 1 if a1 > a0 else -1
+            for fr, to in ((lf, lt), (rf, rt)):
+                fr, to = _house_number(fr), _house_number(to)
+                if fr is None or to is None or fr == to:
+                    continue
+                v = votes[(street, fr % 2)]
+                v[0] += along * (1 if to > fr else -1) * length
+                v[1] += length
+    return {k: (1 if s > 0 else -1) for k, (s, tot) in votes.items()
+            if tot > 0 and abs(s) / tot >= SIDE_DIRECTION_MIN_SHARE}
+
+
 def _range_directions(addr, scored_df, positions) -> dict:
     """{street: (direction,)} where the ranges clearly say which way the
     numbers run: +1 = numbers grow with position along the street."""
@@ -603,7 +664,7 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
                             townhouse_ratio=None, townhouse_share_penalty=None,
                             joint_townhouses=True, property_slot_bonus=None, accessory_max_ratio=None,
                             use_range_direction=True, extra_small_penalty=None, lock_min_points=None,
-                            pool_bonus=None, driveway_rules=None) -> dict:
+                            pool_bonus=None, driveway_rules=None, side_directions=None, two_home_places=None) -> dict:
     """{address_id: source_id}. `fallback` (the ranker's own picks) covers
     addresses the ordering step leaves unmatched or can't place.
 
@@ -619,11 +680,18 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     an earlier street took is off limits to later ones. None = each street
     on its own, as before."""
     picks = dict(fallback)
+    LAST_PLACED.clear()
     driveway_rules = DRIVEWAY_RULES if driveway_rules is None else driveway_rules
     property_bonus = PROPERTY_SLOT_BONUS if property_slot_bonus is None else property_slot_bonus
     townhouse_ratio = TOWNHOUSE_RATIO if townhouse_ratio is None else townhouse_ratio
     townhouse_share_penalty = TOWNHOUSE_SHARE_PENALTY if townhouse_share_penalty is None else townhouse_share_penalty
     scored = scored_df.assign(p=probabilities(scored_df))
+    if NO_HOUSE_NEAR_M is not None and "d_m0" in scored.columns:
+        # A number with no building on its side near where its range puts it
+        # stays unplaced (review) instead of taking a neighbor's house.
+        near = scored[scored["same_side"].astype(bool)].groupby("address_id")["d_m0"].min()
+        lonely = set(near.index[near > NO_HOUSE_NEAR_M])
+        scored = scored[~scored["address_id"].isin(lonely)]
     limit = OTHER_ROAD_CLOSER_M if other_road_closer_m is None else other_road_closer_m
     if limit is not None and "dist_vs_nearest_road" in scored.columns:
         # Parcel frontage doesn't override this: tried, and corner lots
@@ -649,7 +717,10 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         if "dist_road" in scored.columns and "dist_vs_nearest_road" in scored.columns:
             corner = (scored["dist_road"] - scored["dist_vs_nearest_road"]) < DRIVEWAY_SET_BACK_M
             ratio[corner] = DRIVEWAY_CORNER_RATIO
-        scored = scored[~(scored["drive_ratio"] >= ratio)]
+        clear = scored["drive_ratio"] >= ratio
+        if DRIVEWAY_MIN_MARGIN and "drive_margin" in scored.columns:
+            clear &= scored["drive_margin"] >= DRIVEWAY_MIN_MARGIN
+        scored = scored[~clear]
     # A pool within POOL_HOME_M marks a home (owner's rule): never a shed,
     # never a "much smaller extra", and a small boost in the assignment.
     home_pool = (scored["pool_m"] <= POOL_HOME_M) if "pool_m" in scored.columns else pd.Series(False, index=scored.index)
@@ -810,7 +881,9 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         share = townhouse_share_penalty if townhouses else None
         candidates = home_buildings if townhouses else buildings
         best = None
-        for direction in direction_of.get(street, (1, -1)):
+        tries = ((side_directions[(street, _parity)],) if side_directions and (street, _parity) in side_directions
+                 else direction_of.get(street, (1, -1)))
+        for direction in tries:
             order = sorted(candidates, key=lambda b: direction * positions[(street, b)])
             P = np.array([[np.mean(prob[(n, b)]) if (n, b) in prob else np.nan for b in order] for n in numbers])
             if townhouses:
@@ -844,12 +917,17 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
             # enough; a non-candidate pair is never allowed.
             fit = rank_weight * rank_fit if not townhouses else 0.0
             P = np.where(np.isnan(P), -1e9, P + fit + MATCH_BONUS)
-            total, match = monotone_assign(P, share_penalty=share)
+            if share is None and two_home_places:
+                vec = np.array([LOT_SHARE_PENALTY if b in two_home_places else np.inf for b in order])
+                total, match = monotone_assign(P, share_penalty=vec if np.isfinite(vec).any() else None)
+            else:
+                total, match = monotone_assign(P, share_penalty=share)
             if best is None or total > best[0]:
                 best = (total, {numbers[i]: order[j] for i, j in match.items()})
         for address_id, number in zip(group["id"], group["number"]):
             if number in best[1]:
                 picks[address_id] = best[1][number]
+                LAST_PLACED.add(address_id)
         if street_order is not None:
             min_p = CLAIM_MIN_P if claim_min_p is None else claim_min_p
             claimed.update(b for n, b in best[1].items() if np.mean(prob[(n, b)]) >= min_p)
@@ -932,6 +1010,706 @@ def load_roofs(dsn) -> dict:
 OTHER_STREET_LOTS = True
 
 
+# Owner's rule (location, like the driveway): a building whose tax lot
+# touches named roads, none of them this street, can't take this street's
+# number -- unless its driveway clearly comes to this street. Which roads a
+# lot touches: address_inference.lot_fronts (data/session_2026-11-13_frontage/
+# lot_fronts.py; >= 5 m of road within 15 m of the lot), from "tiger" or "osm"
+# road lines (OSM internal only). None = off. Harpswell by the Sea's TIGER
+# line runs 20-40 m off the real road, so by TIGER 61's lot touches only
+# Butler Rd; by OSM it touches both. Harpswell ML + road order right building
+# (2026-11-13): off 55.44%, tiger 54.44%, osm 55.15% (55.23% with loose names),
+# both 55.39% -- lots on lanes missing from the road data seem to touch only
+# the main road, and corner lots touch both. Off.
+LOT_FRONTS = None
+
+
+_FRONTS_CACHE = {}
+
+
+def load_lot_fronts_cached():
+    """lot_fronts (TIGER or OSM) for the town set by set_guard_town."""
+    return _FRONTS_CACHE.get("fronts", {})
+
+
+def set_guard_town(dsn, town):
+    _FRONTS_CACHE["fronts"] = load_lot_fronts(dsn, town, "both") if DRIVE_LOT_GUARD in ("fronts", "both") else {}
+
+
+def load_lot_fronts(dsn, town, source) -> dict:
+    """{parcel_id: {canonical road, ...}}"""
+    out = defaultdict(set)
+    with psycopg.connect(dsn) as conn:
+        if conn.execute("SELECT to_regclass('address_inference.lot_fronts') IS NULL").fetchone()[0]:
+            return {}
+        for pid, road in conn.execute(
+                "SELECT f.parcel_id, f.road FROM address_inference.lot_fronts f "
+                "JOIN address_inference.parcels p USING (parcel_id) WHERE p.town = %s AND "
+                "(f.source = %s OR %s = 'both')",
+                (town, source, source)).fetchall():
+            out[pid].add(road)
+    return dict(out)
+
+
+# A building's lot outranks its traced driveway: where the tax roll names
+# this street for the lot ("taxroll", street names only) or the lot touches
+# this street (lot_fronts, "fronts"), the driveway rules can't drop the
+# building for this street. 18 Basin Point Road: lot touches only Basin Point
+# Road, tax roll says 18 Basin Point Rd, but the tracer reached Shea Rd near
+# the corner (320 vs 768) -- dropped, so 18 took 26's house and 26 a shed.
+# None = off.
+# ...and the same lot evidence beats "another road is OTHER_ROAD_CLOSER_M
+# nearer" (33 Williams Road: 103 m from Williams Rd, nearer Fairhaven Ln, lot
+# "33 WILLIAMS RD"). False = off.
+NEAR_ROAD_LOT_GUARD = False  # 2026-11-13 with the fallback rule: Harpswell -10, Gray -37, New Gloucester -9, Freeport -1, Yarmouth +9 -- off
+DRIVE_LOT_GUARD = "both"  # Harpswell ML + road order: off 56.14%, taxroll 57.28, fronts 57.28, both 57.38
+
+
+# Owner's rule for a very short end branch: a dead-end TIGER piece of at most
+# END_BRANCH_MAX_M with no range, at the end of the street's line. Count its
+# houses (one per tax lot, the biggest; buildings past the fork, within
+# END_BRANCH_NEAR_M of the piece) -- k of them -- and give the street's last k
+# numbers (whichever end of the numbering the branch is at) to them in order
+# along the road, sides ignored. Ash Cove Road: north branch (87 m), houses of
+# 64 and 75 (75's lot also has a 66 m2 shed) -- 64/75 had landed on the main
+# stretch, whose TIGER range runs to 99. None = off.
+END_BRANCH_MAX_M = None  # 2026-11-13: Ash Cove 64/75 right, but Harpswell 2,239 -> 2,233 (8 lost on Cragmoor, Linwood, Sinnett, Windy Hill); off pending owner review
+END_BRANCH_NEAR_M = 50
+END_BRANCH_MAX_HOUSES = 3
+END_BRANCH_SQL = """
+WITH pieces AS (
+    SELECT sms.label_street AS street, s.tlid, s.geom, l.g,
+           ST_StartPoint(s.geom) AS a, ST_EndPoint(s.geom) AS b
+    FROM address_inference.street_match_segments sms
+    JOIN address_inference.streets_ext s ON s.tlid = sms.tlid
+    JOIN street_lines l ON l.street = sms.label_street
+    WHERE sms.region_id = %(region)s AND sms.town = %(town)s
+      AND coalesce(s.lfromadd, '') = '' AND coalesce(s.rfromadd, '') = ''
+      AND coalesce(s.ltoadd, '') = '' AND coalesce(s.rtoadd, '') = ''
+      AND ST_Length(s.geom::geography) <= %(max_m)s
+), ends AS (
+    SELECT p.*, e.dead, e.fork FROM pieces p
+    CROSS JOIN LATERAL (VALUES (p.a, p.b), (p.b, p.a)) e(dead, fork)
+    WHERE NOT EXISTS (SELECT 1 FROM streets o WHERE o.tlid <> p.tlid AND o.geom && ST_Expand(e.dead, 0.0001)
+                        AND ST_DWithin(o.geom::geography, e.dead::geography, 2))
+      AND least(ST_Distance(e.dead::geography, ST_StartPoint(p.g)::geography),
+                ST_Distance(e.dead::geography, ST_EndPoint(p.g)::geography)) <= 5
+)
+SELECT street, tlid,
+       ST_LineLocatePoint(g, fork) * ST_Length(g::geography),
+       ST_LineLocatePoint(g, dead) * ST_Length(g::geography)
+FROM ends
+"""
+
+
+def end_branch_picks(dsn, region, town, address_df, positions, picks, parcel_of=None, side_directions=None) -> dict:
+    """picks with the owner's short-end-branch rule applied (see END_BRANCH_MAX_M)."""
+    if not END_BRANCH_MAX_M:
+        return picks
+    params = {"region": region.id, "town": town, "state_fips": region.state_fips, "max_m": END_BRANCH_MAX_M}
+    with psycopg.connect(dsn) as conn:
+        street_lines(conn, params)
+        branches = conn.execute(END_BRANCH_SQL, params).fetchall()
+        if not branches:
+            return picks
+        near = defaultdict(set)
+        for tlid, sid in conn.execute(
+                "SELECT tlid, source_id FROM address_inference.building_segments "
+                "WHERE state_fips = %s AND tlid = ANY(%s) AND dist_m <= %s",
+                (region.state_fips, [b[1] for b in branches], END_BRANCH_NEAR_M)).fetchall():
+            near[tlid].add(sid)
+        size_of = dict(conn.execute(
+            "SELECT source_id, sqmeters FROM address_inference.structures WHERE source_id = ANY(%s)",
+            ([s for v in near.values() for s in v],)).fetchall())
+    picks = dict(picks)
+    addr = address_df
+    for street, tlid, fork_pos, dead_pos in branches:
+        if fork_pos is None or dead_pos is None or abs(dead_pos - fork_pos) < 1:
+            continue
+        toward = 1 if dead_pos > fork_pos else -1
+        homes = {}
+        for sid in near.get(tlid, ()):
+            p = positions.get((street, sid))
+            if p is None or (p - fork_pos) * toward <= 5:
+                continue  # not past the fork
+            lot = (parcel_of or {}).get(sid, sid)
+            if lot not in homes or (size_of.get(sid) or 0) > (size_of.get(homes[lot]) or 0):
+                homes[lot] = sid
+        houses = sorted(homes.values(), key=lambda b: (positions[(street, b)] - fork_pos) * toward)
+        k = len(houses)
+        rows = addr[addr["street"] == street]
+        numbers = sorted(rows["number"].unique())
+        if k == 0 or k > END_BRANCH_MAX_HOUSES or k >= len(numbers):
+            continue
+        # which end of the numbering the branch is at: TIGER's side directions, else the picks' trend
+        dirs = [d for (st, _p), d in (side_directions or {}).items() if st == street]
+        if dirs:
+            grow = 1 if sum(dirs) > 0 else -1
+        else:
+            pairs = [(n, positions.get((street, picks.get(a)))) for a, n in zip(rows["id"], rows["number"])]
+            pairs = [(n, p) for n, p in pairs if p is not None]
+            if len(pairs) < 3:
+                continue
+            corr = pd.Series([n for n, _ in pairs]).corr(pd.Series([p for _, p in pairs]))
+            if not corr or np.isnan(corr):
+                continue
+            grow = 1 if corr > 0 else -1
+        chosen = numbers[-k:] if grow == toward else numbers[:k][::-1]
+        # chosen in order from the fork outward
+        given = dict(zip(chosen, houses))
+        for a, n in zip(rows["id"], rows["number"]):
+            if n in given:
+                picks[a] = given[n]
+            elif picks.get(a) in houses:
+                picks[a] = None  # its building went to the branch; unplaced rather than doubled
+        picks = {a: b for a, b in picks.items() if b is not None}
+    return picks
+
+
+# The ranker's own pick stands in wherever road order leaves a number
+# unplaced. FALLBACK_LOT_RULE: that stand-in may not be a building on a lot
+# the tax roll addresses on another street (33/43 Williams Road fell back to a
+# building on "1597 HARPSWELL NECK RD", 300 m off) -- the next-best allowed
+# candidate is used instead. False = off.
+FALLBACK_LOT_RULE = False  # 2026-11-13 ML + road order right: Harpswell 2,350 -> 2,299 alone; tax-roll street names are wrong too often on corner lots -- off
+
+
+def allowed_top_picks(scored_df, address_df, parcel_of, streets_of_lot) -> dict:
+    """{address_id: source_id}: the ranker's best candidate whose lot isn't the tax roll's for another street."""
+    from .street_names import canonical
+    street_of = {a: canonical(st) for a, st in zip(address_df["id"], address_df["street"])}
+    lot = scored_df["source_id"].map(parcel_of or {})
+    bad = np.array([bool(streets_of_lot.get(l)) and street_of.get(a) not in streets_of_lot[l]
+                    for a, l in zip(scored_df["address_id"], lot)], dtype=bool)
+    ok = scored_df[~bad]
+    best = ok.loc[ok.groupby("address_id")["score"].idxmax()]
+    return dict(zip(best["address_id"], best["source_id"]))
+
+
+# Address ids the last order_constrained_picks call placed itself (the rest
+# fell back to the ranker's own pick).
+LAST_PLACED = set()
+
+# Owner's rule, two houses on one lot (39/43 Williams Road: lot "39", a house
+# 69 m back and one 20 m back): where road order left a number unplaced and the
+# number next to it on the same side sits on a lot with two real houses (the
+# smaller at least LOT_PAIR_MIN_SIZE of the bigger) holding only that one
+# number, the lot takes both -- the house farther back from the street gets the
+# smaller number. False = off.
+LOT_PAIR_FILL = False  # 2026-11-13 Harpswell 2,239 -> 2,182 and 39/43 Williams unchanged (rule not reaching them) -- off, needs a look
+LOT_PAIR_MIN_SIZE = 0.4
+LOT_PAIR_DIST_SQL = """
+SELECT sms.label_street, bs.source_id, min(bs.dist_m)
+FROM address_inference.building_segments bs
+JOIN address_inference.street_match_segments sms ON sms.tlid = bs.tlid
+WHERE bs.state_fips = %(state_fips)s AND sms.region_id = %(region)s AND sms.town = %(town)s
+  AND bs.source_id = ANY(%(ids)s) AND bs.rank <> 99
+GROUP BY 1, 2
+"""
+
+
+def lot_pair_fill(dsn, region, town, address_df, picks, placed, parcel_of, size_of) -> dict:
+    if not LOT_PAIR_FILL or not parcel_of:
+        return picks
+    picks = dict(picks)
+    rows = address_df[address_df["scorable"]][["id", "street", "number"]]
+    lot_buildings = defaultdict(list)
+    for sid, lot in parcel_of.items():
+        lot_buildings[lot].append(sid)
+    todo = []  # (street, unplaced number ids, neighbor number ids, lot, homes)
+    for street, srows in rows.groupby("street"):
+        for parity in (0, 1):
+            side = srows[srows["number"] % 2 == parity]
+            numbers = sorted(side["number"].unique())
+            ids_of = {n: list(side.loc[side["number"] == n, "id"]) for n in numbers}
+            placed_n = {n for n in numbers if any(a in placed for a in ids_of[n])}
+            lot_of_n = {n: parcel_of.get(picks.get(ids_of[n][0])) for n in placed_n}
+            per_lot = defaultdict(set)
+            for n, lot in lot_of_n.items():
+                if lot is not None:
+                    per_lot[lot].add(n)
+            used = set()
+            for i, n in enumerate(numbers):
+                if n in placed_n:
+                    continue
+                for j in (i - 1, i + 1):
+                    if not 0 <= j < len(numbers):
+                        continue
+                    nb = numbers[j]
+                    lot = lot_of_n.get(nb)
+                    if lot is None or lot in used or len(per_lot[lot]) != 1:
+                        continue
+                    homes = sorted(lot_buildings[lot], key=lambda b: -(size_of.get(b) or 0))[:2]
+                    if len(homes) < 2 or (size_of.get(homes[1]) or 0) < LOT_PAIR_MIN_SIZE * (size_of.get(homes[0]) or 1):
+                        continue
+                    todo.append((street, ids_of[n], n, ids_of[nb], nb, homes))
+                    used.add(lot)
+                    break
+    if not todo:
+        return picks
+    params = {"region": region.id, "town": town, "state_fips": region.state_fips,
+              "ids": [b for *_r, homes in todo for b in homes]}
+    with psycopg.connect(dsn) as conn:
+        dist = {(st, sid): d for st, sid, d in conn.execute(LOT_PAIR_DIST_SQL, params).fetchall()}
+    for street, ids_n, n, ids_nb, nb, homes in todo:
+        if any((street, h) not in dist for h in homes):
+            continue
+        deep, front = sorted(homes, key=lambda h: -dist[(street, h)])
+        small, big = (ids_n, ids_nb) if n < nb else (ids_nb, ids_n)
+        for a in small:
+            picks[a] = deep
+        for a in big:
+            picks[a] = front
+    return picks
+
+
+# Owner's "several options, keep the best" with a spacing check: after road
+# order, each street side also tries every placed number moved one house
+# forward and one house back along the road (a house freed at an end goes to an
+# unplaced number). Each option is scored by the ranker's probabilities plus
+# how evenly the numbers follow distance along the road (Maine numbers by
+# distance: Basin Cove 14 at 221 m ... 74/82 at 14 m, ~1 number per 3 m). The
+# shifted even side -- 14 left out, 24 on 14's house, ... -- breaks that line.
+# SPACING_WEIGHT: points per unit of the fit's R^2 gained. None = off.
+SPACING_WEIGHT = 1.0  # on/off (None = off)
+SPACING_MIN_NUMBERS = 4
+SPACING_MAX_RATIO = 0.75   # an option wins when its spacing error is <= 75% of road order's
+SPACING_DEBUG = None
+SPACING_MIN_PROB = 0.8     # ...and the ranker's summed probability isn't below 80% of road order's
+
+
+def _fit_r2(nums, pos):
+    if len(nums) < 3 or np.ptp(pos) == 0 or np.ptp(nums) == 0:
+        return 0.0
+    r = np.corrcoef(nums, pos)[0, 1]
+    return float(r * r) if np.isfinite(r) else 0.0
+
+
+def spacing_options(address_df, scored_df, positions, picks, placed) -> dict:
+    """picks with each street side's best of {as is, shifted -1, shifted +1}."""
+    if SPACING_WEIGHT is None:
+        return picks
+    p = probabilities(scored_df)
+    prob = dict(zip(zip(scored_df["address_id"], scored_df["source_id"]), p))
+    same = scored_df[scored_df["same_side"].astype(bool)]
+    picks = dict(picks)
+    addr = address_df[address_df["scorable"]]
+    for (street, parity), g in addr.assign(parity=addr["number"] % 2).groupby(["street", "parity"]):
+        ids_of = {n: list(gg["id"]) for n, gg in g.groupby("number")}
+        numbers = sorted(ids_of)
+        if len(numbers) < SPACING_MIN_NUMBERS:
+            continue
+        cand = same[same["address_id"].isin(g["id"])]
+        houses = sorted({b for b in cand["source_id"] if (street, b) in positions}, key=lambda b: positions[(street, b)])
+        if len(houses) < SPACING_MIN_NUMBERS:
+            continue
+        index = {b: i for i, b in enumerate(houses)}
+        cur = {}
+        for n in numbers:
+            a0 = ids_of[n][0]
+            b = picks.get(a0)
+            if a0 in placed and b in index:
+                cur[n] = index[b]
+        if len(cur) < SPACING_MIN_NUMBERS:
+            continue
+        def score(assign):
+            ns = sorted(assign)
+            nums = np.array(ns, dtype=float)
+            pos = np.array([positions[(street, houses[assign[n]])] for n in ns], dtype=float)
+            if np.ptp(pos) == 0:
+                rms = np.inf
+            else:
+                k, c = np.polyfit(pos, nums, 1)
+                rms = float(np.sqrt(np.mean((nums - (k * pos + c)) ** 2)))
+            pr = sum(np.mean([prob.get((a, houses[assign[n]]), 0.0) for a in ids_of[n]]) for n in ns)
+            return pr, rms, len(ns)
+        options = [cur]
+        for s in (-1, 1):
+            alt = {n: i + s for n, i in cur.items() if 0 <= i + s < len(houses)}
+            free = [i for i in range(len(houses)) if i not in set(alt.values())]
+            left = [n for n in numbers if n not in alt]
+            # an end house freed by the shift goes to the left-out number next to that end
+            if left and free:
+                order_n = sorted(alt, key=lambda n: alt[n])
+                if order_n:
+                    lo_i, hi_i = alt[order_n[0]], alt[order_n[-1]]
+                    rising = order_n[-1] > order_n[0]
+                    for i in free:
+                        if i < lo_i:
+                            n = max((x for x in left if (x < order_n[0]) == rising), default=None, key=lambda x: -abs(x - order_n[0]) * -1)
+                        elif i > hi_i:
+                            n = min((x for x in left if (x > order_n[-1]) == rising), default=None, key=lambda x: abs(x - order_n[-1]))
+                        else:
+                            n = None
+                        if n is not None and n in left:
+                            alt[n] = i
+                            left.remove(n)
+            if len(alt) >= SPACING_MIN_NUMBERS:
+                options.append(alt)
+        scored_opts = [(score(o), o) for o in options]
+        if street == SPACING_DEBUG:
+            import sys as _s; print('SPACING', street, parity, 'houses', len(houses), [(o and dict(sorted(o.items())), sc) for sc, o in scored_opts], file=_s.stderr)
+        (cur_pr, cur_rms, cur_k), _ = scored_opts[0]
+        best = None
+        for (pr, rms, k), o in scored_opts[1:]:
+            if (k >= cur_k and rms <= SPACING_MAX_RATIO * cur_rms and pr >= SPACING_MIN_PROB * cur_pr
+                    and (best is None or rms < best[0])):
+                best = (rms, o)
+        if best is None:
+            continue
+        best = best[1]
+        for n, i in best.items():
+            for a in ids_of[n]:
+                picks[a] = houses[i]
+        for n in numbers:
+            if n not in best and n in cur:
+                for a in ids_of[n]:
+                    picks.pop(a, None)
+    return picks
+
+
+# Owner's "several options, keep the best", one number at a time: a number
+# with no house of its own (Bayview Road 220 is the campus entrance, 156 m
+# from any building) takes a neighbor's house in road order and every number
+# after it slides one house on. On each street side, the DROP_ONE_TRIES
+# numbers sitting farthest from the side's number-by-distance line are each
+# tried left out, the side re-assigned without it (monotone_assign over the
+# ranker's probabilities); the option wins when its spacing error is at most
+# DROP_ONE_MAX_RATIO of road order's and the other numbers' summed
+# probability isn't below DROP_ONE_MIN_PROB of theirs. The left-out number
+# goes to review (never a guessed house). None = off.
+DROP_ONE_MAX_RATIO = None
+DROP_ONE_MIN_PROB = 0.8
+DROP_ONE_TRIES = None  # None = every placed number
+DROP_ONE_WINDOW = 8
+DROP_ONE_MIN_NUMBERS = 4
+DROP_ONE_DEBUG = None
+LAST_DROPPED = set()
+
+
+def _rms_line(nums, pos):
+    nums = np.asarray(nums, float); pos = np.asarray(pos, float)
+    if len(nums) < 3 or np.ptp(pos) == 0:
+        return np.inf
+    k, c = np.polyfit(pos, nums, 1)
+    return float(np.sqrt(np.mean((nums - (k * pos + c)) ** 2)))
+
+
+# Owner: "there is nothing wrong with a big gap (long distance)" -- judge
+# each number against its neighbors, not one line per side. For consecutive
+# placed numbers, the meters per number of the pair against the side's median
+# meters per number; a big gap is fine when the numbers jump as much. Cost =
+# mean over pairs of |log(ratio)| (mean: leaving a number out drops a pair), each pair capped at NEIGHBOR_CAP; pairs
+# closer than NEIGHBOR_MIN_M count as NEIGHBOR_MIN_M apart.
+DROP_ONE_COST = "neighbor"  # or "line" (one straight line per side, 2026-11-14: lost)
+NEIGHBOR_MIN_M = 5.0
+NEIGHBOR_CAP = math.log(10)
+
+
+def _neighbor_cost(nums, pos, rate=None):
+    nums = np.asarray(nums, float); pos = np.asarray(pos, float)
+    if len(nums) < 3:
+        return np.inf
+    o = np.argsort(nums)
+    dn = np.diff(nums[o]); dq = np.maximum(np.abs(np.diff(pos[o])), NEIGHBOR_MIN_M)
+    per = dq / np.maximum(dn, 1)
+    rate = float(np.median(per)) if rate is None else rate
+    return float(np.mean(np.minimum(np.abs(np.log(per / rate)), NEIGHBOR_CAP)))
+
+
+def drop_one_options(address_df, scored_df, positions, picks, placed, fallback) -> dict:
+    """picks with, per street side, one number left out when that clearly
+    straightens the side's numbering. Left-out ids are in LAST_DROPPED (their
+    pick reverts to fallback; callers take them out of the placed set)."""
+    LAST_DROPPED.clear()
+    if DROP_ONE_MAX_RATIO is None:
+        return picks
+    p = probabilities(scored_df)
+    prob = dict(zip(zip(scored_df["address_id"], scored_df["source_id"]), p))
+    same = scored_df[scored_df["same_side"].astype(bool)]
+    picks = dict(picks)
+    addr = address_df[address_df["scorable"]]
+    for (street, parity), g in addr.assign(parity=addr["number"] % 2).groupby(["street", "parity"]):
+        ids_of = {n: list(gg["id"]) for n, gg in g.groupby("number")}
+        cur = {}
+        for n, ids in ids_of.items():
+            b = picks.get(ids[0])
+            if ids[0] in placed and (street, b) in positions:
+                cur[n] = b
+        if len(cur) < DROP_ONE_MIN_NUMBERS + 1:
+            continue
+        cand = same[same["address_id"].isin(g["id"])]
+        houses = sorted({b for b in cand["source_id"] if (street, b) in positions} | set(cur.values()),
+                        key=lambda b: positions[(street, b)])
+        pn = lambda n, b: float(np.mean([prob.get((a, b), np.nan) for a in ids_of[n]]))
+        ns = sorted(cur)
+        pos = [positions[(street, cur[n])] for n in ns]
+        if DROP_ONE_COST == "neighbor":
+            o = np.argsort(ns)
+            per = np.maximum(np.abs(np.diff(np.asarray(pos)[o])), NEIGHBOR_MIN_M) / np.maximum(np.diff(np.asarray(ns)[o]), 1)
+            side_rate = float(np.median(per))
+            cost = lambda nn, qq: _neighbor_cost(nn, qq, side_rate)
+        else:
+            cost = _rms_line
+        cur_rms = cost(ns, pos)
+        if not np.isfinite(cur_rms) or cur_rms == 0:
+            continue
+        rising = np.corrcoef(ns, pos)[0, 1] >= 0 if np.ptp(pos) > 0 else True
+        if DROP_ONE_COST == "neighbor":
+            # each number's own share: its pairs with the numbers either side
+            resid = {}
+            for i, n in enumerate(ns):
+                lo, hi = max(i - 1, 0), min(i + 2, len(ns))
+                with_n = cost(ns[lo:hi], pos[lo:hi]) if hi - lo >= 3 else 0.0
+                resid[n] = with_n
+        else:
+            k, c = np.polyfit(pos, ns, 1)
+            resid = {n: abs(n - (k * q + c)) for n, q in zip(ns, pos)}
+        best = None
+        tries = sorted(ns, key=lambda n: -resid[n])
+        if DROP_ONE_TRIES is not None:
+            tries = tries[:DROP_ONE_TRIES]
+        for x in tries:
+            rest = [n for n in ns if n != x]
+            xi = ns.index(x)
+            alt = None
+            # re-solve only the numbers on one side of x, up to DROP_ONE_WINDOW of
+            # them, over the houses between the fixed neighbors around that window
+            for lo, hi in ((max(xi - DROP_ONE_WINDOW, 0), xi), (xi + 1, min(xi + 1 + DROP_ONE_WINDOW, len(ns)))):
+                win = ns[lo:hi]
+                if not win:
+                    continue
+                before = ns[lo - 1] if lo - 1 >= 0 and lo - 1 != xi else (ns[xi - 1] if lo == xi + 1 and xi - 1 >= 0 else None)
+                after = ns[hi] if hi < len(ns) and hi != xi else (ns[xi + 1] if hi == xi and xi + 1 < len(ns) else None)
+                end_lo, end_hi = (-np.inf, np.inf) if rising else (np.inf, -np.inf)
+                q1 = positions[(street, cur[before])] if before is not None else end_lo
+                q2 = positions[(street, cur[after])] if after is not None else end_hi
+                a_q, b_q = min(q1, q2), max(q1, q2)
+                used = {cur[n] for n in rest if n not in win}
+                pool = [b for b in houses if a_q < positions[(street, b)] < b_q and b not in used]
+                order_b = pool if rising else pool[::-1]
+                if len(order_b) < len(win):
+                    continue
+                P = np.array([[pn(n, b) for b in order_b] for n in win])
+                P = np.where(np.isnan(P), -1e9, P + MATCH_BONUS)
+                _, match = monotone_assign(P, share_penalty=np.inf)
+                if len(match) < len(win):
+                    continue
+                cand_alt = dict(cur); cand_alt.pop(x)
+                cand_alt.update({win[i]: order_b[j] for i, j in match.items()})
+                c_alt = cost(rest, [positions[(street, cand_alt[n])] for n in rest])
+                if alt is None or c_alt < alt[0]:
+                    alt = (c_alt, cand_alt)
+            if alt is None:
+                continue
+            alt = alt[1]
+            if street == DROP_ONE_DEBUG:
+                import sys as _s
+                print("TRY", parity, x, "placed", len(alt), "of", len(rest), "moved",
+                      sorted(n for n in alt if alt[n] != cur.get(n)), file=_s.stderr)
+            if len(alt) < len(rest):
+                continue
+            # only a run of numbers next to x may move (the chain x started)
+            moved = [i for i, n in enumerate(rest) if alt[n] != cur[n]]
+            if moved:
+                xi = sum(n < x for n in rest)  # x sat between rest[xi-1] and rest[xi]
+                if moved != list(range(moved[0], moved[-1] + 1)) or not (moved[0] == xi or moved[-1] == xi - 1):
+                    continue
+            rms = cost(rest, [positions[(street, alt[n])] for n in rest])
+            pr_cur = sum(pn(n, cur[n]) for n in rest if not np.isnan(pn(n, cur[n])))
+            pr_alt = sum(pn(n, alt[n]) for n in rest)
+            if street == DROP_ONE_DEBUG:
+                import sys as _s; print("DROP", street, parity, x, round(cur_rms, 1), round(rms, 1), round(pr_cur, 2), round(pr_alt, 2), file=_s.stderr)
+            if rms <= DROP_ONE_MAX_RATIO * cur_rms and pr_alt >= DROP_ONE_MIN_PROB * pr_cur and (best is None or rms < best[0]):
+                best = (rms, x, alt)
+        if best is None:
+            continue
+        _, x, alt = best
+        for n, b in alt.items():
+            for a in ids_of[n]:
+                picks[a] = b
+        for a in ids_of[x]:
+            picks[a] = fallback.get(a, picks.get(a))
+            LAST_DROPPED.add(a)
+    return picks
+
+
+# Owner's options strategy, at the scale of a run: on each street side, move
+# any run of consecutive numbers one house forward or back along the road
+# (into a free house), keeping a move only when it raises
+#   sum of the ranker's probabilities - RUN_SHIFT_LAMBDA * spacing error
+# (spacing error = RMS of the numbers around a straight line in distance along
+# the road). Repeats until no move helps. 734 of Harpswell's 1,819 misses sat on
+# the next or previous number's house. None = off.
+RUN_SHIFT_LAMBDA = None  # 2026-11-13 Harpswell (spacing on, 2,390): global-fit score 0.05 -> 2,320; spacing-driven with prob cap 0.02/0.05/0.1 -> 2,373/2,369/2,334 -- off
+RUN_SHIFT_MAX_ROUNDS = 20
+RUN_SHIFT_MIN_RATIO = 0.85  # a move must cut the side's spacing error by 15%+
+
+
+def run_shift_options(address_df, scored_df, positions, picks, placed) -> dict:
+    if RUN_SHIFT_LAMBDA is None:
+        return picks
+    lam = RUN_SHIFT_LAMBDA
+    p = probabilities(scored_df)
+    prob = dict(zip(zip(scored_df["address_id"], scored_df["source_id"]), p))
+    same = scored_df[scored_df["same_side"].astype(bool)]
+    picks = dict(picks)
+    addr = address_df[address_df["scorable"]]
+    for (street, parity), g in addr.assign(parity=addr["number"] % 2).groupby(["street", "parity"]):
+        ids_of = {n: list(gg["id"]) for n, gg in g.groupby("number")}
+        if len(ids_of) < 4:
+            continue
+        cand = same[same["address_id"].isin(g["id"])]
+        houses = sorted({b for b in cand["source_id"] if (street, b) in positions}, key=lambda b: positions[(street, b)])
+        if len(houses) < 4:
+            continue
+        index = {b: i for i, b in enumerate(houses)}
+        hpos = np.array([positions[(street, b)] for b in houses], dtype=float)
+        cur = {}
+        for n, ids in ids_of.items():
+            b = picks.get(ids[0])
+            if ids[0] in placed and b in index:
+                cur[n] = index[b]
+        if len(cur) < 4:
+            continue
+        pn = {(n, i): float(np.mean([prob.get((a, houses[i]), 0.0) for a in ids_of[n]]))
+              for n in cur for i in range(len(houses))}
+        def rms_of(assign):
+            ns = np.array(sorted(assign), dtype=float)
+            pos = hpos[[assign[int(n)] for n in ns]]
+            if np.ptp(pos) == 0:
+                return np.inf
+            k, c = np.polyfit(pos, ns, 1)
+            return float(np.sqrt(np.mean((ns - (k * pos + c)) ** 2)))
+        cur_rms = rms_of(cur)
+        order_n = sorted(cur, key=lambda n: cur[n])  # numbers in road order
+        for _ in range(RUN_SHIFT_MAX_ROUNDS):
+            used = set(cur.values())
+            improved = None
+            m = len(order_n)
+            for a in range(m):
+                for b in range(a, m):
+                    run = order_n[a:b + 1]
+                    for s in (-1, 1):
+                        edge = cur[run[-1]] + 1 if s == 1 else cur[run[0]] - 1
+                        if not 0 <= edge < len(houses) or edge in used:
+                            continue
+                        alt = dict(cur)
+                        for n in run:
+                            alt[n] = cur[n] + s
+                        drop = sum(pn[(n, cur[n])] - pn[(n, alt[n])] for n in run)
+                        if drop > lam * len(run):
+                            continue  # the ranker clearly disagrees
+                        r = rms_of(alt)
+                        if r <= RUN_SHIFT_MIN_RATIO * cur_rms and (improved is None or r < improved[0]):
+                            improved = (r, alt)
+            if improved is None:
+                break
+            cur_rms, cur = improved
+            order_n = sorted(cur, key=lambda n: cur[n])
+        for n, i in cur.items():
+            for a_id in ids_of[n]:
+                picks[a_id] = houses[i]
+    return picks
+
+
+# Numbers follow distance along the road (Harpswell: on 77% of street sides
+# the real houses sit within 5% of the number range of a straight line). Second
+# pass: fit each side's line (Theil-Sen, robust) from the numbers road order
+# placed itself, then add LINE_BONUS * exp(-(d / sigma)^2) to every candidate's
+# probability, d = its distance from where the line puts the number, sigma = the
+# side's own scatter in meters (LINE_SIGMA_MIN..MAX); road order runs again.
+# It replaces TIGER's often-misplaced ranges with the street's own numbering.
+# None = off.
+LINE_BONUS = None  # 2026-11-13 Harpswell (2,390): 0.2 2,384 | 0.35 2,386 | 0.5 2,400 | 0.65 2,382 | 0.8 2,358 | 1.0 2,361 -- lone spike, off
+LINE_MIN_PLACED = 5
+LINE_SIGMA_MIN, LINE_SIGMA_MAX = 15.0, 80.0
+
+
+def side_lines(address_df, positions, picks, placed) -> dict:
+    """{(street, parity): (meters per number, intercept, sigma m)} -- Theil-Sen line of the
+    positions of the numbers road order placed itself."""
+    expect = {}
+    addr = address_df[address_df["id"].isin(placed)]
+    for (street, parity), g in addr.assign(parity=addr["number"] % 2).groupby(["street", "parity"]):
+        pts = [(n, positions.get((street, picks.get(a)))) for a, n in zip(g["id"], g["number"])]
+        pts = sorted({(n, q) for n, q in pts if q is not None})
+        if len(pts) < LINE_MIN_PLACED:
+            continue
+        ns = np.array([n for n, _ in pts], float); qs = np.array([q for _, q in pts], float)
+        i, j = np.triu_indices(len(ns), 1)
+        dn = ns[j] - ns[i]
+        ok = dn != 0
+        if not ok.any():
+            continue
+        slope = float(np.median((qs[j] - qs[i])[ok] / dn[ok]))
+        icpt = float(np.median(qs - slope * ns))
+        resid = np.abs(qs - (slope * ns + icpt))
+        expect[(street, int(parity))] = (slope, icpt, float(np.clip(1.4826 * np.median(resid), LINE_SIGMA_MIN, LINE_SIGMA_MAX)))
+    return expect
+
+
+# Review list: a pick whose house is more than FAR_REVIEW_M (and FAR_REVIEW_SIGMAS
+# of the side's scatter) from where its side's numbering line puts the number.
+FAR_REVIEW_M = 150
+FAR_REVIEW_SIGMAS = 3
+
+
+def far_from_line(address_df, positions, picks, placed) -> set:
+    """address ids whose pick sits far from its side's number-by-distance line."""
+    expect = side_lines(address_df, positions, picks, placed)
+    out = set()
+    for a, st, n in zip(address_df["id"], address_df["street"], address_df["number"]):
+        e = expect.get((st, int(n) % 2))
+        q = positions.get((st, picks.get(a))) if e else None
+        if q is None:
+            continue
+        slope, icpt, sigma = e
+        if abs(q - (slope * n + icpt)) > max(FAR_REVIEW_M, FAR_REVIEW_SIGMAS * sigma):
+            out.add(a)
+    return out
+
+
+def line_rescore(address_df, scored_df, positions, picks, placed):
+    """scored_df with each candidate's score raised near its number's line spot."""
+    if LINE_BONUS is None:
+        return None
+    p = probabilities(scored_df).to_numpy()
+    info = address_df.set_index("id")[["street", "number"]]
+    st = scored_df["address_id"].map(info["street"]).to_numpy()
+    num = scored_df["address_id"].map(info["number"]).to_numpy()
+    expect = side_lines(address_df, positions, picks, placed)
+    addr = address_df.iloc[0:0]
+    for (street, parity), g in addr.assign(parity=addr["number"] % 2).groupby(["street", "parity"]):
+        pts = [(n, positions.get((street, picks.get(a)))) for a, n in zip(g["id"], g["number"])]
+        pts = sorted({(n, q) for n, q in pts if q is not None})
+        if len(pts) < LINE_MIN_PLACED:
+            continue
+        ns = np.array([n for n, _ in pts], float); qs = np.array([q for _, q in pts], float)
+        i, j = np.triu_indices(len(ns), 1)
+        dn = ns[j] - ns[i]
+        ok = dn != 0
+        if not ok.any():
+            continue
+        slope = float(np.median((qs[j] - qs[i])[ok] / dn[ok]))
+        icpt = float(np.median(qs - slope * ns))
+        resid = np.abs(qs - (slope * ns + icpt))
+        sigma = float(np.clip(1.4826 * np.median(resid), LINE_SIGMA_MIN, LINE_SIGMA_MAX))
+        expect[(street, int(parity))] = (slope, icpt, sigma)
+    bonus = np.zeros(len(scored_df))
+    for k, (a_st, n, b) in enumerate(zip(st, num, scored_df["source_id"])):
+        e = expect.get((a_st, int(n) % 2)) if isinstance(a_st, str) else None
+        q = positions.get((a_st, b)) if e else None
+        if q is None:
+            continue
+        slope, icpt, sigma = e
+        d = q - (slope * n + icpt)
+        bonus[k] = LINE_BONUS * np.exp(-(d / sigma) ** 2)
+    out = scored_df.copy()
+    out["score"] = np.log(np.clip(p + bonus, 1e-12, None))
+    return out
+
+
 def lot_streets(lot_addresses) -> dict:
     """{parcel_id: {canonical street, ...}} from load_lot_addresses."""
     out = defaultdict(set)
@@ -941,8 +1719,34 @@ def lot_streets(lot_addresses) -> dict:
     return dict(out)
 
 
+# Owner's two-houses rule, inside road order: a tax lot whose second-biggest
+# building is at least LOT_TWO_HOMES_RATIO of its biggest (and at least
+# LOT_TWO_HOMES_MIN_M2) is two places, not one. None = off.
+LOT_TWO_HOMES_RATIO = None  # 2026-11-13 Harpswell right: off 2,372 | 0.6 2,354 | 0.8 2,365 (evaluate headline count) -- off; must apply only where a side is short of places
+LOT_TWO_HOMES_MIN_M2 = 60
+
+
+# Owner's two-houses rule, targeted: a lot place whose second house is at
+# least LOT_SHARE_MIN_RATIO of its biggest (and LOT_SHARE_MIN_M2) may take a
+# second number at LOT_SHARE_PENALTY -- road order only does that when the
+# number would otherwise be left out (39/43 Williams Road: odd side 33/39/43,
+# two places). spread_within_lots then gives the two numbers to the two houses
+# in order along the street. None = off.
+LOT_SHARE_PENALTY = None  # off: 0.6 is only +2 and leaves Williams 39/43 wrong; 0.2 would fix them but costs 28 elsewhere. Was: Harpswell right (headline count): off 2,372 | 0.1 2,340 | 0.2 2,344 | 0.4 2,357 | 0.6 2,374
+LOT_SHARE_MIN_RATIO = 0.6
+LOT_SHARE_MIN_M2 = 60
+
+
+# Owner's count rule (see lot_picks): a lot's "houses" are its buildings of
+# at least COUNT_MATCH_MIN_SHARE of its biggest and COUNT_MATCH_MIN_M2. False = off.
+COUNT_MATCH_LOTS = True
+LAST_EXPANDED = set()  # (street, parity, lot place) the last lot_picks call split
+COUNT_MATCH_MIN_SHARE = 0.4
+COUNT_MATCH_MIN_M2 = 40
+
+
 def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve_p=None, roof_of=None,
-              streets_of_lot=None, **kwargs) -> dict:
+              streets_of_lot=None, fronts_of_lot=None, **kwargs) -> dict:
     """order_constrained_picks with each multi-building TAX LOT as one place
     along the road (owner's matrix rule: lots are numbered in order, not
     buildings). Lot 42 Brickyard Cove has two houses, one in front of 22's
@@ -959,13 +1763,96 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
         other = [bool(streets_of_lot.get(lot)) and street_of.get(a) not in streets_of_lot[lot]
                  for a, lot in zip(df["address_id"], lot_of)]
         df = df[~np.array(other, dtype=bool)]
+    if DRIVE_LOT_GUARD and "drive_ratio" in df.columns:
+        from .street_names import canonical
+        street_of = {a: canonical(st) for a, st in zip(address_df["id"], address_df["street"])}
+        lot_of = df["source_id"].map(parcel_of)
+        guard_fronts = load_lot_fronts_cached() if DRIVE_LOT_GUARD in ("fronts", "both") else {}
+        ok = []
+        for a, lot in zip(df["address_id"], lot_of):
+            st = street_of.get(a)
+            g = False
+            if DRIVE_LOT_GUARD in ("taxroll", "both") and streets_of_lot:
+                g |= st in streets_of_lot.get(lot, ())
+            if DRIVE_LOT_GUARD in ("fronts", "both"):
+                g |= st in guard_fronts.get(lot, ())
+            ok.append(g)
+        ok = np.array(ok, dtype=bool)
+        df.loc[ok, "drive_ratio"] = np.nan
+        if NEAR_ROAD_LOT_GUARD and "dist_vs_nearest_road" in df.columns:
+            df.loc[ok, "dist_vs_nearest_road"] = 0.0
+        if "drive_margin" in df.columns:
+            df.loc[ok, "drive_margin"] = np.nan
+    if fronts_of_lot:
+        from .street_names import canonical
+        street_of = {a: canonical(st) for a, st in zip(address_df["id"], address_df["street"])}
+        fronts = df["source_id"].map(parcel_of).map(fronts_of_lot)
+        from difflib import SequenceMatcher
+
+        def touches(street, roads):  # loose: "HIGH HEAD" = "HIGH HEAD RD", "GUSS GULLEY" = "GUSS GULLY"
+            return street in roads or any(
+                r.startswith(street) or street.startswith(r) or SequenceMatcher(None, street, r).ratio() >= 0.85
+                for r in roads)
+        elsewhere = np.array([isinstance(f, set) and bool(f) and not touches(street_of.get(a, ""), f)
+                              for a, f in zip(df["address_id"], fronts)], dtype=bool)
+        if "drive_best" in df.columns:
+            elsewhere &= ~(df["drive_best"] == 1).to_numpy()
+        df = df[~elsewhere]
     lot_size = defaultdict(int)
     for pid in parcel_of.values():
         lot_size[pid] += 1
     # Ordinary lots only: a condo or apartment parcel (Harvest Ridge Road's
     # townhouses, 2 Village View) holds many numbered buildings.
     key = {b: ("lot:" + pid if 1 < lot_size[pid] <= LOT_MAX_BUILDINGS else b) for b, pid in parcel_of.items()}
+    if LOT_TWO_HOMES_RATIO and "sqmeters" in df.columns:
+        # Owner: a lot with two real houses can hold two numbers (39/43 Williams
+        # Road: lot "39", houses of 113 and 127 m2) -- such a lot stays two places.
+        size = df.drop_duplicates("source_id").set_index("source_id")["sqmeters"].to_dict()
+        by_lot = defaultdict(list)
+        for b, pid in parcel_of.items():
+            if b in size:
+                by_lot[pid].append(size[b] or 0)
+        two = {pid for pid, s in by_lot.items()
+               if len(s) >= 2 and sorted(s)[-2] >= LOT_TWO_HOMES_RATIO * max(s) and sorted(s)[-2] >= LOT_TWO_HOMES_MIN_M2}
+        key = {b: (b if parcel_of.get(b) in two else k) for b, k in key.items()}
     df["place"] = df["source_id"].map(lambda b: key.get(b, b))
+    expanded = set()  # (street, building) placed on its own by COUNT_MATCH_LOTS
+    LAST_EXPANDED.clear()
+    if COUNT_MATCH_LOTS and "sqmeters" in df.columns and "same_side" in df.columns:
+        # Owner's count rule: on a street side with more numbers than places, where
+        # counting each two-house lot's houses separately makes houses == numbers
+        # exactly, those lots are separate houses on that side (39/43 Williams Road:
+        # odd side 33/39/43 = 33's house + one lot with two houses).
+        size = df.drop_duplicates("source_id").set_index("source_id")["sqmeters"].fillna(0).to_dict()
+        members = defaultdict(list)
+        for b, pid in parcel_of.items():
+            if b in size:
+                members["lot:" + pid].append(b)
+        def houses(place):
+            if not str(place).startswith("lot:"):
+                return [place]
+            bs = members.get(place, [])
+            big = max((size[b] for b in bs), default=0)
+            return [b for b in bs if size[b] >= max(COUNT_MATCH_MIN_SHARE * big, COUNT_MATCH_MIN_M2)]
+        info = address_df.set_index("id")[["street", "number"]].rename(columns={"street": "_st", "number": "_num"})
+        side = df[df["same_side"].astype(bool)].join(info, on="address_id").rename(columns={"_st": "street_", "_num": "number"})
+        side = side.assign(parity=side["number"] % 2)
+        for (street, parity), g in side.groupby(["street_", "parity"]):
+            k = g["number"].nunique()
+            places = set(g["place"])
+            if k <= len(places):
+                continue
+            total = sum(len(houses(p)) for p in places)
+            if total != k:
+                continue
+            ids = set(g["address_id"])
+            for p in places:
+                hs = houses(p)
+                if str(p).startswith("lot:") and len(hs) >= 2:
+                    rows_ = df["address_id"].isin(ids) & df["source_id"].isin(hs)
+                    df.loc[rows_, "place"] = df.loc[rows_, "source_id"]
+                    expanded.update((street, b) for b in hs)
+                    LAST_EXPANDED.add((street, int(parity), p))
     # The lane's end is the lot's numbered building, whatever the ranker liked.
     # One lane, one home: of several buildings at the end of a lot's lane
     # (47 Flying Point Road: house, barn and sheds), only the biggest is the
@@ -1005,7 +1892,7 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
     agg_spec = {"p_sum": ("p", "sum"), "best": ("source_id", "first"), "same_side": ("same_side", "first")}
     for col, how in (("dist_vs_nearest_road", "min"), ("d_m0", "min"), ("sqmeters", "max"),
                      ("parcel_size_ratio", "max"), ("parcel_buildings", "min"), ("parcel_area_m2", "max"),
-                     ("pool_m", "min"), ("drive_ratio", "min"), ("drive_best", "max"), ("dist_road", "min"),
+                     ("pool_m", "min"), ("drive_ratio", "min"), ("drive_margin", "min"), ("drive_best", "max"), ("dist_road", "min"),
                      ("lane_end", "max"), ("canopy_over", "max"), ("roof_m2", "max")):
         if col in df.columns:
             agg_spec[col] = (col, how)
@@ -1042,6 +1929,18 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
     for (street, b), along in positions.items():
         lists[(street, key.get(b, b))].append(along)
     positions_place = {k: float(np.mean(v)) for k, v in lists.items()}
+    for street, b in expanded:
+        if (street, b) in positions:
+            positions_place[(street, b)] = positions[(street, b)]
+    if LOT_SHARE_PENALTY is not None and "sqmeters" in df.columns:
+        size = df.drop_duplicates("source_id").set_index("source_id")["sqmeters"].to_dict()
+        by_lot = defaultdict(list)
+        for b, pid in parcel_of.items():
+            if b in size:
+                by_lot[pid].append(size[b] or 0)
+        kwargs["two_home_places"] = {"lot:" + pid for pid, s in by_lot.items()
+                                     if len(s) >= 2 and sorted(s)[-2] >= LOT_SHARE_MIN_RATIO * max(s)
+                                     and sorted(s)[-2] >= LOT_SHARE_MIN_M2}
     picked = order_constrained_picks(address_df, scored_place, positions_place, fallback, **kwargs)
     picks = {a: best_building.get((a, v), v) for a, v in picked.items()}
     if SPREAD_WITHIN_LOT and roof_of is not None:
@@ -1111,8 +2010,16 @@ def spread_within_lots(picks, address_df, parcel_of, size_of, positions):
 # answers the question (Freeport: 79% of E911 points sit on a lot with the
 # same number and street) -- and scored as its own mode instead: where no
 # E911 exists, the town's tax roll may be what gives each lot its number.
-LOT_ADDRESSES_SQL = """
+LOT_ADDRESSES_OLD_SQL = """
 SELECT parcel_id, prop_loc FROM address_inference.parcels
+WHERE state_fips = %(state_fips)s AND town = %(town)s AND prop_loc IS NOT NULL
+ORDER BY parcel_id
+"""
+LOT_ADDRESSES_SQL = """
+-- Harpswell, Pownal: the number sits only in prop_num, prop_loc is the bare street
+SELECT parcel_id, CASE WHEN prop_loc !~ '^ *[0-9]' AND prop_num IS NOT NULL AND prop_num > 0
+                       THEN prop_num || ' ' || prop_loc ELSE prop_loc END
+FROM address_inference.parcels
 WHERE state_fips = %(state_fips)s AND town = %(town)s AND prop_loc IS NOT NULL
 ORDER BY parcel_id
 """
@@ -1139,6 +2046,11 @@ def parse_prop_loc(prop_loc):
     return int(m.group(1)), canonical(" ".join(words))
 
 
+# Harpswell/Pownal tax rolls keep the number only in prop_num; False = the old
+# reading (prop_loc alone), for A/B runs.
+LOT_NUMBER_FROM_PROP_NUM = True
+
+
 def load_lot_addresses(dsn, region, town) -> dict:
     """{(number, canonical street): [parcel_id, ...]}"""
     out = defaultdict(list)
@@ -1146,7 +2058,8 @@ def load_lot_addresses(dsn, region, town) -> dict:
         if conn.execute("SELECT to_regclass('address_inference.parcels') IS NULL").fetchone()[0]:
             return {}
         for parcel_id, prop_loc in conn.execute(
-                LOT_ADDRESSES_SQL, {"state_fips": region.state_fips, "town": town}).fetchall():
+                LOT_ADDRESSES_SQL if LOT_NUMBER_FROM_PROP_NUM else LOT_ADDRESSES_OLD_SQL,
+                {"state_fips": region.state_fips, "town": town}).fetchall():
             key = parse_prop_loc(prop_loc)
             if key:
                 out[key].append(parcel_id)

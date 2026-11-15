@@ -309,6 +309,47 @@ def add_other_name(conn, params, m) -> None:
         m.tlids = tuple(sorted(tlids - set(m.dropped_tlids)))
 
 
+# Two E911 streets matched to the same TIGER piece (TIGER names the whole
+# road "Ash Cove Rd S"; E911 splits it into Ash Cove Road -- main stretch and
+# north branch -- and Ash Cove South -- the south branch): each shared piece
+# stays only with the street whose own address points are nearest it, unless
+# that would leave a street with no pieces. Ash Cove South's 2-12 had been
+# placed along the main road's 2-98 range, 420+ m from their houses.
+SPLIT_SHARED = True  # with dataset.RELIST_MIN_SHARE = 1.0 and attach.UNRANGED_MAX_M: Ash Cove South 2-12 right; Harpswell 2,218 vs 2,220 (noise)
+SHARED_DIST_SQL = """
+SELECT upper(a.street_fullname), s.tlid, min(ST_Distance(s.geom::geography, a.geom::geography))
+FROM address_points a
+JOIN streets s ON s.tlid = ANY(%(tlids)s) AND s.geom && ST_Expand(a.geom, 0.01)
+WHERE a.town = %(town)s AND a.state_abbr = %(state)s AND upper(a.street_fullname) = ANY(%(labels)s)
+GROUP BY 1, 2
+"""
+
+
+def split_shared(conn, params, matches) -> int:
+    """Give each piece claimed by several matched streets to the nearest one. Returns pieces moved."""
+    owners = defaultdict(list)
+    for m in matches:
+        for tlid in m.tlids:
+            owners[tlid].append(m)
+    shared = {tlid: ms for tlid, ms in owners.items() if len(ms) > 1}
+    if not shared:
+        return 0
+    labels = sorted({m.label_street for ms in shared.values() for m in ms})
+    dist = {(lab, tlid): d for lab, tlid, d in conn.execute(
+        SHARED_DIST_SQL, {**params, "tlids": list(shared), "labels": labels}).fetchall()}
+    moved = 0
+    for tlid, ms in sorted(shared.items()):
+        ranked = sorted(ms, key=lambda m: dist.get((m.label_street, tlid), float("inf")))
+        best = dist.get((ranked[0].label_street, tlid), float("inf"))
+        for m in ranked[1:]:
+            if dist.get((m.label_street, tlid), float("inf")) <= best:
+                continue  # tie: keep both
+            if len(m.tlids) > 1:
+                m.tlids = tuple(x for x in m.tlids if x != tlid)
+                moved += 1
+    return moved
+
+
 def match_town(dsn, region, town: str) -> list[StreetMatch]:
     with psycopg.connect(dsn) as conn:
         conn.execute(CREATE_TABLES_SQL)
@@ -325,6 +366,8 @@ def match_town(dsn, region, town: str) -> list[StreetMatch]:
         for m in matches:
             add_other_name(conn, params, m)
             match_far(conn, params, m)
+        if SPLIT_SHARED:
+            split_shared(conn, params, matches)
 
         key = {"region": region.id, "town": town}
         conn.execute("DELETE FROM address_inference.street_matches WHERE region_id = %(region)s AND town = %(town)s", key)
