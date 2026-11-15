@@ -34,7 +34,7 @@ const METHODS = [
   'ml_order', 'ml',
   'assessor', 'assessor_e911roads',
   'pattern', 'pattern_pairs', 'pattern_ml',
-  'rural_shapes',
+  'rural_shapes', 'rural_swapped', 'rural_osm', 'best_option', 'ml_order_review',
   'ml_order_e911roads', 'ml_e911roads',
   'ml_order_auto', 'ml_auto',
   'ml_order_list', 'ml_list',
@@ -44,7 +44,7 @@ const METHODS = [
 const BASE_METHOD = Object.fromEntries(
   METHODS.map((m) => [
     m,
-    m === 'rural_shapes' ? 'ml_order' : m.startsWith('pattern') ? 'assessor' : m.startsWith('assessor') ? m.replace('assessor', 'ml_order') : m.replace('ml_order', 'ml'),
+    (m === 'rural_shapes' || m === 'rural_swapped' || m === 'rural_osm' || m === 'best_option' || m === 'ml_order_review') ? 'ml_order' : m.startsWith('pattern') ? 'assessor' : m.startsWith('assessor') ? m.replace('assessor', 'ml_order') : m.replace('ml_order', 'ml'),
   ])
 );
 
@@ -112,15 +112,26 @@ async function getAddressInferenceReview(db, town, method) {
       ? `LEFT JOIN address_inference.rural_shapes rs
            ON rs.region_id = p.region_id AND rs.town = p.town AND rs.street = p.street AND rs.address_number = p.address_number`
       : 'LEFT JOIN (SELECT NULL::text AS road_shape, NULL::text AS house_shape) rs ON false';
+    // Best option: numbers it wasn't sure of are left unassigned for review,
+    // with the reason and the best guess (data/session_2026-11-12_options).
+    const { rows: [{ has_review }] } = await db.query(
+      "SELECT to_regclass('address_inference.review_list') IS NOT NULL AS has_review"
+    );
+    const review = has_review && (selectedMethod === 'best_option' || selectedMethod === 'ml_order_review')
+      ? `LEFT JOIN address_inference.review_list rv
+           ON rv.town = p.town AND rv.street = p.street AND rv.address_number = p.address_number AND rv.method = p.method`
+      : 'LEFT JOIN (SELECT NULL::text AS reason, NULL::text AS guess_building) rv ON false';
     const { rows } = await db.query(
       `SELECT p.address_id, p.address_number, p.street, p.e911_lat, p.e911_lon, p.m0_lat, p.m0_lon,
               p.true_building, p.picked_building, p.picked_lat, p.picked_lon, p.error_m, p.status, p.candidates, ${taxRoll} AS tax_roll,
               base.status AS ml_status, base.picked_building AS ml_pick, d.unit, d.placement,
-              sp.pattern, sp.method AS pattern_method, rs.road_shape, rs.house_shape
+              sp.pattern, sp.method AS pattern_method, rs.road_shape, rs.house_shape,
+              rv.reason AS review_reason, rv.guess_building AS review_guess
        FROM address_inference.ml_predictions p
        ${details}
        ${patterns}
        ${shapes}
+       ${review}
        LEFT JOIN address_inference.ml_predictions base
          ON base.region_id = p.region_id AND base.town = p.town AND base.method = $4
         AND base.address_id = p.address_id
@@ -212,6 +223,8 @@ async function getAddressInferenceReview(db, town, method) {
         // Rural shapes method only: which road / house shape decided this number.
         roadShape: r.road_shape ?? null,
         houseShape: r.house_shape ?? null,
+        reviewReason: r.review_reason ?? null,
+        reviewGuess: r.review_guess ?? null,
         mlStatus: r.ml_status ?? r.status,
         changedFromMl: r.ml_pick !== null && r.ml_pick !== undefined && r.ml_pick !== r.picked_building,
       })),

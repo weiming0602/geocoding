@@ -36,6 +36,7 @@ const STATUS_LABELS: Record<TrainingStatus, string> = {
   missed: 'True building not a candidate',
   no_building: 'No building at the E911 point',
   estimated: 'Estimated point (no house)',
+  review: 'Needs review (not assigned)',
 };
 const METHOD_LABELS: Record<TrainingMethod, string> = {
   ml_order: 'ML + road order',
@@ -54,6 +55,10 @@ const METHOD_LABELS: Record<TrainingMethod, string> = {
   pattern_pairs: 'Pattern + pairs across the road (dead ends)',
   pattern_ml: 'Pattern + ML membership (dead ends)',
   rural_shapes: 'Rural shapes: drive the road, no tax roll',
+  rural_swapped: "Rural shapes, odd/even sides swapped from TIGER's",
+  rural_osm: 'Rural shapes on OSM roads only (no TIGER), internal',
+  best_option: 'Best option per street side (fewest issues), no tax roll',
+  ml_order_review: 'ML + road order, numbers road order could not place left for review',
 };
 const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   ml_order: 'ml',
@@ -75,6 +80,10 @@ const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   pattern_ml: 'assessor',
   // compared against ML + road order: neither uses the tax roll
   rural_shapes: 'ml_order',
+  rural_swapped: 'ml_order',
+  rural_osm: 'ml_order',
+  best_option: 'ml_order',
+  ml_order_review: 'ml_order',
 };
 // Rural shapes (data/session_2026-11-11_pownal/rural_shapes.py): what decided each number.
 const ROAD_SHAPE_LABEL: Record<string, string> = {
@@ -113,7 +122,7 @@ const PATTERN_METHOD_LABEL: Record<string, string> = {
   ml_order: 'ML + road order',
   assessor: "the tax roll's lot address, else ML + road order",
 };
-const STATUS_ORDER: TrainingStatus[] = ['wrong', 'missed', 'right', 'no_building', 'estimated'];
+const STATUS_ORDER: TrainingStatus[] = ['wrong', 'missed', 'review', 'right', 'no_building', 'estimated'];
 const LIST_LIMIT = 200;
 const SUGGESTION_KINDS: { kind: SuggestionKind; label: string }[] = [
   { kind: 'second', label: 'Second house on a numbered lot' },
@@ -177,7 +186,7 @@ export default function TrainingData() {
   const [data, setData] = useState<AddressInferenceReviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [visible, setVisible] = useState<Set<TrainingStatus>>(() => new Set(['wrong', 'missed', 'estimated']));
+  const [visible, setVisible] = useState<Set<TrainingStatus>>(() => new Set(['wrong', 'missed', 'estimated', 'review']));
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<TrainingAddress | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(true);
@@ -797,6 +806,12 @@ export default function TrainingData() {
                 <div style={{ fontSize: 13, marginTop: 4 }}>
                   Road shape: <strong>{ROAD_SHAPE_LABEL[selected.roadShape] ?? selected.roadShape}</strong>. House shape:{' '}
                   <strong>{HOUSE_SHAPE_LABEL[selected.houseShape ?? ''] ?? selected.houseShape}</strong>.
+                </div>
+              )}
+              {selected.status === 'review' && (
+                <div style={{ fontSize: 13, marginTop: 4 }}>
+                  <strong>Not assigned: needs your review.</strong> {selected.reviewReason ?? ''}
+                  {selected.reviewGuess ? <> Best guess (not assigned): building {selected.reviewGuess.slice(0, 8)}.</> : null}
                 </div>
               )}
               {selected.pattern && data.method !== 'rural_shapes' && (

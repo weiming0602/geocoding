@@ -18,6 +18,7 @@ export const STATUS_COLORS: Record<TrainingStatus, string> = {
   missed: '#d68910',
   no_building: '#7f8c8d',
   estimated: '#6c3483',
+  review: '#1a8f9e',
 };
 export const BUILDING_COLORS = {
   truth: '#2e7d4f', // the building E911 says the address is

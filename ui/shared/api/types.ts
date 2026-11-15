@@ -533,7 +533,8 @@ export type TransactionsResponse = {
 // of the E911 point (no label).
 // estimated: a number with no house got an estimated point instead of a
 // building (address_inference/patterns.py: across from its partner).
-export type TrainingStatus = 'right' | 'wrong' | 'missed' | 'no_building' | 'estimated';
+// review: the method wasn't sure and left the number unassigned for the owner to review
+export type TrainingStatus = 'right' | 'wrong' | 'missed' | 'no_building' | 'estimated' | 'review';
 
 export type TrainingAddress = {
   id: string;
@@ -564,6 +565,9 @@ export type TrainingAddress = {
   // estimated / unplaced) that decided this number.
   roadShape?: string | null;
   houseShape?: string | null;
+  // status 'review' only: why it wasn't assigned, and the best guess (not shown as a pick)
+  reviewReason?: string | null;
+  reviewGuess?: string | null;
   // What the ranker alone did -- differs from status/pickedBuilding only
   // for method 'ml_order', where road order may have changed the pick.
   mlStatus: TrainingStatus;
@@ -592,7 +596,15 @@ export type TrainingMethod =
   | 'pattern_pairs'
   | 'pattern_ml'
   // every street, no tax roll: drive the road by Maine's distance numbering
-  | 'rural_shapes';
+  | 'rural_shapes'
+  // rural shapes with each parity on the side TIGER gives the other one
+  | 'rural_swapped'
+  // rural shapes on OpenStreetMap roads only (internal experiment, ODbL)
+  | 'rural_osm'
+  // each street side: ML + road order or rural shapes, whichever has fewer issues
+  | 'best_option'
+  // ML + road order, but numbers road order itself couldn't place are 'review', not the ranker's guess
+  | 'ml_order_review';
 
 export type TrainingTown = { region: string; town: string; runDate: string; addresses: number };
 
