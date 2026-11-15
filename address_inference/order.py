@@ -62,6 +62,10 @@ OTHER_ROAD_CLOSER_M = 25
 # take a number and push the street's other numbers along (12 Brickyard
 # Cove's 45 m2 shed next to its 297 m2 house).
 ACCESSORY_MAX_RATIO = 0.2
+# A building this big (m2) is never an accessory, whatever the lot's biggest
+# (None = off): on the Bowdoin campus lot at Bayview Road's end (12 buildings,
+# a 658 m2 lab) 250's 124 m2 cottage counted as a shed and 250-283 shifted.
+ACCESSORY_MIN_M2 = None
 # A place whose biggest lidar roof (lidar.py) is under this many m2 is no
 # house and takes no number, like a shed (None = off): a 36 m2 outbuilding
 # on a 5-building lot took 50 Webster Road and shifted 52-58 one house on.
@@ -736,6 +740,8 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     accessory = ACCESSORY_MAX_RATIO if accessory_max_ratio is None else accessory_max_ratio
     if accessory is not None and "parcel_size_ratio" in scored.columns:
         shed = (scored["parcel_buildings"].fillna(1) >= 2) & (scored["parcel_size_ratio"] < accessory) & ~home_pool
+        if ACCESSORY_MIN_M2 is not None and "sqmeters" in scored.columns:
+            shed &= ~(scored["sqmeters"] >= ACCESSORY_MIN_M2)
         scored = scored[~shed]
     if NO_ROOF_SMALL_M2 is not None and "roof_m2" in scored.columns and "sqmeters" in scored.columns:
         open_ground = (scored["canopy_over"].fillna(0) < TREE_COVERED) if "canopy_over" in scored.columns \

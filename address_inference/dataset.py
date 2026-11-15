@@ -354,6 +354,20 @@ POOLS_SQL = "SELECT source_id, d FROM address_inference.building_pool"
 DRIVEWAYS_SQL = "SELECT source_id, road, cost, off_m FROM address_inference.building_driveways"
 
 
+# Owner's idea (2026-11-14): a house reached by a foot path/trail, like a
+# driveway (252 Bayview Road: no driveway in the imagery, 179 m from the
+# campus drive, but an OSM trail walks 242 m to Bayview and 1,037 m+ to any
+# other road). building_trails (data/session_2026-11-14_trails/trails.py):
+# walk length over OSM paths + drives to each street. Used only for buildings
+# with no imagery driveway and at least TRAIL_MIN_PATH_M walked on paths
+# (a house beside a drive isn't a trail house); the walk counts as a fully
+# visible driveway (off pavement 0). Never changes a building's position.
+TRAILS = False  # 2026-11-14 Harpswell: 3,285 -> 3,284 (170 Bayview broke, 252 unchanged); campus-core buildings on trails also got the lane signal
+TRAIL_MIN_PATH_M = 40
+TRAILS_SQL = """SELECT t.source_id, t.road, t.walk_m FROM address_inference.building_trails t
+WHERE t.source_id IN (SELECT source_id FROM address_inference.building_trails WHERE path_m >= %s)"""
+
+
 def load_driveways(conn) -> tuple[dict, dict]:
     """({source_id: {road: path cost}}, {source_id: {road: meters off pavement}})."""
     if conn.execute("SELECT to_regclass('address_inference.building_driveways') IS NULL").fetchone()[0]:
@@ -363,6 +377,14 @@ def load_driveways(conn) -> tuple[dict, dict]:
         costs[sid][road] = cost
         if off_m is not None:
             offs[sid][road] = off_m
+    if TRAILS and not conn.execute("SELECT to_regclass('address_inference.building_trails') IS NULL").fetchone()[0]:
+        trails = defaultdict(dict)
+        for sid, road, walk_m in conn.execute(TRAILS_SQL, (TRAIL_MIN_PATH_M,)).fetchall():
+            if sid not in costs:
+                trails[sid][road] = walk_m
+        for sid, roads in trails.items():
+            costs[sid] = roads
+            offs[sid] = {road: 0.0 for road in roads}
     return dict(costs), dict(offs)
 
 
