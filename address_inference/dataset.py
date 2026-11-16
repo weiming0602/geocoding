@@ -323,11 +323,25 @@ def covering_range(number: int, segments):
 # Each candidate building's tax parcel (address_inference.parcels): the
 # lot's frontage on each street segment, how many buildings share the lot,
 # and which is the biggest. Empty when parcels aren't loaded.
+# Owner's rule (2026-11-16): a shed stands close to its house, so a building
+# far from every other building is never a shed, whatever its size. With
+# SHED_NEAR_M set, parcel_size_ratio compares a building only with the
+# buildings of its lot within SHED_NEAR_M (itself included): none that close ->
+# 1.0. Bowdoin's campus lot (Bayview Road): 250's 124 m2 house was 0.19 of the
+# 658 m2 lab across the site and the ranker scored it -0.91 for that alone;
+# 252's building, 144 m from any other, was 0.23. None = the whole lot's biggest.
+SHED_NEAR_M = None
+# "near": compare only with same-lot buildings within SHED_NEAR_M (none -> 1.0).
+# "alone": owner's literal rule -- only a building with no other building at all
+# within SHED_NEAR_M has its size ignored (1.0); every other building keeps the
+# whole-lot comparison. 2026-11-16, 7 towns right numbers (14,237 off): near 40 m
+# 14,115 (Yarmouth -133, Harpswell -32, Freeport +20, Topsham +23).
+SHED_MODE = "near"
 PARCELS_SQL = """
 SELECT bp.source_id, bp.parcel_id, ST_Area(p.geom::geography),
        count(*) OVER (PARTITION BY bp.parcel_id),
        {size} = max({size}) OVER (PARTITION BY bp.parcel_id),
-       {size} / nullif(max({size}) OVER (PARTITION BY bp.parcel_id), 0)
+       {ratio}
 FROM address_inference.building_parcels bp
 JOIN address_inference.parcels p ON p.parcel_id = bp.parcel_id AND p.state_fips = bp.state_fips
 JOIN address_inference.structures s ON s.state_fips = bp.state_fips AND s.source_id = bp.source_id
@@ -408,13 +422,38 @@ def load_canopy(conn) -> dict:
 LIDAR_SIZE = False
 
 
+def size_ratio_sql(size: str, lidar: bool) -> str:
+    """parcel_size_ratio: against the whole lot's biggest, or (SHED_NEAR_M) only the lot's
+    buildings within SHED_NEAR_M of this one."""
+    lot_ratio = f"{size} / nullif(max({size}) OVER (PARTITION BY bp.parcel_id), 0)"
+    if SHED_NEAR_M is None:
+        return lot_ratio
+    if SHED_MODE == "alone":
+        return f"""CASE WHEN EXISTS (SELECT 1 FROM address_inference.structures o
+                         WHERE o.state_fips = s.state_fips AND o.source_id != s.source_id
+                           AND o.geom && ST_Expand(s.geom, 0.002)
+                           AND ST_DWithin(o.geom::geography, s.geom::geography, {float(SHED_NEAR_M)}))
+                       THEN {lot_ratio} ELSE 1.0 END"""
+    osize = "greatest(o.sqmeters, ol.roof_m2)" if lidar else "o.sqmeters"
+    ojoin = ("LEFT JOIN address_inference.building_lidar ol ON ol.state_fips = o.state_fips "
+             "AND ol.source_id = o.source_id") if lidar else ""
+    return f"""{size} / nullif(greatest({size}, (
+        SELECT max({osize}) FROM address_inference.building_parcels ob
+        JOIN address_inference.structures o ON o.state_fips = ob.state_fips AND o.source_id = ob.source_id
+        {ojoin}
+        WHERE ob.state_fips = bp.state_fips AND ob.parcel_id = bp.parcel_id AND ob.source_id != bp.source_id
+          AND o.geom && ST_Expand(s.geom, 0.001)
+          AND ST_DWithin(o.geom::geography, s.geom::geography, {float(SHED_NEAR_M)}))), 0)"""
+
+
 def sized(sql: str, conn) -> str:
-    """`sql` with {size} / {lidar_join} filled in for this database."""
+    """`sql` with {size} / {lidar_join} / {ratio} filled in for this database."""
     use = LIDAR_SIZE and not conn.execute(
         "SELECT to_regclass('address_inference.building_lidar') IS NULL").fetchone()[0]
     if not use:
-        return sql.format(size="s.sqmeters", lidar_join="")
-    return sql.format(size="greatest(s.sqmeters, bl.roof_m2)",
+        return sql.format(size="s.sqmeters", lidar_join="", ratio=size_ratio_sql("s.sqmeters", False))
+    size = "greatest(s.sqmeters, bl.roof_m2)"
+    return sql.format(size=size, ratio=size_ratio_sql(size, True),
                       lidar_join="LEFT JOIN address_inference.building_lidar bl\n"
                                  "  ON bl.state_fips = s.state_fips AND bl.source_id = s.source_id")
 

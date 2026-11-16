@@ -29,7 +29,7 @@ import pandas as pd
 import psycopg
 from sklearn.model_selection import GroupKFold
 
-from . import dataset, order, rate_spots
+from . import dataset, order, rate_spots, sites
 from .regions import load_region
 
 N_FOLDS = 5
@@ -59,6 +59,7 @@ def _top1(df, scores) -> int:
 
 
 INNER_FOLDS = 3
+SITES_FOUND: list = []  # last evaluate's sites (sites.site_picks)
 LAST_CHOICES: list = []  # per outer fold: True = optional features kept
 
 
@@ -377,6 +378,9 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     # Owner's short-end-branch rule (order.END_BRANCH_MAX_M).
     picks["ML+order"] = order.end_branch_picks(dsn, region, town, address_df, positions, picks["ML+order"],
                                                parcel_of if parcels else None, side_dirs)
+    # Campus / institutional sites are numbered as one set (sites.py).
+    picks["ML+order"], SITES_FOUND[:] = sites.site_picks(dsn, region, town, address_df, picks["ML+order"],
+                                                        dict(order._SPOTS) if rate_spots.RATE_SPOTS else {})
     assessor_matched = set()
     extra_coords = None
     if parcels:
