@@ -41,29 +41,63 @@ MODEL_PARAMS = dict(
 )
 
 
-def cross_validated_scores(candidate_df, features=None):
+def _fit(train, features):
+    # Addresses whose true building isn't a candidate teach nothing.
+    has_positive = train.groupby("address_id")["label"].transform("max") == 1
+    train = train[has_positive]
+    model = lgb.LGBMRanker(**MODEL_PARAMS)
+    model.fit(train[features].astype(float), train["label"],
+              group=train.groupby("address_id", sort=False).size().to_numpy())
+    return model
+
+
+def _top1(df, scores) -> int:
+    """Addresses whose highest-scored candidate is the true building."""
+    d = df.assign(_s=scores)
+    best = d.loc[d.groupby("address_id")["_s"].idxmax()]
+    return int(best["label"].sum())
+
+
+INNER_FOLDS = 3
+LAST_CHOICES: list = []  # per outer fold: True = optional features kept
+
+
+def cross_validated_scores(candidate_df, features=None, optional=None):
     """candidate_df plus an out-of-fold ranker `score` per row, and the
-    per-feature importance (gain) summed over folds."""
+    per-feature importance (gain) summed over folds.
+    optional: extra features each outer fold keeps only if they win on its own
+    training streets (inner GroupKFold, top-1 right building) -- the test streets
+    never take part in the choice."""
     features = list(dataset.FEATURES if features is None else features)
+    optional = list(optional or [])
+    every = features + optional
     # A total order (source_id breaks ties): the database returns rows in
     # no fixed order, and LightGBM's bagging depends on row order -- without
     # this, the same data gave results that differed run to run.
     df = candidate_df.sort_values(["address_id", "d_m0", "source_id"], kind="stable").reset_index(drop=True)
-    X = df[features].astype(float)
+    X = df[every].astype(float)
     df["score"] = np.nan
-    importance = np.zeros(len(features))
+    importance = pd.Series(0.0, index=every)
+    LAST_CHOICES.clear()
     folds = GroupKFold(n_splits=N_FOLDS).split(X, df["label"], groups=df["street"])
     for train_idx, test_idx in folds:
         train = df.iloc[train_idx]
-        # Addresses whose true building isn't a candidate teach nothing.
-        has_positive = train.groupby("address_id")["label"].transform("max") == 1
-        train = train[has_positive]
-        model = lgb.LGBMRanker(**MODEL_PARAMS)
-        model.fit(train[features].astype(float), train["label"],
-                  group=train.groupby("address_id", sort=False).size().to_numpy())
-        importance += model.booster_.feature_importance("gain")
-        df.loc[test_idx, "score"] = model.predict(X.iloc[test_idx])
-    return df, pd.Series(importance, index=features).sort_values(ascending=False)
+        use = features
+        if optional:
+            wins = {False: 0, True: 0}
+            inner = GroupKFold(n_splits=INNER_FOLDS).split(train, train["label"], groups=train["street"])
+            for in_tr, in_te in inner:
+                tr, te = train.iloc[in_tr], train.iloc[in_te]
+                for keep in (False, True):
+                    cols = every if keep else features
+                    wins[keep] += _top1(te, _fit(tr, cols).predict(te[cols].astype(float)))
+            keep = wins[True] > wins[False]
+            LAST_CHOICES.append(keep)
+            use = every if keep else features
+        model = _fit(train, use)
+        importance[use] += model.booster_.feature_importance("gain")
+        df.loc[test_idx, "score"] = model.predict(X.iloc[test_idx][use])
+    return df, importance.sort_values(ascending=False)
 
 
 def top_picks(scored_df) -> dict:
@@ -285,8 +319,15 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
         spots = rate_spots.street_spots(dsn, region, town, address_df)
         candidate_df = rate_spots.add_rate_features(candidate_df, address_df, spots,
                                                     order.load_positions(dsn, region, town))
-        features += rate_spots.RATE_COLS + (["street_rate_m"] if rate_spots.WITH_STREET_RATE else [])
-    scored, importance = cross_validated_scores(candidate_df, features)
+        extra = rate_spots.RATE_COLS + (["street_rate_m"] if rate_spots.WITH_STREET_RATE else [])
+    else:
+        extra = []
+    if rate_spots.RATE_SPOTS == "auto":
+        # each fold decides from its own training streets (Freeport's village
+        # streets lost 21 numbers with them, rural towns gained up to 184)
+        scored, importance = cross_validated_scores(candidate_df, features, optional=extra)
+    else:
+        scored, importance = cross_validated_scores(candidate_df, features + extra)
     picks["ML"] = top_picks(scored)
     # Main roads first: a building a more important street confidently takes
     # is off limits to the streets after it (order.CLAIM_MIN_P).
