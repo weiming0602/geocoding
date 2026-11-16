@@ -24,7 +24,7 @@ from .street_lines import street_lines
 
 RATE_COLS = ["d_rate_len", "d_rate_town"]
 # Off until proven on every town (owner: prove it).
-RATE_SPOTS = False
+RATE_SPOTS = True  # 2026-11-15, with order.MATCH_BONUS 0.6: 7 towns 13,785 -> 14,238 right numbers (Freeport -1)
 # Also give the ranker the street's own meters per number (street_rate_m).
 WITH_STREET_RATE = False
 RATE_MIN_NUMBERS = 5

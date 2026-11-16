@@ -659,7 +659,7 @@ def probabilities(scored_df) -> pd.Series:
 # building's place among the side's buildings" next to the ranker's
 # probability (see order_constrained_picks).
 RANK_WEIGHT = 0.0
-MATCH_BONUS = 0.3
+MATCH_BONUS = 0.6  # 2026-11-15 with rate_spots on, Freeport: 0.1 2,765 | 0.3 2,831 | 0.6 2,853 | 0.9 2,790 | 1.2 2,782
 
 
 def order_constrained_picks(address_df, scored_df, positions, fallback,
