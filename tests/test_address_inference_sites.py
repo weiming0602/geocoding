@@ -33,3 +33,9 @@ def test_bowdoin_numbers_go_in_drive_order_and_the_gate_stays_out():
 
 def test_fewer_numbers_than_buildings_is_not_this_pattern():
     assert assign([240, 246], {240: 300.0, 246: 250.0}, [(299, "a"), (244, "b"), (204, "c")], -1) == {}
+
+
+def test_campus_means_mostly_non_residential_buildings():
+    from address_inference.sites import is_campus
+    assert is_campus([dict(occ="Education")] * 12)
+    assert not is_campus([dict(occ="Residential")] * 9 + [dict(occ="Commercial")])

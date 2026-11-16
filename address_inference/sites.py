@@ -28,6 +28,11 @@ SITE_SPOT_MARGIN_M = 50.0
 SITE_MIN_M2 = 100.0
 SITE_DRIVE_M = 40.0
 SITE_ALONE_M = 100.0
+# A campus, not a mobile-home park or condo lot (Freeport's Linwood Road: 29 numbers on 9 buildings):
+# most of the lot's buildings non-residential (FEMA occupancy class), and at most SITE_MAX_EXTRA more
+# numbers than numbered buildings (Bowdoin: 8 numbers, 7 buildings -- the gate).
+SITE_MIN_NONRES_SHARE = 0.5
+SITE_MAX_EXTRA = 2
 
 # Street stretches inside big multi-building lots: (street, parcel, from_m, to_m along the street line).
 STRETCHES_SQL = """
@@ -63,7 +68,8 @@ SELECT s.source_id,
        ST_Distance(s.inner_point::geography, l.g::geography) AS off_m,
        greatest(s.sqmeters, coalesce(bl.roof_m2, 0)) AS m2,
        (SELECT min(ST_Distance(o.geom::geography, s.geom::geography)) FROM address_inference.structures o
-         WHERE o.state_fips = s.state_fips AND o.source_id != s.source_id AND o.geom && ST_Expand(s.geom, 0.003)) AS alone_m
+         WHERE o.state_fips = s.state_fips AND o.source_id != s.source_id AND o.geom && ST_Expand(s.geom, 0.003)) AS alone_m,
+       s.occ_cls
 FROM l, address_inference.building_parcels bp
 JOIN address_inference.structures s ON s.state_fips = bp.state_fips AND s.source_id = bp.source_id
 LEFT JOIN address_inference.building_lidar bl ON bl.state_fips = s.state_fips AND bl.source_id = s.source_id
@@ -78,6 +84,14 @@ def numbered_buildings(buildings) -> list:
             if (b["off_m"] <= SITE_DRIVE_M and (b["m2"] or 0) >= SITE_MIN_M2)
             or (b["alone_m"] is not None and b["alone_m"] >= SITE_ALONE_M)]
     return sorted(keep)
+
+
+def is_campus(buildings) -> bool:
+    """Most of the lot's buildings non-residential (Bowdoin: all "Education")."""
+    if not buildings:
+        return False
+    nonres = sum(1 for b in buildings if (b.get("occ") or "Residential") != "Residential")
+    return nonres / len(buildings) >= SITE_MIN_NONRES_SHARE
 
 
 def assign(numbers, spots, homes, direction) -> dict:
@@ -120,8 +134,12 @@ def site_picks(dsn, region, town, address_df, picks, spots) -> tuple[dict, list]
             if len(numbers) < 3:
                 continue
             rows = conn.execute(BUILDINGS_SQL, {**params, "street": street, "parcel": parcel}).fetchall()
-            buildings = [dict(source_id=r[0], along_m=r[1], off_m=r[2], m2=r[3], alone_m=r[4]) for r in rows]
+            buildings = [dict(source_id=r[0], along_m=r[1], off_m=r[2], m2=r[3], alone_m=r[4], occ=r[5]) for r in rows]
+            if not is_campus(buildings):
+                continue
             homes = numbered_buildings(buildings)
+            if len(numbers) > len(homes) + SITE_MAX_EXTRA:
+                continue  # many more numbers than buildings: a park or condo lot, not a campus
             chosen = assign(numbers, spot, homes, direction)
             found.append((street, parcel, numbers, homes, chosen))
             for n, aid in by_street[street]:
