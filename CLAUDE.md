@@ -148,8 +148,9 @@ read-write).
   the street's meters per number along the merged street line (Bayview Road,
   Harpswell: ~7.6 m, 210/mile), as `d_rate_len`/`d_rate_town`; with
   `order.MATCH_BONUS` 0.3 -> 0.6, seven towns' right numbers 13,785 -> 14,238
-  (Yarmouth +217, Harpswell +123, Freeport -1). Off for Freeport's village
-  streets numbered in sequence it cost ~20 until MATCH_BONUS was retuned.
+  (Yarmouth +217, Harpswell +123, Freeport -1). With the old MATCH_BONUS it cost
+  Freeport ~20 (village streets numbered in sequence, e.g. Holbrook Street),
+  although it helped Freeport's ranker alone (41.9% -> 45.7%).
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)
