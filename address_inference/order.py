@@ -922,6 +922,10 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
             # every number gets a building in road order when the side has
             # enough; a non-candidate pair is never allowed.
             fit = rank_weight * rank_fit if not townhouses else 0.0
+            if ISOLATED_BONUS and _ISOLATION and not townhouses:
+                alone = np.array([(_ISOLATION.get(b) or 0) >= ISOLATED_M for b in order])
+                if alone.any():
+                    P = P + ISOLATED_BONUS * alone[None, :]
             P = np.where(np.isnan(P), -1e9, P + fit + MATCH_BONUS)
             if share is None and two_home_places:
                 vec = np.array([LOT_SHARE_PENALTY if b in two_home_places else np.inf for b in order])
@@ -1040,6 +1044,40 @@ def load_lot_fronts_cached():
 
 def set_guard_town(dsn, town):
     _FRONTS_CACHE["fronts"] = load_lot_fronts(dsn, town, "both") if DRIVE_LOT_GUARD in ("fronts", "both") else {}
+    _ISOLATION.clear()
+    if ISOLATED_BONUS:
+        _ISOLATION.update(load_isolation(dsn, town))
+
+
+# Owner's rule (2026-11-15): a building standing alone -- ISOLATED_M or more
+# from any other building -- is somebody's address and can't be left without a
+# number just because the side has more buildings than numbers. Only clusters
+# (a campus core, a farm's barns) may hold unnumbered buildings. 252 Bayview
+# Road: its building is 144 m from any other; the campus core buildings 6-31 m
+# apart outscored it (0.40-0.54 vs 0.33) and road order dropped it for free.
+# Adds ISOLATED_BONUS to every number's score for such a building in road
+# order's table (None = off).
+ISOLATED_M = 100
+ISOLATED_BONUS = None
+_ISOLATION: dict = {}
+
+ISOLATION_SQL = """
+SELECT a.source_id, n.d
+FROM address_inference.structures a
+JOIN towns t ON t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s) AND ST_Intersects(t.geom, a.inner_point)
+CROSS JOIN LATERAL (
+    SELECT ST_Distance(a.geom::geography, b.geom::geography) AS d
+    FROM address_inference.structures b
+    WHERE b.state_fips = a.state_fips AND b.source_id != a.source_id
+    ORDER BY a.geom <-> b.geom LIMIT 1) n
+WHERE a.state_fips = '23'
+"""
+
+
+def load_isolation(dsn, town) -> dict:
+    """{source_id: meters to the nearest other building} for the town's buildings."""
+    with psycopg.connect(dsn) as conn:
+        return {sid: d for sid, d in conn.execute(ISOLATION_SQL, {"town": town}).fetchall()}
 
 
 def load_lot_fronts(dsn, town, source) -> dict:
