@@ -40,3 +40,15 @@ def test_median_step_tells_sequence_from_distance_numbering():
                113, 117, 122, 124, 130, 156, 160, 170, 220, 240, 246, 250, 252, 270, 281, 283]
     assert median_step(holbrook) == 2
     assert median_step(bayview) >= 4
+
+
+def test_anchored_spots_spread_numbers_past_the_last_anchor_to_the_road_end():
+    from address_inference.order import anchored_spots
+    # Bayview: numbers grow from the start at 2,142 m toward the far end at 0;
+    # last confident anchor 170 at 828 m, highest number 283 at the far end.
+    spot = (2142.0, -1, 2142.0 / 283, 2142.0, 38)
+    out = anchored_spots("BAYVIEW ROAD", [170, 220, 240, 252, 270, 283], [(130, 1111.0), (170, 828.0)], spot)
+    assert out[170] == 828.0
+    assert abs(out[240] - (828 - 70 * 828 / 113)) < 1e-6   # ~315 m (E911's house: 299 m)
+    assert abs(out[270] - (828 - 100 * 828 / 113)) < 1e-6  # ~95 m (E911's house: 87 m)
+    assert out[283] == 0.0

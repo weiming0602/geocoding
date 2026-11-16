@@ -447,6 +447,10 @@ SKIP_SCORE = None
 # house on. A number whose nearest same-side candidate is more than this far
 # from its interpolated point (d_m0) is left unplaced -> review. None = off.
 NO_HOUSE_NEAR_M = None
+# What "near" is measured from: "d_m0" (TIGER's interpolated point -- too often
+# wrong, 2026-11-14) or "d_rate_len" (rate_spots: the addresser's spot from the
+# road's start, meters along the road).
+NO_HOUSE_NEAR_BY = "d_m0"
 
 
 def monotone_assign(P, share_penalty=None, max_per_building=None, skip_score=None):
@@ -690,11 +694,17 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     townhouse_ratio = TOWNHOUSE_RATIO if townhouse_ratio is None else townhouse_ratio
     townhouse_share_penalty = TOWNHOUSE_SHARE_PENALTY if townhouse_share_penalty is None else townhouse_share_penalty
     scored = scored_df.assign(p=probabilities(scored_df))
-    if NO_HOUSE_NEAR_M is not None and "d_m0" in scored.columns:
+    by = ["d_m0", "d_rate_len"] if NO_HOUSE_NEAR_BY == "both" else [NO_HOUSE_NEAR_BY]
+    if NO_HOUSE_NEAR_M is not None and set(by) <= set(scored.columns):
         # A number with no building on its side near where its range puts it
         # stays unplaced (review) instead of taking a neighbor's house.
-        near = scored[scored["same_side"].astype(bool)].groupby("address_id")["d_m0"].min()
-        lonely = set(near.index[near > NO_HOUSE_NEAR_M])
+        # "both": TIGER's point AND the road-start spot must agree.
+        same = scored[scored["same_side"].astype(bool)].groupby("address_id")
+        lonely = None
+        for col in by:
+            near = same[col].min()
+            these = set(near.index[near > NO_HOUSE_NEAR_M])  # NaN (no spot) never counts
+            lonely = these if lonely is None else lonely & these
         scored = scored[~scored["address_id"].isin(lonely)]
     limit = OTHER_ROAD_CLOSER_M if other_road_closer_m is None else other_road_closer_m
     if limit is not None and "dist_vs_nearest_road" in scored.columns:
@@ -1714,6 +1724,93 @@ def far_from_line(address_df, positions, picks, placed) -> set:
     return out
 
 
+# Owner (2026-11-16, Bayview Road): "240 is the campus's primary number; 252 was
+# added after it, so it's greater and further along." The addresser's spacing
+# changes partway along a road (Bayview: ~7.6 m per number overall, 10.3 m for
+# 240-252, 5.4 m for 252-270), so the road-wide rate (rate_spots) lands 252 on
+# 246's house. Second pass: numbers road order placed on a building within
+# ANCHOR_TOL_M of their road-start spot are anchors; every number's spot is
+# interpolated between the anchors around it (before the first: toward the
+# road's start at number 0; after the last: toward the road's end at the
+# street's highest number), and candidates get ANCHOR_BONUS * exp(-(d/sigma)^2).
+# The rescored frame carries d_anchor, so NO_HOUSE_NEAR_BY = "d_anchor" leaves a
+# number with no building near its anchored spot unplaced (220: the campus
+# gate). None = off.
+ANCHOR_BONUS = None
+ANCHOR_TOL_M = 30.0
+ANCHOR_SIGMA_M = 30.0
+# "all" numbers, or only the "tail" past each street's last anchor.
+# 2026-11-16 Harpswell (saved default 3,415), all: 0.3 3,361 | 0.6 3,288.
+ANCHOR_SCOPE = "all"
+_SPOTS: dict = {}  # rate_spots.street_spots for the current town (set by evaluate)
+
+
+def anchored_spots(street, numbers, anchors, spot) -> dict:
+    """{number: meters along the street} from anchors [(number, meters)] sorted by number.
+    spot = (start_m, direction, rate_len, length_m, k) from rate_spots."""
+    start, direction, _rate, length, _k = spot
+    end = length if direction > 0 else 0.0
+    top = max(numbers)
+    xs = [0.0] + [float(n) for n, _ in anchors] + [float(top)]
+    ys = [start] + [float(q) for _, q in anchors] + [end]
+    # the road's ends only bound the anchors; drop them if an anchor sits on them
+    pts = sorted(dict(zip(xs, ys)).items())
+    xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+    return {n: float(np.interp(n, xs, ys)) for n in numbers}
+
+
+def anchor_rescore(address_df, scored_df, positions, picks, placed):
+    """scored_df with each candidate raised near its anchored spot, plus column d_anchor."""
+    if ANCHOR_BONUS is None or not _SPOTS:
+        return None
+    info = address_df.set_index("id")[["street", "number"]]
+    st = scored_df["address_id"].map(info["street"]).to_numpy()
+    num = scored_df["address_id"].map(info["number"]).to_numpy()
+    rate_town = _SPOTS.get(None)
+    spot_of = {}
+    for street, g in address_df.groupby("street"):
+        s = _SPOTS.get(street)
+        if s is None:
+            continue
+        start, direction, rate_len, _length, _k = s
+        anchors = {}
+        for a, n in zip(g["id"], g["number"]):
+            if a not in placed:
+                continue
+            q = positions.get((street, picks.get(a)))
+            if q is not None and abs(q - (start + direction * n * rate_len)) <= ANCHOR_TOL_M:
+                anchors.setdefault(int(n), q)
+        # keep anchors that run the street's way (drop any out of order)
+        kept = []
+        for n, q in sorted(anchors.items()):
+            if not kept or (q - kept[-1][1]) * direction > 0:
+                kept.append((n, q))
+        numbers = sorted({int(n) for n in g["number"]})
+        if ANCHOR_SCOPE == "tail":
+            # only the road's tail past its last confident number (Bayview's
+            # campus end): elsewhere the ranker's own rate features already know
+            if not kept:
+                continue
+            last = kept[-1][0]
+            numbers = [n for n in numbers if n > last]
+        if not numbers:
+            continue
+        for n, q in anchored_spots(street, numbers, kept, s).items():
+            spot_of[(street, n)] = q
+    d_anchor = np.full(len(scored_df), np.nan)
+    for k, (a_st, n, b) in enumerate(zip(st, num, scored_df["source_id"])):
+        q = positions.get((a_st, b))
+        sp = spot_of.get((a_st, int(n))) if isinstance(a_st, str) else None
+        if q is not None and sp is not None:
+            d_anchor[k] = abs(q - sp)
+    p = probabilities(scored_df).to_numpy()
+    bonus = np.where(np.isnan(d_anchor), 0.0, ANCHOR_BONUS * np.exp(-(np.nan_to_num(d_anchor) / ANCHOR_SIGMA_M) ** 2))
+    out = scored_df.copy()
+    out["score"] = np.log(np.clip(p + bonus, 1e-12, None))
+    out["d_anchor"] = d_anchor
+    return out
+
+
 def line_rescore(address_df, scored_df, positions, picks, placed):
     """scored_df with each candidate's score raised near its number's line spot."""
     if LINE_BONUS is None:
@@ -1934,7 +2031,7 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
                        .set_index(["address_id", "place"])["source_id"])
     df = df.sort_values(["address_id", "place", "lane_end", "p"], ascending=[True, True, False, False], kind="stable")
     agg_spec = {"p_sum": ("p", "sum"), "best": ("source_id", "first"), "same_side": ("same_side", "first")}
-    for col, how in (("dist_vs_nearest_road", "min"), ("d_m0", "min"), ("sqmeters", "max"),
+    for col, how in (("dist_vs_nearest_road", "min"), ("d_m0", "min"), ("d_rate_len", "min"), ("d_anchor", "min"), ("sqmeters", "max"),
                      ("parcel_size_ratio", "max"), ("parcel_buildings", "min"), ("parcel_area_m2", "max"),
                      ("pool_m", "min"), ("drive_ratio", "min"), ("drive_margin", "min"), ("drive_best", "max"), ("dist_road", "min"),
                      ("lane_end", "max"), ("canopy_over", "max"), ("roof_m2", "max")):

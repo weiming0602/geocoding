@@ -317,6 +317,8 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     if rate_spots.RATE_SPOTS:
         # The addresser's own measure: distance from the road's start (rate_spots.py).
         spots = rate_spots.street_spots(dsn, region, town, address_df)
+        order._SPOTS.clear()
+        order._SPOTS.update(spots)
         candidate_df = rate_spots.add_rate_features(candidate_df, address_df, spots,
                                                     order.load_positions(dsn, region, town))
         extra = rate_spots.RATE_COLS + (["street_rate_m"] if rate_spots.WITH_STREET_RATE else [])
@@ -351,6 +353,11 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
         rescored = order.line_rescore(address_df, scored, positions, picks["ML+order"], set(order.LAST_PLACED))
         if rescored is not None:
             picks["ML+order"] = order.lot_picks(address_df, rescored, positions, fallback, parcel_of, **lot_kwargs)
+        # Third pass: spots interpolated between the numbers already placed where
+        # the addresser's rate says (order.ANCHOR_BONUS).
+        anchored = order.anchor_rescore(address_df, scored, positions, picks["ML+order"], set(order.LAST_PLACED))
+        if anchored is not None:
+            picks["ML+order"] = order.lot_picks(address_df, anchored, positions, fallback, parcel_of, **lot_kwargs)
     else:
         picks["ML+order"] = order.order_constrained_picks(address_df, scored, positions, picks["ML"],
                                                           street_order=street_order, side_directions=side_dirs)
