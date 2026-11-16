@@ -143,6 +143,13 @@ read-write).
   biggest building even when TIGER draws the street too far away for it to be
   a candidate (Dune Drive's TIGER line turns into the sand; 87-143 were
   "missed"): assessor TIGER 80.5% -> 82.2%, E911 roads 83.7% -> 83.8%.
+  The ranker also gets the addresser's own measure (`rate_spots.py`, owner's
+  "think like the addresser"): each number's spot = the road's start + number x
+  the street's meters per number along the merged street line (Bayview Road,
+  Harpswell: ~7.6 m, 210/mile), as `d_rate_len`/`d_rate_town`; with
+  `order.MATCH_BONUS` 0.3 -> 0.6, seven towns' right numbers 13,785 -> 14,238
+  (Yarmouth +217, Harpswell +123, Freeport -1). Off for Freeport's village
+  streets numbered in sequence it cost ~20 until MATCH_BONUS was retuned.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)
