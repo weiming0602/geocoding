@@ -210,6 +210,29 @@ geocoding request. Current as of August 2026.
   flown 2020-2022; `lidar.PROJECTS` lists the ones read so far. USGS's
   rockyweb LAZ download sits behind a bot check -- use the AWS copy.
 
+### 9. Maine E911 road centerlines — `Maine_E911_Roads_Feature` (internal research only)
+
+- **What it is:** the road centerlines Maine's E911 addressing is drawn
+  against (statewide, ~155K segments): full street name, town, left/right
+  address ranges with each side's parity, road class, one-way flag, update
+  date.
+- **Permission:** the layer is restricted (ESCB/PSAP partners). The Maine
+  Emergency Services Communication Bureau's 9-1-1 GIS office granted the
+  owner permission to use it on 2026-11-16, in reply to a request for
+  **internal use only**.
+- **How it may be used:** inside the building-address experiment only -- to
+  find where the public-data method goes wrong and why, to learn how
+  addressers lay numbers along roads (rules the model can follow without this
+  layer), and to score. **Never** served by `geocoding-server`, the website or
+  the API, and never a required input of the headline method: most states
+  have no such layer, so the model has to work from public data (TIGER, OSM,
+  footprints, imagery, lidar, parcel shapes). Report scores with and without
+  it separately.
+- **Storage:** `geocoding_osmexp.address_inference.e911_roads_restricted`
+  (loaded by the owner with `experiments/e911_roads/load_e911_roads.py`,
+  git-excluded; it refuses any other database). Not in the `geocoding`
+  database.
+
 ## How the data gets in (and stays current)
 
 | Script | What it does |
