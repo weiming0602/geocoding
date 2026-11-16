@@ -29,7 +29,7 @@ import pandas as pd
 import psycopg
 from sklearn.model_selection import GroupKFold
 
-from . import dataset, order
+from . import dataset, order, rate_spots
 from .regions import load_region
 
 N_FOLDS = 5
@@ -41,16 +41,17 @@ MODEL_PARAMS = dict(
 )
 
 
-def cross_validated_scores(candidate_df):
+def cross_validated_scores(candidate_df, features=None):
     """candidate_df plus an out-of-fold ranker `score` per row, and the
     per-feature importance (gain) summed over folds."""
+    features = list(dataset.FEATURES if features is None else features)
     # A total order (source_id breaks ties): the database returns rows in
     # no fixed order, and LightGBM's bagging depends on row order -- without
     # this, the same data gave results that differed run to run.
     df = candidate_df.sort_values(["address_id", "d_m0", "source_id"], kind="stable").reset_index(drop=True)
-    X = df[dataset.FEATURES].astype(float)
+    X = df[features].astype(float)
     df["score"] = np.nan
-    importance = np.zeros(len(dataset.FEATURES))
+    importance = np.zeros(len(features))
     folds = GroupKFold(n_splits=N_FOLDS).split(X, df["label"], groups=df["street"])
     for train_idx, test_idx in folds:
         train = df.iloc[train_idx]
@@ -58,11 +59,11 @@ def cross_validated_scores(candidate_df):
         has_positive = train.groupby("address_id")["label"].transform("max") == 1
         train = train[has_positive]
         model = lgb.LGBMRanker(**MODEL_PARAMS)
-        model.fit(train[dataset.FEATURES].astype(float), train["label"],
+        model.fit(train[features].astype(float), train["label"],
                   group=train.groupby("address_id", sort=False).size().to_numpy())
         importance += model.booster_.feature_importance("gain")
         df.loc[test_idx, "score"] = model.predict(X.iloc[test_idx])
-    return df, pd.Series(importance, index=dataset.FEATURES).sort_values(ascending=False)
+    return df, pd.Series(importance, index=features).sort_values(ascending=False)
 
 
 def top_picks(scored_df) -> dict:
@@ -278,7 +279,14 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     in_candidates = set(candidate_df.loc[candidate_df["label"] == 1, "address_id"])
 
     picks = dataset.baseline_picks(candidate_df)
-    scored, importance = cross_validated_scores(candidate_df)
+    features = list(dataset.FEATURES)
+    if rate_spots.RATE_SPOTS:
+        # The addresser's own measure: distance from the road's start (rate_spots.py).
+        spots = rate_spots.street_spots(dsn, region, town, address_df)
+        candidate_df = rate_spots.add_rate_features(candidate_df, address_df, spots,
+                                                    order.load_positions(dsn, region, town))
+        features += rate_spots.RATE_COLS + (["street_rate_m"] if rate_spots.WITH_STREET_RATE else [])
+    scored, importance = cross_validated_scores(candidate_df, features)
     picks["ML"] = top_picks(scored)
     # Main roads first: a building a more important street confidently takes
     # is off limits to the streets after it (order.CLAIM_MIN_P).
