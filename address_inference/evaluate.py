@@ -29,7 +29,7 @@ import pandas as pd
 import psycopg
 from sklearn.model_selection import GroupKFold
 
-from . import dataset, order, rate_spots, sites
+from . import dataset, loners, order, rate_spots, sites
 from .regions import load_region
 
 N_FOLDS = 5
@@ -332,6 +332,15 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     else:
         scored, importance = cross_validated_scores(candidate_df, features + extra)
     picks["ML"] = top_picks(scored)
+    # Isolated buildings (loners.py): their own street's, and one number each.
+    loner_ids, owner_streets = set(), {}
+    if loners.LONER_STREET or loners.LONER_ONE:
+        iso = order.load_isolation(dsn, town)
+        loner_ids = {sid for sid, d in iso.items() if d is not None and d >= loners.LONER_M}
+        owner_streets = loners.access_streets(scored, address_df, loner_ids, loners.load_access(dsn, loner_ids))
+        if loners.LONER_STREET:
+            scored = loners.street_filter(scored, address_df, owner_streets)
+    ml_fallback = top_picks(scored) if loners.LONER_STREET else picks["ML"]
     # Main roads first: a building a more important street confidently takes
     # is off limits to the streets after it (order.CLAIM_MIN_P).
     street_order = order.street_priority(address_df, order.load_street_classes(dsn, region, town))
@@ -344,7 +353,7 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
         lot_addresses = order.load_lot_addresses(dsn, region, town)
         # Only the tax roll's street names (order.OTHER_STREET_LOTS), never its numbers.
         fallback = (order.allowed_top_picks(scored, address_df, parcel_of, order.lot_streets(lot_addresses))
-                    if order.FALLBACK_LOT_RULE else picks["ML"])
+                    if order.FALLBACK_LOT_RULE else ml_fallback)
         lot_kwargs = dict(street_order=street_order, roof_of=order.load_roofs(dsn),
                           streets_of_lot=order.lot_streets(lot_addresses),
                           fronts_of_lot=order.load_lot_fronts(dsn, town, order.LOT_FRONTS)
@@ -360,7 +369,7 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
         if anchored is not None:
             picks["ML+order"] = order.lot_picks(address_df, anchored, positions, fallback, parcel_of, **lot_kwargs)
     else:
-        picks["ML+order"] = order.order_constrained_picks(address_df, scored, positions, picks["ML"],
+        picks["ML+order"] = order.order_constrained_picks(address_df, scored, positions, ml_fallback,
                                                           street_order=street_order, side_directions=side_dirs)
     if parcels:
         # Owner's two-houses-one-lot rule (order.LOT_PAIR_FILL).
@@ -373,7 +382,7 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
         picks["ML+order"] = order.spacing_options(address_df, scored, positions, picks["ML+order"], placed_by_order)
         picks["ML+order"] = order.run_shift_options(address_df, scored, positions, picks["ML+order"], placed_by_order)
         picks["ML+order"] = order.drop_one_options(address_df, scored, positions, picks["ML+order"],
-                                                   placed_by_order, picks["ML"])
+                                                   placed_by_order, ml_fallback)
         placed_by_order -= order.LAST_DROPPED
     # Owner's short-end-branch rule (order.END_BRANCH_MAX_M).
     picks["ML+order"] = order.end_branch_picks(dsn, region, town, address_df, positions, picks["ML+order"],
@@ -381,6 +390,8 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     # Campus / institutional sites are numbered as one set (sites.py).
     picks["ML+order"], SITES_FOUND[:] = sites.site_picks(dsn, region, town, address_df, picks["ML+order"],
                                                         dict(order._SPOTS) if rate_spots.RATE_SPOTS else {})
+    if loners.LONER_ONE:
+        picks["ML+order"] = loners.one_number(picks["ML+order"], scored, address_df, loner_ids, owner_streets)
     assessor_matched = set()
     extra_coords = None
     if parcels:
