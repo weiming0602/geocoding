@@ -752,6 +752,10 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         shed = (scored["parcel_buildings"].fillna(1) >= 2) & (scored["parcel_size_ratio"] < accessory) & ~home_pool
         if ACCESSORY_MIN_M2 is not None and "sqmeters" in scored.columns:
             shed &= ~(scored["sqmeters"] >= ACCESSORY_MIN_M2)
+        if ACCESSORY_NEAR_M is not None and _NEAR_BIGGEST:
+            # owner's rule: a small building close to a much bigger one is its shed, whatever lot it's on
+            near_shed = scored["source_id"].map(lambda b: _NEAR_BIGGEST.get(b, 1.0)) < accessory
+            shed |= near_shed & ~home_pool
         scored = scored[~shed]
     if NO_ROOF_SMALL_M2 is not None and "roof_m2" in scored.columns and "sqmeters" in scored.columns:
         open_ground = (scored["canopy_over"].fillna(0) < TREE_COVERED) if "canopy_over" in scored.columns \
@@ -1057,6 +1061,54 @@ def set_guard_town(dsn, town):
     _ISOLATION.clear()
     if ISOLATED_BONUS:
         _ISOLATION.update(load_isolation(dsn, town))
+    _NEAR_BIGGEST.clear()
+    if ACCESSORY_NEAR_M is not None:
+        _NEAR_BIGGEST.update(load_near_biggest(dsn, town, ACCESSORY_NEAR_M))
+
+
+# Owner's rule (2026-11-16, 148 Allen Point Road, Harpswell): a shed stands close to its house, and the
+# house may be on another tax lot (148's 53 m2 shed is 37 m from its 276 m2 house, on the neighbor's lot;
+# road order put 148 on the shed). With ACCESSORY_NEAR_M set, a building whose size is under
+# ACCESSORY_MAX_RATIO of the biggest building within ACCESSORY_NEAR_M (any lot) is a shed. None = off.
+ACCESSORY_NEAR_M = None
+_NEAR_BIGGEST: dict = {}  # source_id -> its size / the biggest building's size within ACCESSORY_NEAR_M
+
+# Only a building FEMA leaves "Unclassified" can be a shed, and only next to a dwelling: a small house next
+# to a store or an inn keeps its number (2 Lobster Lane: 72 m2 house beside a 688 m2 store; 2046 Harpswell
+# Islands Road: 93 m2 house beside a 1,010 m2 inn).
+SHED_CLASSES = ("Unclassified",)
+HOME_CLASSES = ("Single Family Dwelling", "Multi - Family Dwelling", "Manufactured Home")
+NEAR_BIGGEST_SQL = """
+SELECT s.source_id,
+       greatest(s.sqmeters, coalesce(bl.roof_m2, 0)) / nullif(greatest(greatest(s.sqmeters, coalesce(bl.roof_m2, 0)), (
+           SELECT max(greatest(o.sqmeters, coalesce(ol.roof_m2, 0)))
+           FROM address_inference.structures o
+           LEFT JOIN address_inference.building_lidar ol ON ol.state_fips = o.state_fips AND ol.source_id = o.source_id
+           WHERE o.state_fips = s.state_fips AND o.source_id != s.source_id AND o.geom && ST_Expand(s.geom, 0.001)
+             AND o.prim_occ = ANY(%(homes)s)
+             AND ST_DWithin(o.geom::geography, s.geom::geography, %(near)s))), 0)
+FROM address_inference.structures s
+JOIN towns t ON t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s) AND ST_Intersects(t.geom, s.inner_point)
+LEFT JOIN address_inference.building_lidar bl ON bl.state_fips = s.state_fips AND bl.source_id = s.source_id
+WHERE s.state_fips = '23' AND coalesce(s.prim_occ, 'Unclassified') = ANY(%(sheds)s)
+"""
+
+
+def load_near_biggest(dsn, town, near) -> dict:
+    """{source_id: its size / the biggest building's size within `near` m (itself included)}."""
+    with psycopg.connect(dsn) as conn:
+        return {sid: r for sid, r in conn.execute(NEAR_BIGGEST_SQL, {
+            "town": town, "near": float(near), "homes": list(HOME_CLASSES), "sheds": list(SHED_CLASSES)})
+                if r is not None}
+
+
+def drop_near_sheds(scored_df):
+    """scored_df without sheds standing beside a much bigger house (ACCESSORY_NEAR_M), before any grouping
+    of buildings into lot places -- 148 Allen Point Road's shed came back in as its lot's building."""
+    if ACCESSORY_NEAR_M is None or not _NEAR_BIGGEST or ACCESSORY_MAX_RATIO is None:
+        return scored_df
+    shed = scored_df["source_id"].map(lambda b: _NEAR_BIGGEST.get(b, 1.0)) < ACCESSORY_MAX_RATIO
+    return scored_df[~shed]
 
 
 # Owner's rule (2026-11-15): a building standing alone -- ISOLATED_M or more
@@ -1896,6 +1948,7 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
     mean of its buildings'; its probability for an address the sum of
     theirs; the building finally picked is the one the ranker liked best.
     parcel_of: {source_id: parcel id}; buildings without one stay single."""
+    scored_df = drop_near_sheds(scored_df)
     df = scored_df.assign(p=probabilities(scored_df))
     if OTHER_STREET_LOTS and streets_of_lot:
         from .street_names import canonical
