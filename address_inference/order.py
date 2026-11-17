@@ -1098,6 +1098,10 @@ def set_guard_town(dsn, town):
     _NEAR_BIGGEST.clear()
     if ACCESSORY_NEAR_M is not None:
         _NEAR_BIGGEST.update(load_near_biggest(dsn, town, ACCESSORY_NEAR_M))
+    _OCC.clear()
+    if LOT_TWO_DWELLINGS:
+        with psycopg.connect(dsn) as conn:
+            _OCC.update(dict(conn.execute(OCC_SQL, {"town": town}).fetchall()))
     _DRIVE_TO.clear()
     if DRIVE_PRIORITY:
         _DRIVE_TO.update(load_drive_to(dsn, town, DRIVE_END_M))
@@ -1218,9 +1222,12 @@ _NEAR_BIGGEST: dict = {}  # source_id -> its size / the biggest building's size 
 # Islands Road: 93 m2 house beside a 1,010 m2 inn).
 SHED_CLASSES = ("Unclassified",)
 HOME_CLASSES = ("Single Family Dwelling", "Multi - Family Dwelling", "Manufactured Home")
+# The shed's own size: its lidar roof when lidar found one (cbae4a26 by 18 Tide Mill Cove Road: a 214 m2 outline,
+# a 37 m2 roof -- the outline is a deck or pad), else its outline (148 Allen Point Road's shed: no roof found).
+SHED_SIZE_BY_ROOF = False
 NEAR_BIGGEST_SQL = """
 SELECT s.source_id,
-       greatest(s.sqmeters, coalesce(bl.roof_m2, 0)) / nullif(greatest(greatest(s.sqmeters, coalesce(bl.roof_m2, 0)), (
+       {shed_size} / nullif(greatest({shed_size}, (
            SELECT max(greatest(o.sqmeters, coalesce(ol.roof_m2, 0)))
            FROM address_inference.structures o
            LEFT JOIN address_inference.building_lidar ol ON ol.state_fips = o.state_fips AND ol.source_id = o.source_id
@@ -1236,8 +1243,10 @@ WHERE s.state_fips = '23' AND coalesce(s.prim_occ, 'Unclassified') = ANY(%(sheds
 
 def load_near_biggest(dsn, town, near) -> dict:
     """{source_id: its size / the biggest building's size within `near` m (itself included)}."""
+    shed_size = ("CASE WHEN bl.roof_m2 > 0 THEN least(s.sqmeters, bl.roof_m2) ELSE s.sqmeters END"
+                 if SHED_SIZE_BY_ROOF else "greatest(s.sqmeters, coalesce(bl.roof_m2, 0))")
     with psycopg.connect(dsn) as conn:
-        return {sid: r for sid, r in conn.execute(NEAR_BIGGEST_SQL, {
+        return {sid: r for sid, r in conn.execute(NEAR_BIGGEST_SQL.replace("{shed_size}", shed_size), {
             "town": town, "near": float(near), "homes": list(HOME_CLASSES), "sheds": list(SHED_CLASSES)})
                 if r is not None}
 
@@ -2057,6 +2066,17 @@ def lot_streets(lot_addresses) -> dict:
 # LOT_TWO_HOMES_MIN_M2) is two places, not one. None = off.
 LOT_TWO_HOMES_RATIO = None  # 2026-11-13 Harpswell right: off 2,372 | 0.6 2,354 | 0.8 2,365 (evaluate headline count) -- off; must apply only where a side is short of places
 LOT_TWO_HOMES_MIN_M2 = 60
+# The same, but only for two buildings FEMA classes as dwellings (HOME_CLASSES), each >= LOT_TWO_DWELLINGS_MIN_M2,
+# the smaller >= LOT_TWO_DWELLINGS_RATIO of the bigger -- a barn or garage never splits a lot.
+LOT_TWO_DWELLINGS = False
+LOT_TWO_DWELLINGS_MIN_M2 = 100
+LOT_TWO_DWELLINGS_RATIO = 0.4
+_OCC: dict = {}  # source_id -> FEMA prim_occ for the current town (set_guard_town)
+OCC_SQL = """
+SELECT s.source_id, s.prim_occ FROM address_inference.structures s
+JOIN towns t ON t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s) AND ST_Intersects(t.geom, s.inner_point)
+WHERE s.state_fips = '23'
+"""
 
 
 # Owner's two-houses rule, targeted: a lot place whose second house is at
@@ -2158,6 +2178,17 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
                 by_lot[pid].append(size[b] or 0)
         two = {pid for pid, s in by_lot.items()
                if len(s) >= 2 and sorted(s)[-2] >= LOT_TWO_HOMES_RATIO * max(s) and sorted(s)[-2] >= LOT_TWO_HOMES_MIN_M2}
+        key = {b: (b if parcel_of.get(b) in two else k) for b, k in key.items()}
+    if LOT_TWO_DWELLINGS and _OCC and "sqmeters" in df.columns:
+        # Two houses on one lot, told from a house + barn by FEMA's class (33/35 Laurel Point Circle: 125 and
+        # 248 m2 "Single Family Dwelling" on one lot -> one place took 33, and 33-61 slid one house).
+        size = df.drop_duplicates("source_id").set_index("source_id")["sqmeters"].to_dict()
+        homes = defaultdict(list)
+        for b, pid in parcel_of.items():
+            if _OCC.get(b) in HOME_CLASSES and (size.get(b) or 0) >= LOT_TWO_DWELLINGS_MIN_M2:
+                homes[pid].append(size[b])
+        two = {pid for pid, s in homes.items()
+               if len(s) >= 2 and sorted(s)[-2] >= LOT_TWO_DWELLINGS_RATIO * max(s)}
         key = {b: (b if parcel_of.get(b) in two else k) for b, k in key.items()}
     df["place"] = df["source_id"].map(lambda b: key.get(b, b))
     expanded = set()  # (street, building) placed on its own by COUNT_MATCH_LOTS
