@@ -629,7 +629,8 @@ def build(addresses, segments, candidates, parcels=None, ranges="tiger"):
         seg, side, fraction, span = cover
         m0_lon, m0_lat = interpolate_along_line(seg["points"], fraction, OFFSET_FEET,
                                                 "left" if side == "L" else "right")
-        addr.update(m0_lat=m0_lat, m0_lon=m0_lon, cover_tlid=seg["tlid"], cover_side=side, f=fraction)
+        addr.update(m0_lat=m0_lat, m0_lon=m0_lon, cover_tlid=seg["tlid"], cover_side=side, f=fraction,
+                    cover_borrowed=seg.get("filled_side") == side)
         address_rows.append(addr)
         rows = _candidates_for(addr, seg, side, fraction, span, street_segs, cands_by_street[street], parcels)
         # Road order's side (never a model input): judged on the real TIGER range when a borrowed one won only by

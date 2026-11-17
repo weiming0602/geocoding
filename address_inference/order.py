@@ -671,6 +671,9 @@ def probabilities(scored_df) -> pd.Series:
 # probability (see order_constrained_picks).
 RANK_WEIGHT = 0.0
 MATCH_BONUS = 0.6  # 2026-11-15 with rate_spots on, Freeport: 0.1 2,765 | 0.3 2,831 | 0.6 2,853 | 0.9 2,790 | 1.2 2,782
+# A building across the road (not its parity's side) costs this much in road order instead of being ruled out.
+# None = ruled out (same_side_only), as before.
+CROSS_SIDE_PENALTY = None
 
 
 def order_constrained_picks(address_df, scored_df, positions, fallback,
@@ -794,7 +797,12 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     if SMALL_ROOF_M2 is not None and "roof_m2" in scored.columns:
         scored = scored[~((scored["roof_m2"] < SMALL_ROOF_M2).fillna(False) & ~home_pool.reindex(scored.index))]
     both_sides = scored  # townhouse streets match both parities together
-    if same_side_only:
+    if same_side_only and CROSS_SIDE_PENALTY is not None:
+        # a cost, not a wall: a number may take a building across the road when the evidence is strong
+        # (Harpswell: 325 numbers with E911's house on the "other" side, 81% wrong -- swapped TIGER pieces,
+        # borrowed ranges, the addresser crossing the road like 120 Allen Point Road)
+        scored = scored.assign(p=scored["p"] - CROSS_SIDE_PENALTY * (~scored["same_side"].astype(bool)))
+    elif same_side_only:
         scored = scored[scored["same_side"].astype(bool)]
     addr = address_df[address_df["scorable"]].assign(parity=lambda d: d["number"] % 2)
     lock = LOCK_MIN_POINTS if lock_min_points is None else lock_min_points
