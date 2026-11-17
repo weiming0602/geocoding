@@ -297,11 +297,18 @@ def relist_streets(segs_by_street, side_numbers, min_share=None) -> list:
     return changed
 
 
+# A range borrowed by FILL_MISSING_SIDE beats a real TIGER range of the same parity only when the real one is at
+# least this many times looser (Basin Point Road: real odd 1-299 over 600 m vs borrowed 25-1 -> borrowed wins;
+# Washington Avenue: real odd 25-1 where 13-21 are vs a 50 m piece's borrowed 23-1 -> the real one must win, the
+# borrowed one put 13-21's spots on 3's house). None = tightest always wins.
+BORROWED_WIN_FACTOR = None
+
+
 def covering_range(number: int, segments):
     """(segment, side 'L'/'R', fraction f, range size) whose range holds
     `number` with the range's own parity -- or None. When several ranges
     cover it (overlapping TIGER ranges), the tightest one wins."""
-    best = None
+    best = best_real = None
     for seg in segments:
         for side, lo_key, hi_key in (("L", "lfromadd", "ltoadd"), ("R", "rfromadd", "rtoadd")):
             start, end = _int_or_none(seg[lo_key]), _int_or_none(seg[hi_key])
@@ -317,6 +324,12 @@ def covering_range(number: int, segments):
             # answer never depends on the order segments arrive in.
             if best is None or (span, str(seg["tlid"])) < (best[3], str(best[0]["tlid"])):
                 best = (seg, side, fraction, span)
+            if seg.get("filled_side") != side and (
+                    best_real is None or (span, str(seg["tlid"])) < (best_real[3], str(best_real[0]["tlid"]))):
+                best_real = (seg, side, fraction, span)
+    if (BORROWED_WIN_FACTOR is not None and best is not None and best_real is not None and best is not best_real
+            and best[0].get("filled_side") == best[1] and best_real[3] < BORROWED_WIN_FACTOR * max(best[3], 1)):
+        return best_real
     return best
 
 
