@@ -342,6 +342,9 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
         owner_streets = loners.access_streets(scored, address_df, loner_ids, loners.load_access(dsn, loner_ids))
         if loners.LONER_STREET:
             scored = loners.street_filter(scored, address_df, owner_streets)
+    # Road order's own side judgment (dataset.ORDER_SIDE_REAL_FACTOR): after scoring, so nothing retrains.
+    if dataset.ORDER_SIDE_REAL_FACTOR is not None and "same_side_order" in scored.columns:
+        scored = scored.assign(same_side=scored["same_side_order"])
     # The building at a number's road-start spot counts more in road order (rate_spots.RATE_BONUS).
     scored = rate_spots.rate_rescore(scored)
     # Numbers the addresser put across the road (cross_side.py).

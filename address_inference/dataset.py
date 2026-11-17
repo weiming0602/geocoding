@@ -302,6 +302,8 @@ def relist_streets(segs_by_street, side_numbers, min_share=None) -> list:
 # Washington Avenue: real odd 25-1 where 13-21 are vs a 50 m piece's borrowed 23-1 -> the real one must win, the
 # borrowed one put 13-21's spots on 3's house). None = tightest always wins.
 BORROWED_WIN_FACTOR = None
+# The same tie-break, but for road order's side only (column same_side_order; the model keeps same_side): None = off.
+ORDER_SIDE_REAL_FACTOR = None
 
 
 def covering_range(number: int, segments):
@@ -629,8 +631,25 @@ def build(addresses, segments, candidates, parcels=None, ranges="tiger"):
                                                 "left" if side == "L" else "right")
         addr.update(m0_lat=m0_lat, m0_lon=m0_lon, cover_tlid=seg["tlid"], cover_side=side, f=fraction)
         address_rows.append(addr)
-        cand_rows.extend(_candidates_for(addr, seg, side, fraction, span, street_segs, cands_by_street[street],
-                                         parcels))
+        rows = _candidates_for(addr, seg, side, fraction, span, street_segs, cands_by_street[street], parcels)
+        # Road order's side (never a model input): judged on the real TIGER range when a borrowed one won only by
+        # being a little tighter (ORDER_SIDE_REAL_FACTOR; Washington Avenue 13-21, Harpswell).
+        alt = None
+        if ORDER_SIDE_REAL_FACTOR is not None:
+            saved, globals()["BORROWED_WIN_FACTOR"] = BORROWED_WIN_FACTOR, ORDER_SIDE_REAL_FACTOR
+            try:
+                alt = covering_range(range_number, street_segs)
+            finally:
+                globals()["BORROWED_WIN_FACTOR"] = saved
+        if alt is not None and (alt[0]["tlid"], alt[1]) != (seg["tlid"], side):
+            side_on = {(c["source_id"], c["tlid"]): c["side"] for c in cands_by_street[street]}
+            for r in rows:
+                s = side_on.get((r["source_id"], alt[0]["tlid"]))
+                r["same_side_order"] = (s == alt[1]) if s is not None else r["same_side"]
+        else:
+            for r in rows:
+                r["same_side_order"] = r["same_side"]
+        cand_rows.extend(rows)
 
     address_df = pd.DataFrame(address_rows)
     candidate_df = pd.DataFrame(cand_rows)
