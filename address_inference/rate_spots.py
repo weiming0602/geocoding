@@ -91,6 +91,28 @@ def street_spots(dsn, region, town, address_df) -> dict:
     return out
 
 
+# Road order: a candidate at its number's road-start spot gets RATE_BONUS * exp(-(d_rate_len / RATE_SIGMA_M)^2)
+# added to its probability before road order (89 Allen Point Road, Harpswell: its own house 37 m from 89's
+# spot, the house road order gave it 230 m; TIGER's interpolation is ~350 m off for both, so the ranker
+# couldn't tell them apart). None = off.
+RATE_BONUS = None
+RATE_SIGMA_M = 50.0
+
+
+def rate_rescore(scored):
+    """scored with each candidate raised near its number's road-start spot (RATE_BONUS)."""
+    if RATE_BONUS is None or "d_rate_len" not in scored.columns:
+        return scored
+    s = scored["score"]
+    p = np.exp(s - s.groupby(scored["address_id"]).transform("max"))
+    p = p / p.groupby(scored["address_id"]).transform("sum")
+    d = scored["d_rate_len"].to_numpy()
+    bonus = np.where(np.isnan(d), 0.0, RATE_BONUS * np.exp(-(np.nan_to_num(d) / RATE_SIGMA_M) ** 2))
+    out = scored.copy()
+    out["score"] = np.log(np.clip(p.to_numpy() + bonus, 1e-12, None))
+    return out
+
+
 def add_rate_features(candidate_df, address_df, spots, positions) -> pd.DataFrame:
     """candidate_df plus RATE_COLS (NaN where the street or the building's position is unknown)."""
     rate_town = spots.get(None)

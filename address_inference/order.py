@@ -101,6 +101,10 @@ LOCK_MIN_POINTS = 50
 # rules rather than model inputs: as inputs it cost TIGER 1.2 points.
 DRIVEWAY_RULES = True
 DRIVEWAY_CLEAR_RATIO = 1.5
+# Never drop a building from a street its driveway visibly reaches (<= LANE_MAX_OFF_M off pavement), even
+# when another road is cheaper to reach (owner, 89 Allen Point Road, Harpswell: fully paved driveway to
+# Allen Point Road, but Red Fox Run's line passes 42 m from the house). None/False = off.
+DRIVEWAY_KEEP_VISIBLE = False
 DRIVEWAY_CORNER_RATIO = 3.0
 DRIVEWAY_SET_BACK_M = 40
 # ...and only when this street is at least this much costlier in absolute terms
@@ -427,7 +431,10 @@ def lane_end(df) -> pd.Series:
     if LANE_BONUS is None or not {"drive_best", "drive_off_m", "dist_road"} <= set(df.columns):
         return pd.Series(False, index=df.index)
     allowed = np.maximum(LANE_MAX_OFF_M, LANE_MAX_OFF_SHARE * df["dist_road"])
-    return ((df["drive_best"] == 1) & (df["drive_off_m"] <= allowed)
+    # DRIVEWAY_KEEP_VISIBLE: a visible lane to this street counts even when another road is cheaper to reach
+    # (89 Allen Point Road: paved 209 m lane to Allen Point Road, Red Fox Run's line 42 m away)
+    best = True if DRIVEWAY_KEEP_VISIBLE else (df["drive_best"] == 1)
+    return (best & (df["drive_off_m"] <= allowed)
             & (df["dist_road"] >= LANE_MIN_M)).fillna(False).astype(bool)
 
 
@@ -719,6 +726,20 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         # (driveways.py: this street is the cheapest road over pavement).
         if driveway_rules and "drive_best" in scored.columns:
             far &= ~(scored["drive_best"] == 1)
+        if DRIVEWAY_KEEP_VISIBLE and "drive_off_m" in scored.columns:
+            # ...or its driveway visibly reaches THIS street, even if another road is nearer (89 Allen Point
+            # Road: 209 m back, Red Fox Run's line 42 m away, a fully paved driveway to Allen Point Road)
+            far &= ~(scored["drive_off_m"] <= LANE_MAX_OFF_M).fillna(False)
+        if BRANCH_WAY_MAX_M is not None and _BRANCHES:
+            # ...or the nearer road is a short way branching off THIS street: houses down such a way often keep
+            # the main road's number (89 Allen Point via Red Fox Run, 141 Ash Point via Bibber Way, 75 Long
+            # Point via Cascos Way)
+            from .street_names import canonical
+            street_of = {a: canonical(st) for a, st in zip(address_df["id"], address_df["street"])}
+            branch = [_NEAREST_ROAD.get(b) in _BRANCHES.get(street_of.get(a), ())
+                      for a, b in zip(scored["address_id"], scored["source_id"])]
+            far &= ~np.array(branch, dtype=bool)
+        far &= ~drive_match(scored, address_df)  # the driveway decides (DRIVE_PRIORITY)
         scored = scored[~far]
     # A building whose driveway clearly goes to another road (that road is
     # at least DRIVEWAY_CLEAR_RATIO times cheaper to reach over pavement)
@@ -734,12 +755,18 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
         clear = scored["drive_ratio"] >= ratio
         if DRIVEWAY_MIN_MARGIN and "drive_margin" in scored.columns:
             clear &= scored["drive_margin"] >= DRIVEWAY_MIN_MARGIN
+        if DRIVEWAY_KEEP_VISIBLE and "drive_off_m" in scored.columns:
+            # owner (89 Allen Point Road): a house with a real, visible driveway to this street is this
+            # street's, even when another road happens to be closer (Red Fox Run, 42 m away)
+            clear &= ~(scored["drive_off_m"] <= LANE_MAX_OFF_M).fillna(False)
+        clear &= ~drive_match(scored, address_df)  # the driveway decides (DRIVE_PRIORITY)
         scored = scored[~clear]
     # A pool within POOL_HOME_M marks a home (owner's rule): never a shed,
     # never a "much smaller extra", and a small boost in the assignment.
     home_pool = (scored["pool_m"] <= POOL_HOME_M) if "pool_m" in scored.columns else pd.Series(False, index=scored.index)
     lane = (scored["lane_end"].astype(bool) if "lane_end" in scored.columns else lane_end(scored)) \
         if driveway_rules else pd.Series(False, index=scored.index)
+    lane = lane | drive_match(scored, address_df)  # end of a mapped drive from this street: its lane house
     if lane.any():
         scored = scored.assign(p=scored["p"] + LANE_BONUS * lane)
     home_pool = home_pool | lane
@@ -1032,6 +1059,13 @@ def load_roofs(dsn) -> dict:
 # roads). 57/59 Lower Mast Landing (TIGER) break: a Mollymauk Lane house had
 # been soaking up a number and hiding a miscount at 41/43.
 OTHER_STREET_LOTS = True
+# Only for lots with at most this many buildings (None = every lot). 89 Allen Point Road, Harpswell: one
+# 5-house lot the tax roll calls "10 Merriman Cove Rd" holds 10 and 21 Merriman Cove Road AND 89 Allen Point
+# Road (own visible driveway to Allen Point); the rule took 89's house off Allen Point Road.
+OTHER_STREET_MAX_BUILDINGS = None
+# Imagery first (owner): a building whose traced driveway visibly reaches this street (<= LANE_MAX_OFF_M off
+# pavement) is never dropped by OTHER_STREET_LOTS (89 Allen Point Road: 0 m off pavement to Allen Point Rd).
+OTHER_STREET_DRIVEWAY_WINS = False
 
 
 # Owner's rule (location, like the driveway): a building whose tax lot
@@ -1064,6 +1098,112 @@ def set_guard_town(dsn, town):
     _NEAR_BIGGEST.clear()
     if ACCESSORY_NEAR_M is not None:
         _NEAR_BIGGEST.update(load_near_biggest(dsn, town, ACCESSORY_NEAR_M))
+    _DRIVE_TO.clear()
+    if DRIVE_PRIORITY:
+        _DRIVE_TO.update(load_drive_to(dsn, town, DRIVE_END_M))
+    _BRANCHES.clear()
+    _NEAREST_ROAD.clear()
+    if BRANCH_WAY_MAX_M is not None:
+        branches, nearest = load_branches(dsn, town, BRANCH_WAY_MAX_M)
+        _BRANCHES.update(branches)
+        _NEAREST_ROAD.update(nearest)
+
+
+# Short ways branching off a street (owner's three cases: 89 Allen Point Road at the end of Red Fox Run, 141
+# Ash Point Road down Bibber Way, 75 Long Point Road down Cascos Way): E911 numbered the house on the main
+# road. With BRANCH_WAY_MAX_M set, the "OTHER_ROAD_CLOSER_M" filter doesn't drop a building whose nearest road
+# is a way no longer than this whose end meets the address's street. None = off.
+BRANCH_WAY_MAX_M = None
+_BRANCHES: dict = {}      # canonical main street -> {canonical names of short ways branching off it}
+
+# Owner's priority (89 Allen Point Road, said 3-4 times): the driveway decides. A building within
+# DRIVE_END_M of one end of a mapped drive/way (OSM, internal only) whose other end meets a road is that road's
+# lane house: never dropped from it by the nearer-road / cheaper-path / lot-street rules, and gets LANE_BONUS
+# there. 89's house sits 27 m from the end of the OSM way "Red Fox Run", which starts at Allen Point Road.
+DRIVE_PRIORITY = False
+DRIVE_END_M = 30.0
+DRIVE_MAX_SPOT_M = 100.0  # ...and only for numbers whose road-start spot is within this of the house
+_DRIVE_TO: dict = {}  # source_id -> {canonical road names its drive starts at}
+
+DRIVE_TO_SQL = """
+WITH b AS (
+    SELECT s.source_id, s.geom FROM address_inference.structures s
+    JOIN towns t ON t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s) AND ST_Intersects(t.geom, s.inner_point)
+    WHERE s.state_fips = '23'
+), ends AS (
+    SELECT d.osm_id, d.name, ST_StartPoint(d.geom) AS here, ST_EndPoint(d.geom) AS there FROM address_inference.osm_drives d
+    WHERE d.town = %(town)s
+    UNION ALL
+    SELECT d.osm_id, d.name, ST_EndPoint(d.geom), ST_StartPoint(d.geom) FROM address_inference.osm_drives d
+    WHERE d.town = %(town)s
+)
+SELECT DISTINCT b.source_id, s.fullname
+FROM b JOIN ends e ON e.here && ST_Expand(b.geom, 0.0005) AND ST_DWithin(e.here::geography, b.geom::geography, %(near)s)
+JOIN streets s ON s.geom && ST_Expand(e.there, 0.0003) AND ST_DWithin(s.geom::geography, e.there::geography, 20)
+WHERE s.fullname IS NOT NULL AND upper(s.fullname) != upper(coalesce(e.name, ''))
+"""
+
+
+def load_drive_to(dsn, town, near) -> dict:
+    from .street_names import canonical
+    out = defaultdict(set)
+    with psycopg.connect(dsn) as conn:
+        for sid, road in conn.execute(DRIVE_TO_SQL, {"town": town, "near": float(near)}):
+            out[sid].add(canonical(road))
+    return dict(out)
+
+
+def drive_match(scored, address_df):
+    """Boolean Series: this row's building sits at the end of a mapped drive that starts at this address's street."""
+    if not DRIVE_PRIORITY or not _DRIVE_TO:
+        return pd.Series(False, index=scored.index)
+    from .street_names import canonical
+    street_of = {a: canonical(st) for a, st in zip(address_df["id"], address_df["street"])}
+    match = pd.Series([street_of.get(a) in _DRIVE_TO.get(b, ()) for a, b in
+                       zip(scored["address_id"], scored["source_id"])], index=scored.index)
+    if DRIVE_MAX_SPOT_M is not None and "d_rate_len" in scored.columns:
+        # only the numbers whose road-start spot is near the house: with the bonus on every number of the street,
+        # 72 Allen Point Road (spot ~200 m away) took 89's house
+        match &= (scored["d_rate_len"] <= DRIVE_MAX_SPOT_M).fillna(False)
+    if "dist_road" in scored.columns:
+        # a house set back down its drive (89: 209 m), like any lane house (LANE_MIN_M) -- houses by the road
+        # at the end of a short driveway don't need it, and the bonus only disturbed their sequence
+        match &= (scored["dist_road"] >= LANE_MIN_M).fillna(False)
+    return match
+_NEAREST_ROAD: dict = {}  # source_id -> canonical name of its nearest TIGER road
+
+BRANCHES_SQL = """
+WITH roads AS (
+    SELECT s.fullname, ST_Union(s.geom) AS g, sum(ST_Length(s.geom::geography)) AS len
+    FROM streets s JOIN towns t ON t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s)
+     AND s.geom && t.geom AND ST_Intersects(s.geom, t.geom)
+    WHERE s.fullname IS NOT NULL GROUP BY s.fullname
+), ends AS (
+    SELECT fullname, len, (ST_DumpPoints(ST_Boundary(ST_LineMerge(g)))).geom AS pt FROM roads
+)
+SELECT DISTINCT m.fullname, e.fullname
+FROM ends e JOIN roads m ON m.fullname != e.fullname AND m.g && ST_Expand(e.pt, 0.0003)
+ AND ST_DWithin(m.g::geography, e.pt::geography, 15)
+WHERE e.len <= %(max_len)s
+"""
+NEAREST_ROAD_SQL = """
+SELECT b.source_id, n.fullname
+FROM address_inference.structures b
+JOIN towns t ON t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s) AND ST_Intersects(t.geom, b.inner_point)
+CROSS JOIN LATERAL (SELECT s.fullname FROM streets s WHERE s.fullname IS NOT NULL
+                    ORDER BY s.geom <-> b.inner_point LIMIT 1) n
+WHERE b.state_fips = '23'
+"""
+
+
+def load_branches(dsn, town, max_len) -> tuple[dict, dict]:
+    from .street_names import canonical
+    branches = defaultdict(set)
+    with psycopg.connect(dsn) as conn:
+        for main, way in conn.execute(BRANCHES_SQL, {"town": town, "max_len": float(max_len)}):
+            branches[canonical(main)].add(canonical(way))
+        nearest = {sid: canonical(name) for sid, name in conn.execute(NEAREST_ROAD_SQL, {"town": town})}
+    return dict(branches), nearest
 
 
 # Owner's rule (2026-11-16, 148 Allen Point Road, Harpswell): a shed stands close to its house, and the
@@ -1954,9 +2094,19 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
         from .street_names import canonical
         street_of = {a: canonical(st) for a, st in zip(address_df["id"], address_df["street"])}
         lot_of = df["source_id"].map(parcel_of)
-        other = [bool(streets_of_lot.get(lot)) and street_of.get(a) not in streets_of_lot[lot]
-                 for a, lot in zip(df["address_id"], lot_of)]
-        df = df[~np.array(other, dtype=bool)]
+        if OTHER_STREET_MAX_BUILDINGS is not None:
+            # a big lot can front several streets (89 Allen Point Road's lot holds 5 houses, the tax roll
+            # calls it "10 Merriman Cove Rd"): its one tax-roll street says nothing about each house
+            per_lot = Counter(parcel_of.values())
+            lot_of = lot_of.where(lot_of.map(lambda l: per_lot.get(l, 0) <= OTHER_STREET_MAX_BUILDINGS))
+        other = np.array([bool(streets_of_lot.get(lot)) and street_of.get(a) not in streets_of_lot[lot]
+                          for a, lot in zip(df["address_id"], lot_of)], dtype=bool)
+        if OTHER_STREET_DRIVEWAY_WINS and "drive_off_m" in df.columns:
+            # imagery first (owner): a house whose driveway visibly reaches this street stays this street's,
+            # whatever street the tax roll gives its lot (89 Allen Point Road)
+            other &= ~(df["drive_off_m"] <= LANE_MAX_OFF_M).fillna(False).to_numpy()
+        other &= ~drive_match(df, address_df).to_numpy()  # the driveway decides (DRIVE_PRIORITY)
+        df = df[~other]
     if DRIVE_LOT_GUARD and "drive_ratio" in df.columns:
         from .street_names import canonical
         street_of = {a: canonical(st) for a, st in zip(address_df["id"], address_df["street"])}
@@ -2086,7 +2236,7 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
     agg_spec = {"p_sum": ("p", "sum"), "best": ("source_id", "first"), "same_side": ("same_side", "first")}
     for col, how in (("dist_vs_nearest_road", "min"), ("d_m0", "min"), ("d_rate_len", "min"), ("d_anchor", "min"), ("sqmeters", "max"),
                      ("parcel_size_ratio", "max"), ("parcel_buildings", "min"), ("parcel_area_m2", "max"),
-                     ("pool_m", "min"), ("drive_ratio", "min"), ("drive_margin", "min"), ("drive_best", "max"), ("dist_road", "min"),
+                     ("pool_m", "min"), ("drive_ratio", "min"), ("drive_margin", "min"), ("drive_best", "max"), ("drive_off_m", "min"), ("dist_road", "min"),
                      ("lane_end", "max"), ("canopy_over", "max"), ("roof_m2", "max")):
         if col in df.columns:
             agg_spec[col] = (col, how)

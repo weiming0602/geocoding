@@ -29,7 +29,7 @@ import pandas as pd
 import psycopg
 from sklearn.model_selection import GroupKFold
 
-from . import dataset, loners, order, rate_spots, sites
+from . import cross_side, dataset, loners, order, rate_spots, sites
 from .regions import load_region
 
 N_FOLDS = 5
@@ -60,6 +60,7 @@ def _top1(df, scores) -> int:
 
 INNER_FOLDS = 3
 SITES_FOUND: list = []  # last evaluate's sites (sites.site_picks)
+CROSS_FOUND: dict = {}  # last evaluate's across-the-road numbers (cross_side.apply)
 LAST_CHOICES: list = []  # per outer fold: True = optional features kept
 
 
@@ -340,7 +341,13 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
         owner_streets = loners.access_streets(scored, address_df, loner_ids, loners.load_access(dsn, loner_ids))
         if loners.LONER_STREET:
             scored = loners.street_filter(scored, address_df, owner_streets)
-    ml_fallback = top_picks(scored) if loners.LONER_STREET else picks["ML"]
+    # The building at a number's road-start spot counts more in road order (rate_spots.RATE_BONUS).
+    scored = rate_spots.rate_rescore(scored)
+    # Numbers the addresser put across the road (cross_side.py).
+    scored, CROSS_FOUND_LAST = cross_side.apply(scored, address_df)
+    CROSS_FOUND.clear()
+    CROSS_FOUND.update(CROSS_FOUND_LAST)
+    ml_fallback = (top_picks(scored) if (loners.LONER_STREET or CROSS_FOUND_LAST) else picks["ML"])
     # Main roads first: a building a more important street confidently takes
     # is off limits to the streets after it (order.CLAIM_MIN_P).
     street_order = order.street_priority(address_df, order.load_street_classes(dsn, region, town))
