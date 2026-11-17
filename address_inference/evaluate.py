@@ -29,7 +29,7 @@ import pandas as pd
 import psycopg
 from sklearn.model_selection import GroupKFold
 
-from . import cross_side, dataset, loners, order, rate_spots, sites
+from . import cross_side, dataset, extensions, loners, order, rate_spots, sites
 from .regions import load_region
 
 N_FOLDS = 5
@@ -61,6 +61,7 @@ def _top1(df, scores) -> int:
 INNER_FOLDS = 3
 SITES_FOUND: list = []  # last evaluate's sites (sites.site_picks)
 CROSS_FOUND: dict = {}  # last evaluate's across-the-road numbers (cross_side.apply)
+EXT_FOUND: list = []  # last evaluate's extension streets (extensions.ext_picks)
 LAST_CHOICES: list = []  # per outer fold: True = optional features kept
 
 
@@ -397,6 +398,10 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     # Campus / institutional sites are numbered as one set (sites.py).
     picks["ML+order"], SITES_FOUND[:] = sites.site_picks(dsn, region, town, address_df, picks["ML+order"],
                                                         dict(order._SPOTS) if rate_spots.RATE_SPOTS else {})
+    # Extension streets that borrow their parent's line start where the parent ends (extensions.py).
+    sheds = {b for b, r in order._NEAR_BIGGEST.items() if order.ACCESSORY_MAX_RATIO and r < order.ACCESSORY_MAX_RATIO}
+    picks["ML+order"], EXT_FOUND[:] = extensions.ext_picks(dsn, region, town, address_df, picks["ML+order"],
+                                                          positions, skip=sheds)
     if loners.LONER_ONE:
         picks["ML+order"] = loners.one_number(picks["ML+order"], scored, address_df, loner_ids, owner_streets)
     assessor_matched = set()
