@@ -1109,6 +1109,9 @@ def set_guard_town(dsn, town):
     _NEAR_SMALL.clear()
     if SHED_SMALL_ROOF_M2 is not None:
         _NEAR_SMALL.update(load_near_small(dsn, town))
+    _TOUCHING.clear()
+    if SHED_TOUCH_M is not None:
+        _TOUCHING.update(load_touching(dsn, town))
     _OCC.clear()
     if LOT_TWO_DWELLINGS:
         with psycopg.connect(dsn) as conn:
@@ -1317,6 +1320,32 @@ WHERE s.state_fips = '23' AND bl.roof_m2 > 0 AND bl.roof_m2 < %(max_roof)s
 """
 
 
+# Owner (227 High Head Road, Harpswell): a building almost touching a bigger house is part of it -- a shed, garage
+# or ell -- whatever FEMA calls it. cf8e2d36 stands 2 m from 227's 157 m2 house (58 m2 outline, FEMA "dwelling");
+# its lidar roof read 312 m2 because lidar merged the two roofs, so outlines, not roofs, are the size here. With
+# SHED_TOUCH_M set, a building within SHED_TOUCH_M of a dwelling with at least 1/SHED_TOUCH_RATIO its outline is a
+# shed. None = off.
+SHED_TOUCH_M = None
+SHED_TOUCH_RATIO = 0.5
+_TOUCHING: dict = {}
+TOUCH_SQL = """
+SELECT s.source_id, s.sqmeters / nullif((
+           SELECT max(o.sqmeters) FROM address_inference.structures o
+           WHERE o.state_fips = s.state_fips AND o.source_id != s.source_id AND o.geom && ST_Expand(s.geom, 0.0003)
+             AND o.prim_occ = ANY(%(homes)s)
+             AND ST_DWithin(o.geom::geography, s.geom::geography, %(near)s)), 0)
+FROM address_inference.structures s
+JOIN towns t ON t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s) AND ST_Intersects(t.geom, s.inner_point)
+WHERE s.state_fips = '23'
+"""
+
+
+def load_touching(dsn, town) -> dict:
+    with psycopg.connect(dsn) as conn:
+        return {sid: r for sid, r in conn.execute(TOUCH_SQL, {
+            "town": town, "near": float(SHED_TOUCH_M), "homes": list(HOME_CLASSES)}) if r is not None}
+
+
 def load_near_small(dsn, town) -> dict:
     with psycopg.connect(dsn) as conn:
         return {sid: r for sid, r in conn.execute(NEAR_SMALL_SQL, {
@@ -1332,6 +1361,8 @@ def drop_near_sheds(scored_df):
         shed |= scored_df["source_id"].map(lambda b: _NEAR_BIGGEST.get(b, 1.0)) < ACCESSORY_MAX_RATIO
     if SHED_SMALL_ROOF_M2 is not None and _NEAR_SMALL:
         shed |= scored_df["source_id"].map(lambda b: _NEAR_SMALL.get(b, 1.0)) < SHED_SMALL_RATIO
+    if SHED_TOUCH_M is not None and _TOUCHING:
+        shed |= scored_df["source_id"].map(lambda b: _TOUCHING.get(b, 1.0)) < SHED_TOUCH_RATIO
     return scored_df[~shed]
 
 
