@@ -28,6 +28,8 @@ RATE_SPOTS = True  # 2026-11-15, with order.MATCH_BONUS 0.6: 7 towns 13,785 -> 1
 # Also give the ranker the street's own meters per number (street_rate_m).
 WITH_STREET_RATE = False
 RATE_MIN_NUMBERS = 5
+# Leave numbers without a TIGER spot out of the direction (the bug fix below); False = the old behavior, for A/B only.
+SKIP_NAN_SPOTS = False  # 2026-11-17: fix alone Harpswell -34.7; with STRETCH_MIN_M=3000, 7 towns +14.8 but Freeport -29, Gray -34 -- off
 
 M0_ALONG_SQL = """
 SELECT a.id, ST_LineLocatePoint(l.g, ST_SetSRID(ST_MakePoint(a.lon, a.lat), 4326)) * ST_Length(l.g::geography),
@@ -55,8 +57,40 @@ def median_step(numbers) -> float:
     return float(np.median(steps)) if steps else float("inf")
 
 
+# Long roads: one steady rate drifts by tens of meters over many km (Harpswell Islands Road: 18.5 km, 7.7 m per
+# number on average). With STRETCH_MIN_M set, a road at least that long gets its spots from a curve: for each of
+# its numbers, a robust (Theil-Sen) line through the TIGER spots of the street's numbers within STRETCH_WINDOW of
+# it, kept moving one way along the road. None = one rate per street.
+STRETCH_MIN_M = None
+STRETCH_WINDOW = 60
+_STRETCH: dict = {}  # street -> (numbers, along_m) of its curve, set by street_spots
+
+
+def stretch_curve(ns, qs, direction):
+    """(sorted distinct numbers, smoothed meters along) from the street's (number, TIGER spot) pairs."""
+    order_ = np.argsort(ns)
+    ns, qs = ns[order_], qs[order_]
+    uniq = np.unique(ns)
+    fit = []
+    for n in uniq:
+        w = np.abs(ns - n) <= STRETCH_WINDOW
+        x, y = ns[w], qs[w]
+        if len(set(x)) >= 2:
+            i, j = np.triu_indices(len(x), 1)
+            dx = x[j] - x[i]
+            ok = dx != 0
+            slope = float(np.median((y[j] - y[i])[ok] / dx[ok]))
+            fit.append(float(np.median(y - slope * x)) + slope * n)
+        else:
+            fit.append(float(np.median(y)))
+    fit = np.array(fit)
+    fit = np.maximum.accumulate(fit) if direction > 0 else np.minimum.accumulate(fit)
+    return uniq, fit
+
+
 def street_spots(dsn, region, town, address_df) -> dict:
     """{street: (start_m, direction +1/-1, rate_len m/number, length_m)} plus key None -> rate_town."""
+    _STRETCH.clear()
     params = {"region": region.id, "town": town, "state_fips": region.state_fips}
     a = address_df
     with psycopg.connect(dsn) as conn:
@@ -78,14 +112,21 @@ def street_spots(dsn, region, town, address_df) -> dict:
         ns = np.array([p[0] for p in pts], float)
         qs = np.array([p[1] for p in pts], float)
         length = pts[0][2]
-        if len(set(ns)) >= 2 and np.std(qs) > 0:
+        # numbers without a TIGER spot (M0) give NaN -- leave them out, or np.std is NaN and the direction quietly
+        # defaulted to +1 (Harpswell Islands Road: 7 of 335 without a spot, spots reversed, 2025 put 12.8 km off)
+        all_ns = ns
+        ok = ~np.isnan(qs) if SKIP_NAN_SPOTS else np.ones(len(qs), bool)
+        ns, qs = ns[ok], qs[ok]
+        if len(qs) and len(set(ns)) >= 2 and np.std(qs) > 0:
             direction = 1 if np.corrcoef(ns, qs)[0, 1] >= 0 else -1
         else:
             direction = 1
-        top = ns.max()
+        top = all_ns.max()
         if top <= 0 or length <= 0:
             continue
         out[street] = (0.0 if direction > 0 else length, direction, length / top, length, len(set(ns)))
+        if STRETCH_MIN_M is not None and length >= STRETCH_MIN_M and len(set(ns)) >= 10:
+            _STRETCH[street] = stretch_curve(ns, qs, direction)
     rates = [v[2] for v in out.values() if v[4] >= RATE_MIN_NUMBERS]
     out[None] = float(np.median(rates)) if rates else None
     return out
@@ -127,7 +168,10 @@ def add_rate_features(candidate_df, address_df, spots, positions) -> pd.DataFram
         start, direction, rate_len, _length, _k = s
         rates.append(rate_len)
         n = number_of[aid]
-        d_len.append(abs(q - (start + direction * n * rate_len)))
+        curve = _STRETCH.get(street)
+        spot = (float(np.interp(n, curve[0], curve[1])) if curve is not None
+                else start + direction * n * rate_len)
+        d_len.append(abs(q - spot))
         d_town.append(abs(q - (start + direction * n * rate_town)) if rate_town else np.nan)
     out = candidate_df.assign(d_rate_len=d_len, d_rate_town=d_town)
     if WITH_STREET_RATE:
