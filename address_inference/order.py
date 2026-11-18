@@ -448,9 +448,6 @@ def lane_end(df) -> pd.Series:
 # geocoded points, houses past 200 m). Off; the assessor mode's anchors
 # (assessor_picks) fix that run instead.
 SKIP_SCORE = None
-# Owner (2026-11-18): "we don't drop street number easily". On a street side whose houses are at least as many as
-# its numbers, leaving a number unplaced scores NO_DROP_SKIP instead of SKIP_SCORE. None = off.
-NO_DROP_SKIP = None
 # Owner: "street numbers along buildings are supposed to be in order". A number road order left unplaced falls
 # back only to a house between its placed neighbors' houses on that side; with none there it stays unplaced.
 ORDERED_FALLBACK = False
@@ -982,17 +979,11 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
                 if alone.any():
                     P = P + ISOLATED_BONUS * alone[None, :]
             P = np.where(np.isnan(P), -1e9, P + fit + MATCH_BONUS)
-            # Owner: "we don't drop street number easily" -- on a side with a house for every number, leaving
-            # one out costs NO_DROP_SKIP (High Head Road, Harpswell: 215 dropped for free and 227-291 each slid
-            # onto the house before theirs, since TIGER ends its 199-245 piece one house early).
-            skip = (NO_DROP_SKIP if NO_DROP_SKIP is not None and not townhouses
-                    and len(home_buildings or candidates) >= k else None)
             if share is None and two_home_places:
                 vec = np.array([LOT_SHARE_PENALTY if b in two_home_places else np.inf for b in order])
-                total, match = monotone_assign(P, share_penalty=vec if np.isfinite(vec).any() else None,
-                                               skip_score=skip)
+                total, match = monotone_assign(P, share_penalty=vec if np.isfinite(vec).any() else None)
             else:
-                total, match = monotone_assign(P, share_penalty=share, skip_score=skip)
+                total, match = monotone_assign(P, share_penalty=share)
             if best is None or total > best[0]:
                 best = (total, {numbers[i]: order[j] for i, j in match.items()}, direction)
         for address_id, number in zip(group["id"], group["number"]):
