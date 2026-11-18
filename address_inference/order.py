@@ -1106,6 +1106,9 @@ def set_guard_town(dsn, town):
     _NEAR_BIGGEST.clear()
     if ACCESSORY_NEAR_M is not None:
         _NEAR_BIGGEST.update(load_near_biggest(dsn, town, ACCESSORY_NEAR_M))
+    _NEAR_SMALL.clear()
+    if SHED_SMALL_ROOF_M2 is not None:
+        _NEAR_SMALL.update(load_near_small(dsn, town))
     _OCC.clear()
     if LOT_TWO_DWELLINGS:
         with psycopg.connect(dsn) as conn:
@@ -1259,12 +1262,44 @@ def load_near_biggest(dsn, town, near) -> dict:
                 if r is not None}
 
 
+# Outbuildings FEMA calls dwellings (2019/2025 Harpswell Islands Road: 60/66 m2 lidar roofs on their own lots
+# across Water Cove Road from 228/147 m2-roof houses). With SHED_SMALL_ROOF_M2 set, a building of any class with a
+# lidar roof under that, within SHED_SMALL_NEAR_M of a dwelling with at least 1/SHED_SMALL_RATIO its roof, is that
+# house's outbuilding. Harpswell: 72 wrong numbers sit on such a building; None = off.
+SHED_SMALL_ROOF_M2 = None
+SHED_SMALL_NEAR_M = 60.0
+SHED_SMALL_RATIO = 0.5
+_NEAR_SMALL: dict = {}
+NEAR_SMALL_SQL = """
+SELECT s.source_id, bl.roof_m2 / nullif((
+           SELECT max(coalesce(nullif(ol.roof_m2, 0), o.sqmeters))
+           FROM address_inference.structures o
+           LEFT JOIN address_inference.building_lidar ol ON ol.state_fips = o.state_fips AND ol.source_id = o.source_id
+           WHERE o.state_fips = s.state_fips AND o.source_id != s.source_id AND o.geom && ST_Expand(s.geom, 0.001)
+             AND o.prim_occ = ANY(%(homes)s)
+             AND ST_DWithin(o.geom::geography, s.geom::geography, %(near)s)), 0)
+FROM address_inference.structures s
+JOIN towns t ON t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s) AND ST_Intersects(t.geom, s.inner_point)
+JOIN address_inference.building_lidar bl ON bl.state_fips = s.state_fips AND bl.source_id = s.source_id
+WHERE s.state_fips = '23' AND bl.roof_m2 > 0 AND bl.roof_m2 < %(max_roof)s
+"""
+
+
+def load_near_small(dsn, town) -> dict:
+    with psycopg.connect(dsn) as conn:
+        return {sid: r for sid, r in conn.execute(NEAR_SMALL_SQL, {
+            "town": town, "near": SHED_SMALL_NEAR_M, "homes": list(HOME_CLASSES), "max_roof": SHED_SMALL_ROOF_M2})
+                if r is not None}
+
+
 def drop_near_sheds(scored_df):
-    """scored_df without sheds standing beside a much bigger house (ACCESSORY_NEAR_M), before any grouping
-    of buildings into lot places -- 148 Allen Point Road's shed came back in as its lot's building."""
-    if ACCESSORY_NEAR_M is None or not _NEAR_BIGGEST or ACCESSORY_MAX_RATIO is None:
-        return scored_df
-    shed = scored_df["source_id"].map(lambda b: _NEAR_BIGGEST.get(b, 1.0)) < ACCESSORY_MAX_RATIO
+    """scored_df without sheds standing beside a much bigger house (ACCESSORY_NEAR_M, SHED_SMALL_ROOF_M2), before
+    any grouping of buildings into lot places -- 148 Allen Point Road's shed came back in as its lot's building."""
+    shed = pd.Series(False, index=scored_df.index)
+    if ACCESSORY_NEAR_M is not None and _NEAR_BIGGEST and ACCESSORY_MAX_RATIO is not None:
+        shed |= scored_df["source_id"].map(lambda b: _NEAR_BIGGEST.get(b, 1.0)) < ACCESSORY_MAX_RATIO
+    if SHED_SMALL_ROOF_M2 is not None and _NEAR_SMALL:
+        shed |= scored_df["source_id"].map(lambda b: _NEAR_SMALL.get(b, 1.0)) < SHED_SMALL_RATIO
     return scored_df[~shed]
 
 
