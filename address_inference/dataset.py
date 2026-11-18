@@ -306,6 +306,13 @@ BORROWED_WIN_FACTOR = None
 ORDER_SIDE_REAL_FACTOR = None
 
 
+# A borrowed (FILL_MISSING_SIDE) range on a short stub never beats a real range covering the number. High Head
+# Road, Harpswell: 78061145, 60 m, left 220-210 only, borrowed odd ~221-211 took 215 from the real 245-199 and
+# put 215 on 227's house (215-291 one step off); Washington Ave 13-21 the same on a 50 m even-only piece. Unlike
+# BORROWED_WIN_FACTOR (range sizes), this goes by the piece's length. None = off.
+BORROWED_STUB_M = None
+
+
 def covering_range(number: int, segments):
     """(segment, side 'L'/'R', fraction f, range size) whose range holds
     `number` with the range's own parity -- or None. When several ranges
@@ -329,6 +336,9 @@ def covering_range(number: int, segments):
             if seg.get("filled_side") != side and (
                     best_real is None or (span, str(seg["tlid"])) < (best_real[3], str(best_real[0]["tlid"]))):
                 best_real = (seg, side, fraction, span)
+    if (BORROWED_STUB_M is not None and best is not None and best_real is not None and best is not best_real
+            and best[0].get("filled_side") == best[1] and (best[0].get("length_m") or 0) < BORROWED_STUB_M):
+        return best_real
     if (BORROWED_WIN_FACTOR is not None and best is not None and best_real is not None and best is not best_real
             and best[0].get("filled_side") == best[1] and best_real[3] < BORROWED_WIN_FACTOR * max(best[3], 1)):
         return best_real

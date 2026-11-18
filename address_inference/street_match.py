@@ -350,6 +350,41 @@ def split_shared(conn, params, matches) -> int:
     return moved
 
 
+# Owner's go (2026-11-18): where TIGER 2026 redrew a stretch as one coarse piece and the retired 2024 pieces
+# (still in streets, address_inference.tiger_retired via tiger_vintage.py) split it finely, number from the fine
+# old pieces. High Head Road, Harpswell: 655906711 (657 m, right 245-61) over 165-61 / 181-167 / 197-183 /
+# 245-199. A current ranged piece is coarse when at least FINE_COVER of its length lies within FINE_NEAR_M of
+# FINE_MIN_PIECES or more retired ranged pieces of the same street; it is left out of the street's pieces.
+# False = off (both stay, as before).
+FINE_OLD_PIECES = False
+FINE_NEAR_M = 15
+FINE_COVER = 0.8
+FINE_MIN_PIECES = 2
+COARSE_SQL = """
+WITH p AS (
+    SELECT s.tlid, s.geom, ST_Length(s.geom::geography) AS len,
+           EXISTS (SELECT 1 FROM address_inference.tiger_retired r WHERE r.tlid = s.tlid) AS retired
+    FROM streets s
+    WHERE s.tlid = ANY(%(tlids)s) AND (coalesce(s.lfromadd, '') <> '' OR coalesce(s.rfromadd, '') <> ''))
+SELECT c.tlid FROM p c
+CROSS JOIN LATERAL (
+    SELECT count(*) AS n, ST_Union(ST_Buffer(o.geom::geography, %(near)s)::geometry) AS cover
+    FROM p o WHERE o.retired AND o.geom && ST_Expand(c.geom, 0.0003)
+      AND ST_DWithin(o.geom::geography, c.geom::geography, %(near)s)
+      AND ST_Length(ST_Intersection(o.geom, ST_Buffer(c.geom::geography, %(near)s)::geometry)::geography)
+          >= 0.5 * ST_Length(o.geom::geography)) f
+WHERE NOT c.retired AND f.n >= %(min_pieces)s
+  AND ST_Length(ST_Intersection(c.geom, f.cover)::geography) >= %(cover)s * c.len
+"""
+
+
+def coarse_pieces(conn, tlids) -> set:
+    if not tlids or conn.execute("SELECT to_regclass('address_inference.tiger_retired') IS NULL").fetchone()[0]:
+        return set()
+    return {r[0] for r in conn.execute(COARSE_SQL, {"tlids": list(tlids), "near": FINE_NEAR_M,
+                                                    "cover": FINE_COVER, "min_pieces": FINE_MIN_PIECES})}
+
+
 def match_town(dsn, region, town: str) -> list[StreetMatch]:
     with psycopg.connect(dsn) as conn:
         conn.execute(CREATE_TABLES_SQL)
@@ -368,6 +403,14 @@ def match_town(dsn, region, town: str) -> list[StreetMatch]:
             match_far(conn, params, m)
         if SPLIT_SHARED:
             split_shared(conn, params, matches)
+        if FINE_OLD_PIECES:
+            dropped = 0
+            for m in matches:
+                coarse = coarse_pieces(conn, m.tlids)
+                if coarse:
+                    m.tlids = tuple(t for t in m.tlids if t not in coarse)
+                    dropped += len(coarse)
+            print(f"  fine old pieces: {dropped} coarse current TIGER pieces left out")
 
         key = {"region": region.id, "town": town}
         conn.execute("DELETE FROM address_inference.street_matches WHERE region_id = %(region)s AND town = %(town)s", key)
