@@ -837,7 +837,7 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
         })
 
     rows.sort(key=lambda r: r["d_m0"])
-    rows = rows[:MAX_CANDIDATES]
+    rows = rows[:int(MAX_CANDIDATES)]
     # Bigger building closer to the road, nearby: likely this one's garage/barn.
     for r in rows:
         r["bigger_in_front"] = any(
