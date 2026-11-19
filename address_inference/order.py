@@ -1192,6 +1192,9 @@ def set_guard_town(dsn, town):
     _TOUCHING.clear()
     if SHED_TOUCH_M is not None:
         _TOUCHING.update(load_touching(dsn, town))
+    _ATTACHED.clear()
+    if SHED_ATTACHED_M is not None:
+        _ATTACHED.update(load_touching(dsn, town, near=SHED_ATTACHED_M))
     _OCC.clear()
     if LOT_TWO_DWELLINGS:
         with psycopg.connect(dsn) as conn:
@@ -1420,10 +1423,19 @@ WHERE s.state_fips = '23'
 """
 
 
-def load_touching(dsn, town) -> dict:
+def load_touching(dsn, town, near=None) -> dict:
     with psycopg.connect(dsn) as conn:
         return {sid: r for sid, r in conn.execute(TOUCH_SQL, {
-            "town": town, "near": float(SHED_TOUCH_M), "homes": list(HOME_CLASSES)}) if r is not None}
+            "town": town, "near": float(SHED_TOUCH_M if near is None else near),
+            "homes": list(HOME_CLASSES)}) if r is not None}
+
+
+# Owner (2026-11-19, 4 Eider Lane, Topsham: "the building besides it is pretty much as the one building"): a
+# building attached to a bigger house -- within SHED_ATTACHED_M of it -- is part of that house, whatever its size.
+# 2e7a9dc4 (47 m2) touches 4's 93 m2 house, one 117 m2 lidar roof over both; at 0.505 of it, SHED_TOUCH_RATIO's 0.5
+# let it through as its own "house", and 4-22 Eider Lane each slid one house. None = off.
+SHED_ATTACHED_M = None
+_ATTACHED: dict = {}
 
 
 def load_near_small(dsn, town) -> dict:
@@ -1443,6 +1455,8 @@ def drop_near_sheds(scored_df):
         shed |= scored_df["source_id"].map(lambda b: _NEAR_SMALL.get(b, 1.0)) < SHED_SMALL_RATIO
     if SHED_TOUCH_M is not None and _TOUCHING:
         shed |= scored_df["source_id"].map(lambda b: _TOUCHING.get(b, 1.0)) < SHED_TOUCH_RATIO
+    if SHED_ATTACHED_M is not None and _ATTACHED:
+        shed |= scored_df["source_id"].map(lambda b: _ATTACHED.get(b, 1.0)) < 1.0
     return scored_df[~shed]
 
 
