@@ -313,6 +313,27 @@ ORDER_SIDE_REAL_FACTOR = None
 BORROWED_STUB_M = None
 
 
+# A crammed stub never beats a normal piece covering the number. Lewiston Road, Topsham: 608202923, 72 m, right
+# 647-753, left borrowed (FILL_MISSING_SIDE) ~646-752 = 1.5 numbers per meter, tighter than 75603208's 682-798
+# over 627 m, so 682-730 were squeezed into 72 m and picked 600-900 m from their houses. A cover packing more than
+# CRAMMED_COVER_FACTOR x the street's median numbers per meter loses to the tightest normal one. None = off.
+CRAMMED_COVER_FACTOR = None
+
+
+def _all_covers(number: int, segments):
+    """Every (segment, side, fraction, span) whose range holds the number with its parity."""
+    out = []
+    for seg in segments:
+        for side, lo_key, hi_key in (("L", "lfromadd", "ltoadd"), ("R", "rfromadd", "rtoadd")):
+            start, end = _int_or_none(seg[lo_key]), _int_or_none(seg[hi_key])
+            if start is None or end is None or not min(start, end) <= number <= max(start, end):
+                continue
+            if start % 2 == end % 2 and number % 2 != start % 2:
+                continue
+            out.append((seg, side, 0.5 if start == end else (number - start) / (end - start), abs(end - start)))
+    return out
+
+
 def covering_range(number: int, segments):
     """(segment, side 'L'/'R', fraction f, range size) whose range holds
     `number` with the range's own parity -- or None. When several ranges
@@ -336,6 +357,19 @@ def covering_range(number: int, segments):
             if seg.get("filled_side") != side and (
                     best_real is None or (span, str(seg["tlid"])) < (best_real[3], str(best_real[0]["tlid"]))):
                 best_real = (seg, side, fraction, span)
+    if CRAMMED_COVER_FACTOR is not None and best is not None:
+        dens = [abs(_int_or_none(s[a]) - _int_or_none(s[b])) / max(s.get("length_m") or 0, 1.0)
+                for s in segments for a, b in (("lfromadd", "ltoadd"), ("rfromadd", "rtoadd"))
+                if _int_or_none(s[a]) is not None and _int_or_none(s[b]) is not None and (s.get("length_m") or 0) > 0]
+        if dens:
+            limit = CRAMMED_COVER_FACTOR * max(float(np.median(dens)), 1e-6)
+
+            def density(c):
+                return c[3] / max(c[0].get("length_m") or 0, 1.0)
+            if density(best) > limit:
+                ok = [c for c in _all_covers(number, segments) if density(c) <= limit]
+                if ok:
+                    return min(ok, key=lambda c: (c[3], str(c[0]["tlid"])))
     if (BORROWED_STUB_M is not None and best is not None and best_real is not None and best is not best_real
             and best[0].get("filled_side") == best[1] and (best[0].get("length_m") or 0) < BORROWED_STUB_M):
         return best_real
