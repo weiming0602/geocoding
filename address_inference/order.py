@@ -454,6 +454,7 @@ SKIP_SCORE = None
 # out, two numbers on one place, or a home place left empty -- and its home places equal its numbers, the k-th
 # number takes the k-th place in road order. Every pair must be a candidate. False = off.
 COUNT_RUNS = False
+COUNT_EXTRA_MAX = 0  # runs with up to this many more home places than numbers (all numbers placed)
 COUNT_ANCHOR_P = 0.7  # 0.5: wrong picks (227, 291 at ~0.6) became anchors and nothing fired; 0.8: too sparse
 LAST_COUNTED: list = []  # (street, numbers) runs the count rule renumbered
 
@@ -470,15 +471,29 @@ def count_runs(mapping, numbers, order, direction, street, positions, home, prob
             continue
         run_n = [n for n in numbers if a < n < z]
         run_b = [b for b in order[ia + 1:iz] if (street, b) in home]
-        if not run_n or len(run_n) != len(run_b):
+        extra = len(run_b) - len(run_n)
+        if not run_n or extra < 0 or extra > COUNT_EXTRA_MAX:
             continue
         used = [mapping.get(n) for n in run_n]
-        mismatched = (any(u is None for u in used) or len(set(u for u in used if u)) < len([u for u in used if u])
-                      or any(b not in used for b in run_b))
-        if not mismatched or any((n, b) not in prob for n, b in zip(run_n, run_b)):
+        placed = [u for u in used if u]
+        mismatched = (any(u is None for u in used) or len(set(placed)) < len(placed)
+                      or (extra == 0 and any(b not in used for b in run_b)))
+        if not mismatched:
             continue
-        for n, b in zip(run_n, run_b):
-            out[n] = b
+        if extra == 0:
+            if any((n, b) not in prob for n, b in zip(run_n, run_b)):
+                continue
+            new = dict(zip(run_n, run_b))
+        else:
+            # a few more houses than numbers: every number placed, in house order; the ranker's scores pick which
+            # houses stay empty (owner: "we don't drop street number easily")
+            P = np.array([[np.log(np.mean(prob[(n, b)]) + 1e-9) if (n, b) in prob else -1e9 for b in run_b]
+                          for n in run_n])
+            _, match = monotone_assign(P, share_penalty=np.inf, skip_score=-1e9)
+            if len(match) != len(run_n) or any(P[i, j] <= -1e8 for i, j in match.items()):
+                continue
+            new = {run_n[i]: run_b[j] for i, j in match.items()}
+        out.update(new)
         LAST_COUNTED.append((street, tuple(run_n)))
     return out
 # Owner: "street numbers along buildings are supposed to be in order". A number road order left unplaced falls
