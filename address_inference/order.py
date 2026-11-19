@@ -448,6 +448,39 @@ def lane_end(df) -> pd.Series:
 # geocoded points, houses past 200 m). Off; the assessor mode's anchors
 # (assessor_picks) fix that run instead.
 SKIP_SCORE = None
+# Owner's count rule (2026-11-18, High Head Road, Harpswell: TIGER's odd 199-245 piece ends a few houses early;
+# road order dropped 215 and 227-291 each took the house before theirs). Between two numbers road order placed
+# with confidence (probability >= COUNT_ANCHOR_P) on a street side, when the run is mismatched -- a number left
+# out, two numbers on one place, or a home place left empty -- and its home places equal its numbers, the k-th
+# number takes the k-th place in road order. Every pair must be a candidate. False = off.
+COUNT_RUNS = False
+COUNT_ANCHOR_P = 0.7  # 0.5: wrong picks (227, 291 at ~0.6) became anchors and nothing fired; 0.8: too sparse
+LAST_COUNTED: list = []  # (street, numbers) runs the count rule renumbered
+
+
+def count_runs(mapping, numbers, order, direction, street, positions, home, prob) -> dict:
+    """mapping {number: place} for one street side -> the same with mismatched runs between confident numbers
+    renumbered in house order (owner's count rule)."""
+    out = dict(mapping)
+    idx = {b: i for i, b in enumerate(order)}
+    conf = sorted(n for n, b in mapping.items() if (n, b) in prob and np.mean(prob[(n, b)]) >= COUNT_ANCHOR_P)
+    for a, z in zip(conf, conf[1:]):
+        ia, iz = idx.get(mapping[a]), idx.get(mapping[z])
+        if ia is None or iz is None or iz - ia < 2:
+            continue
+        run_n = [n for n in numbers if a < n < z]
+        run_b = [b for b in order[ia + 1:iz] if (street, b) in home]
+        if not run_n or len(run_n) != len(run_b):
+            continue
+        used = [mapping.get(n) for n in run_n]
+        mismatched = (any(u is None for u in used) or len(set(u for u in used if u)) < len([u for u in used if u])
+                      or any(b not in used for b in run_b))
+        if not mismatched or any((n, b) not in prob for n, b in zip(run_n, run_b)):
+            continue
+        for n, b in zip(run_n, run_b):
+            out[n] = b
+        LAST_COUNTED.append((street, tuple(run_n)))
+    return out
 # Owner: "street numbers along buildings are supposed to be in order". A number road order left unplaced falls
 # back only to a house between its placed neighbors' houses on that side; with none there it stays unplaced.
 ORDERED_FALLBACK = False
@@ -702,6 +735,7 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     on its own, as before."""
     picks = dict(fallback)
     LAST_PLACED.clear()
+    LAST_COUNTED.clear()
     driveway_rules = DRIVEWAY_RULES if driveway_rules is None else driveway_rules
     property_bonus = PROPERTY_SLOT_BONUS if property_slot_bonus is None else property_slot_bonus
     townhouse_ratio = TOWNHOUSE_RATIO if townhouse_ratio is None else townhouse_ratio
@@ -985,7 +1019,10 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
             else:
                 total, match = monotone_assign(P, share_penalty=share)
             if best is None or total > best[0]:
-                best = (total, {numbers[i]: order[j] for i, j in match.items()}, direction)
+                best = (total, {numbers[i]: order[j] for i, j in match.items()}, direction, order)
+        if COUNT_RUNS and not townhouses:
+            best = (best[0], count_runs(best[1], numbers, best[3], best[2], street, positions, home, prob),
+                    best[2], best[3])
         for address_id, number in zip(group["id"], group["number"]):
             if number in best[1]:
                 picks[address_id] = best[1][number]
