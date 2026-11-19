@@ -477,7 +477,12 @@ def count_runs(mapping, numbers, order, direction, street, positions, home, prob
             continue
         used = [mapping.get(n) for n in run_n]
         placed = [u for u in used if u]
-        if COUNT_TRIGGER == "drop_and_empty":
+        if COUNT_TRIGGER == "out_and_empty":
+            # also Barrows Drive / River Road (Topsham): nothing dropped, but a run number sits on a place outside
+            # the run (pushed past its end) while a house inside it is left empty -- the run slid one house
+            outside = [u for u in placed if u not in set(run_b)]
+            mismatched = (any(u is None for u in used) or bool(outside)) and any(b not in used for b in run_b)
+        elif COUNT_TRIGGER == "drop_and_empty":
             # High Head's signature: a number left out AND a house left empty in the same run. Two numbers on one
             # place alone is normal where a number has no footprint (Topsham's Cathance Road 369 shares 377's
             # house): renumbering those runs slid right numbers one house (Eider Lane -10, Cathance -8).
@@ -506,6 +511,8 @@ def count_runs(mapping, numbers, order, direction, street, positions, home, prob
 # Owner: "street numbers along buildings are supposed to be in order". A number road order left unplaced falls
 # back only to a house between its placed neighbors' houses on that side; with none there it stays unplaced.
 ORDERED_FALLBACK = False
+# A left-out number never falls back onto a place road order gave another number (lot_picks). False = off.
+NO_SHARE_FALLBACK = False
 
 # Bayview Road 220: its E911 point is the campus entrance, no building within
 # 156 m; road order gave it 246's house and every number after it slid one
@@ -2530,6 +2537,21 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
                                      and sorted(s)[-2] >= LOT_SHARE_MIN_M2}
     picked = order_constrained_picks(address_df, scored_place, positions_place, fallback, **kwargs)
     picks = {a: best_building.get((a, v), v) for a, v in picked.items()}
+    if NO_SHARE_FALLBACK:
+        # Owner (235 / 271 Cathance Road, Topsham): a number road order left out falls back to the ranker's pick,
+        # which may be a place road order already gave another number (235 took 271's house, as if swapped).
+        # Such a fallback takes its best candidate on a place nobody was given, else stays unplaced.
+        used = {key.get(picks[a], picks[a]) for a in LAST_PLACED if a in picks}
+        by_addr = {a: g.sort_values(["p", "source_id"], ascending=[False, True])["source_id"].tolist()
+                   for a, g in df[["address_id", "source_id", "p"]].groupby("address_id")}
+        for a in [a for a in picks if a not in LAST_PLACED]:
+            if key.get(picks[a], picks[a]) not in used:
+                continue
+            alt = next((b for b in by_addr.get(a, []) if key.get(b, b) not in used), None)
+            if alt is None:
+                del picks[a]
+            else:
+                picks[a] = alt
     if SPREAD_WITHIN_LOT and roof_of is not None:
         size_of = df.drop_duplicates("source_id").set_index("source_id")["_within" if "_within" in df.columns
                                                                           else "sqmeters"].to_dict()
