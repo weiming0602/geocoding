@@ -599,6 +599,50 @@ AUTO_INFLATION = 2.0
 AUTO_MIN_DENSITY = 0.7
 
 
+# Uneven TIGER splits (owner: "target on something like Maquoit Drive"): Maquoit Drive, Freeport, even side = 6-48 on
+# a 32 m stub (1.3 numbers per meter), 50-58 over 120 m, 60-136 over 528 m, 138-198 over 149 m, for real numbers
+# 42-150 -- 44-150 each took the next number's house. When one side's pieces differ more than RESPREAD_UNEVEN x in
+# numbers per meter, that side's ranges are re-set from the list's own lowest..highest number, shared out by each
+# piece's length in range order (each piece keeps its direction). None = off.
+RESPREAD_UNEVEN = None
+RESPREAD_MIN_PIECES = 2
+LAST_RESPREAD: list = []
+
+
+def respread_uneven(segs, side_numbers_for) -> int:
+    """In place, before FILL_MISSING_SIDE. side_numbers_for(parity) -> the side's sorted list numbers."""
+    changed = 0
+    for parity in (0, 1):
+        nums = side_numbers_for(parity)
+        if len(nums) < 2:
+            continue
+        pieces = []
+        for seg in segs:
+            for side, a, b in (("L", "lfromadd", "ltoadd"), ("R", "rfromadd", "rtoadd")):
+                s, e = _int_or_none(seg[a]), _int_or_none(seg[b])
+                if s is None or e is None or s % 2 != parity or e % 2 != parity or not seg.get("length_m"):
+                    continue
+                pieces.append((min(s, e), max(s, e), seg, a, b, s > e, float(seg["length_m"])))
+        if len(pieces) < RESPREAD_MIN_PIECES:
+            continue
+        dens = [max(hi - lo, 2) / max(length, 1.0) for lo, hi, *_r, length in pieces]
+        if max(dens) < RESPREAD_UNEVEN * min(dens):
+            continue
+        pieces.sort(key=lambda p: (p[0], p[1]))
+        total = sum(p[6] for p in pieces)
+        lo, hi = nums[0], nums[-1]
+        cum = 0.0
+        for p_lo, p_hi, seg, a, b, desc, length in pieces:
+            n0 = lo + (hi - lo) * cum / total
+            cum += length
+            n1 = lo + (hi - lo) * cum / total
+            r0 = int(round((n0 - parity) / 2)) * 2 + parity
+            r1 = max(r0, int(round((n1 - parity) / 2)) * 2 + parity)
+            seg[a], seg[b] = (str(r1), str(r0)) if desc else (str(r0), str(r1))
+            changed += 1
+    return changed
+
+
 def list_range_number(number, side_numbers, segments, min_inflation=None):
     """`number` moved onto TIGER's numbering by its place in the LIST's own
     min..max for its side (parity): the list sets the scale, TIGER only
@@ -638,6 +682,14 @@ def build(addresses, segments, candidates, parcels=None, ranges="tiger"):
         seg = dict(zip(seg_keys, row))
         seg["points"] = parse_linestring(seg["geometry"])
         segs_by_street[seg["label_street"]].append(seg)
+    if RESPREAD_UNEVEN is not None:
+        nums_by = defaultdict(set)
+        for _, number, street, *_rest in addresses:
+            nums_by[(street, number % 2)].add(number)
+        LAST_RESPREAD.clear()
+        for street, segs in segs_by_street.items():
+            if respread_uneven(segs, lambda par, st=street: sorted(nums_by.get((st, par), ()))):
+                LAST_RESPREAD.append(street)
     if FILL_MISSING_SIDE:
         for segs in segs_by_street.values():
             fill_missing_sides(segs)
