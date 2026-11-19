@@ -331,6 +331,21 @@ CONTINUE_SCORE_ONLY = False
 LAST_CONTINUATIONS: list = []
 
 
+# Candidates per address: the M0_KEEP nearest TIGER's interpolated spot (as before) plus the RATE_KEEP nearest the
+# road-start spot (rate_spots, which doesn't use TIGER's range), out of dataset.MAX_CANDIDATES built. A flat cap of
+# 100 nearest M0: Topsham +94.6 (placeholder ranges: Birch Ridge 1-99 vs real 1-16 pushed true houses out of the
+# 50), but Freeport -33, Harpswell -16 (good ranges, more far-off confusers). (m0_keep, rate_keep) or None = off.
+CAP_M0_KEEP = None  # both set = on
+CAP_RATE_KEEP = None
+
+
+def cap_mix(candidate_df, m0_keep, rate_keep):
+    df = candidate_df
+    r_m0 = df.groupby("address_id")["d_m0"].rank(method="first")
+    r_rate = df.groupby("address_id")["d_rate_len"].rank(method="first", na_option="bottom")
+    return df[(r_m0 <= m0_keep) | (r_rate <= rate_keep)].reset_index(drop=True)
+
+
 def _train_rows(dsn, region, town, ranges):
     """The candidate rows (with rate features) as they are without the continuation pieces."""
     address_df, candidate_df = dataset.build(*dataset.load(dsn, region, town), ranges=ranges)
@@ -387,6 +402,8 @@ def _evaluate(dsn, region, town, save=False, ranges="tiger", train_df=None):
         candidate_df = rate_spots.add_rate_features(candidate_df, address_df, spots,
                                                     order.load_positions(dsn, region, town))
         extra = rate_spots.RATE_COLS + (["street_rate_m"] if rate_spots.WITH_STREET_RATE else [])
+        if CAP_M0_KEEP is not None and CAP_RATE_KEEP is not None:
+            candidate_df = cap_mix(candidate_df, CAP_M0_KEEP, CAP_RATE_KEEP)
     else:
         extra = []
     if rate_spots.RATE_SPOTS == "auto":

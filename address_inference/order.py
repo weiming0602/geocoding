@@ -608,7 +608,7 @@ def _assign_townhouse_street(street, rows, p_both, side_of, positions, home, cla
                 if j > 0:
                     cand.append((D[i, j - 1], ("skip_b",)))
                     b = order[j - 1]
-                    for size in range(1, TOWNHOUSE_MAX_NUMBERS + 1):
+                    for size in range(1, int(TOWNHOUSE_MAX_NUMBERS) + 1):
                         if size > i:
                             break
                         run = numbers[i - size:i]
