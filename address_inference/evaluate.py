@@ -394,6 +394,11 @@ def _evaluate(dsn, region, town, save=False, ranges="tiger", train_df=None):
 
     picks = dataset.baseline_picks(candidate_df)
     features = list(dataset.FEATURES)
+    if dataset.RELIABILITY:
+        rel = dataset.reliability_features(address_df, loaded[1])
+        cols = list(zip(*[rel.get(a, (np.nan, np.nan, np.nan)) for a in candidate_df["address_id"]]))
+        candidate_df = candidate_df.assign(**{c: list(v) for c, v in zip(dataset.RELIABILITY_COLS, cols)})
+        features += dataset.RELIABILITY_COLS
     if rate_spots.RATE_SPOTS:
         # The addresser's own measure: distance from the road's start (rate_spots.py).
         spots = rate_spots.street_spots(dsn, region, town, address_df)

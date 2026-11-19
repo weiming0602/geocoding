@@ -945,6 +945,66 @@ FEATURES = [
     "parcel_frontage_this", "parcel_frontage_other", "parcel_frontage_share", "parcel_buildings",
     "parcel_largest", "parcel_area_m2", "parcel_size_ratio", "pool_m",
 ]
+# TIGER-reliability inputs (owner, 2026-11-19: "the way you use machine learning is where tiger data is with its
+# original issues"): most inputs are built on TIGER's ranges, and the ranker has no way to know when they're
+# placeholders or badly split. Per address, from TIGER and the address list only:
+#   tiger_inflation  the side's highest TIGER number / the list's highest on that side (Eider Lane: 99 / 43)
+#   tiger_uneven     max / min numbers-per-meter over the side's ranged pieces (Maquoit Drive: ~20)
+#   cover_crammed    the covering piece's numbers per meter / the street's median (Lewiston Road's 72 m stub)
+# False = off (not computed, not model inputs).
+RELIABILITY = False
+RELIABILITY_COLS = ["tiger_inflation", "tiger_uneven", "cover_crammed"]
+
+
+def reliability_features(address_df, segments) -> dict:
+    """{address_id: (tiger_inflation, tiger_uneven, cover_crammed)}."""
+    seg_keys = ("label_street", "tlid", "lfromadd", "ltoadd", "rfromadd", "rtoadd", "geometry", "length_m")
+    by_street = defaultdict(list)
+    for row in segments:
+        by_street[row[0]].append(dict(zip(seg_keys, row[:8])))
+    side_top = defaultdict(int)
+    for street, n in zip(address_df["street"], address_df["number"]):
+        side_top[(street, n % 2)] = max(side_top[(street, n % 2)], int(n))
+    stats = {}
+    for street, segs in by_street.items():
+        dens_all, per_side = [], defaultdict(list)
+        top = defaultdict(int)
+        for seg in segs:
+            length = float(seg["length_m"] or 0)
+            for a, b in (("lfromadd", "ltoadd"), ("rfromadd", "rtoadd")):
+                lo, hi = _int_or_none(seg[a]), _int_or_none(seg[b])
+                if lo is None or hi is None or length <= 0:
+                    continue
+                d = max(abs(hi - lo), 2) / length
+                dens_all.append(d)
+                if lo % 2 == hi % 2:
+                    per_side[lo % 2].append(d)
+                    top[lo % 2] = max(top[lo % 2], lo, hi)
+        med = float(np.median(dens_all)) if dens_all else np.nan
+        stats[street] = (per_side, top, med, {s["tlid"]: s for s in segs})
+    out = {}
+    for aid, street, n, cover in zip(address_df["id"], address_df["street"], address_df["number"],
+                                     address_df.get("cover_tlid", [None] * len(address_df))):
+        if street not in stats:
+            out[aid] = (np.nan, np.nan, np.nan)
+            continue
+        per_side, top, med, by_tlid = stats[street]
+        par = int(n) % 2
+        lt = side_top.get((street, par)) or 0
+        infl = top[par] / lt if lt and top.get(par) else np.nan
+        dl = per_side.get(par, [])
+        uneven = max(dl) / min(dl) if len(dl) >= 2 and min(dl) > 0 else 1.0
+        crammed = np.nan
+        seg = by_tlid.get(cover)
+        if seg is not None and med and med == med:
+            ds = [max(abs(_int_or_none(seg[b]) - _int_or_none(seg[a])), 2) / max(float(seg["length_m"] or 0), 1.0)
+                  for a, b in (("lfromadd", "ltoadd"), ("rfromadd", "rtoadd"))
+                  if _int_or_none(seg[a]) is not None and _int_or_none(seg[b]) is not None]
+            crammed = max(ds) / med if ds else np.nan
+        out[aid] = (infl, uneven, crammed)
+    return out
+
+
 # canopy_over / canopy_ring / width_m (canopy.py) are computed for road
 # order's tree-covered rule but are not model inputs: as inputs they cost
 # TIGER 0.7 and E911 roads 1.2 points (Freeport, 2026-11-07).
