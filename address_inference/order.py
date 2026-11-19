@@ -1195,6 +1195,11 @@ def set_guard_town(dsn, town):
     _ATTACHED.clear()
     if SHED_ATTACHED_M is not None:
         _ATTACHED.update(load_touching(dsn, town, near=SHED_ATTACHED_M))
+    _SOLAR.clear()
+    if NOT_SOLAR:
+        from .solar import solar_footprints
+        with psycopg.connect(dsn) as conn:
+            _SOLAR.update(solar_footprints(conn, "ME", "23", town))
     _OCC.clear()
     if LOT_TWO_DWELLINGS:
         with psycopg.connect(dsn) as conn:
@@ -1436,6 +1441,11 @@ def load_touching(dsn, town, near=None) -> dict:
 # let it through as its own "house", and 4-22 Eider Lane each slid one house. None = off.
 SHED_ATTACHED_M = None
 _ATTACHED: dict = {}
+# Owner (2026-11-19, 271 Cathance Road, Topsham): footprints that are solar arrays (address_inference/solar.py:
+# low lidar roof over a non-roof photo, or a dark square tracker) are never buildings. Needs solar.py run for the
+# town (address_inference.footprint_photo); without it nothing is dropped. False = off.
+NOT_SOLAR = True  # Topsham 2026-11-19: +1 (271 Cathance), 0 broke; a no-op where solar.py has not run
+_SOLAR: set = set()
 
 
 def load_near_small(dsn, town) -> dict:
@@ -1457,6 +1467,8 @@ def drop_near_sheds(scored_df):
         shed |= scored_df["source_id"].map(lambda b: _TOUCHING.get(b, 1.0)) < SHED_TOUCH_RATIO
     if SHED_ATTACHED_M is not None and _ATTACHED:
         shed |= scored_df["source_id"].map(lambda b: _ATTACHED.get(b, 1.0)) < 1.0
+    if NOT_SOLAR and _SOLAR:
+        shed |= scored_df["source_id"].isin(_SOLAR)
     return scored_df[~shed]
 
 
