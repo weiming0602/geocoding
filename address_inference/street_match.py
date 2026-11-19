@@ -28,6 +28,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
+import numpy as np
 import psycopg
 
 from .regions import load_region
@@ -385,6 +386,90 @@ def coarse_pieces(conn, tlids) -> set:
                                                     "cover": FINE_COVER, "min_pieces": FINE_MIN_PIECES})}
 
 
+# TIGER sometimes names a street's last piece without its type word: High Head Road, Harpswell, ends (ranged up
+# to 498/499) at 43.79865,-69.96702, where 78009083 "High Head" (400-498 / 401-499, 292 m) carries the road on to
+# its last houses (388-437). By name it never joined HIGH HEAD ROAD, so those houses were no candidates and
+# 388+ slid one house back on both sides. With CONTINUE_BASE_NAME, an unclaimed piece whose base name (type word
+# dropped) equals the street's and that touches one of its pieces within CONTINUE_TOUCH_M joins it, repeatedly.
+CONTINUE_BASE_NAME = False
+CONTINUE_TOUCH_M = 2
+TOUCHING_SQL = """
+SELECT DISTINCT s.tlid, s.fullname FROM streets s
+JOIN streets t ON t.tlid = ANY(%(tlids)s) AND s.geom && ST_Expand(t.geom, 0.0001)
+WHERE NOT (s.tlid = ANY(%(tlids)s)) AND coalesce(s.fullname, '') <> ''
+  AND ST_DWithin(s.geom::geography, t.geom::geography, %(near)s)
+"""
+LAST_CONTINUED: list = []
+
+
+# "dead_end": only a piece with its own address ranges that starts where the street dead-ends (every piece of the
+# street at that point runs off the same way -- TIGER 2024/2026 duplicates overlap there), so the road goes on
+# under another name. "any" (every touching piece): Harpswell 72 pieces, -57 (retraining churn); off.
+CONTINUE_MODE = "dead_end"
+PIECES_SQL = """
+SELECT tlid, ST_AsBinary(geom), (coalesce(lfromadd, '') <> '' OR coalesce(rfromadd, '') <> '') FROM streets
+WHERE tlid = ANY(%(tlids)s)
+"""
+
+
+def _dead_end_joins(conn, own, cand) -> list:
+    """Of the candidate tlids, those with ranges that touch an end of the street's pieces where the street stops."""
+    from shapely import wkb
+    from shapely.geometry import Point
+    geo = {t: (wkb.loads(bytes(g)), r) for t, g, r in conn.execute(PIECES_SQL, {"tlids": list(own) + list(cand)})}
+    deg = CONTINUE_TOUCH_M / 111000.0
+    ends = []  # (point, bearing into the piece) for every end of the street's pieces
+    for t in own:
+        if t not in geo:
+            continue
+        c = list(geo[t][0].coords)
+        for p, q in ((c[0], c[1]), (c[-1], c[-2])):
+            ends.append((p, np.degrees(np.arctan2(q[1] - p[1], q[0] - p[0]))))
+    out = []
+    for t in cand:
+        if t not in geo or not geo[t][1]:
+            continue
+        line = geo[t][0]
+        for p, _ in ends:
+            if line.distance(Point(p)) > deg:
+                continue
+            here = [b for e, b in ends if Point(e).distance(Point(p)) <= deg]
+            # also any own piece passing THROUGH p (not ending there) = the street continues: not a dead end
+            through = any(geo[o][0].distance(Point(p)) <= deg and
+                          min(Point(geo[o][0].coords[0]).distance(Point(p)),
+                              Point(geo[o][0].coords[-1]).distance(Point(p))) > deg for o in own if o in geo)
+            spread = max(abs(((a - b + 180) % 360) - 180) for a in here for b in here) if here else 0
+            if not through and spread <= 45:
+                out.append(t)
+                break
+    return out
+
+
+def add_continuations(conn, matches) -> int:
+    taken = {t for m in matches for t in m.tlids}
+    added = 0
+    for m in matches:
+        if not m.tlids:
+            continue
+        base = base_name(canonical(m.label_street))
+        if not base:
+            continue
+        tlids = list(m.tlids)
+        for _ in range(10):
+            new = [t for t, name in conn.execute(TOUCHING_SQL, {"tlids": tlids, "near": CONTINUE_TOUCH_M})
+                   if t not in taken and base_name(canonical(name)) == base]
+            if CONTINUE_MODE == "dead_end":
+                new = _dead_end_joins(conn, tlids, new)
+            if not new:
+                break
+            tlids += new
+            taken |= set(new)
+            LAST_CONTINUED.append((m.label_street, tuple(new)))
+            added += len(new)
+        m.tlids = tuple(sorted(tlids))
+    return added
+
+
 def match_town(dsn, region, town: str) -> list[StreetMatch]:
     with psycopg.connect(dsn) as conn:
         conn.execute(CREATE_TABLES_SQL)
@@ -401,6 +486,9 @@ def match_town(dsn, region, town: str) -> list[StreetMatch]:
         for m in matches:
             add_other_name(conn, params, m)
             match_far(conn, params, m)
+        if CONTINUE_BASE_NAME:
+            LAST_CONTINUED.clear()
+            print(f"  continuations: {add_continuations(conn, matches)} pieces named without their type word joined")
         if SPLIT_SHARED:
             split_shared(conn, params, matches)
         if FINE_OLD_PIECES:
