@@ -151,6 +151,15 @@ read-write).
   (Yarmouth +217, Harpswell +123, Freeport -1). With the old MATCH_BONUS it cost
   Freeport ~20 (village streets numbered in sequence, e.g. Holbrook Street),
   although it helped Freeport's ranker alone (41.9% -> 45.7%).
+  Road order then applies the owner's count rule (`order.COUNT_RUNS`, on): between
+  two numbers it placed with probability >= 0.7 on a street side, a run where a
+  number was left out AND a house left empty, with as many houses as numbers, is
+  numbered in house order (TIGER ended High Head Road's odd 199-245 piece a few
+  houses early; 215-291 had each slid onto the house before theirs): Harpswell +9,
+  New Gloucester +1, the other five towns unchanged. Also triggering on two numbers
+  sharing a house cost Topsham 18 (a number with no footprint shares its
+  neighbor's house normally). Most switches tried around it are kept, off, with
+  their numbers in their comments.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

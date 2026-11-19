@@ -453,7 +453,8 @@ SKIP_SCORE = None
 # with confidence (probability >= COUNT_ANCHOR_P) on a street side, when the run is mismatched -- a number left
 # out, two numbers on one place, or a home place left empty -- and its home places equal its numbers, the k-th
 # number takes the k-th place in road order. Every pair must be a candidate. False = off.
-COUNT_RUNS = False
+COUNT_RUNS = True  # on 2026-11-19: 7 towns, drop_and_empty trigger: Harpswell +9, New Gloucester +1, others 0, none broke
+COUNT_TRIGGER = "drop_and_empty"  # "any" (also two numbers on one place): Topsham -18, Gray -3; "drop_and_empty": only a run with a number left out and a house left empty
 COUNT_EXTRA_MAX = 0  # runs with up to this many more home places than numbers (all numbers placed)
 COUNT_ANCHOR_P = 0.7  # 0.5: wrong picks (227, 291 at ~0.6) became anchors and nothing fired; 0.8: too sparse
 LAST_COUNTED: list = []  # (street, numbers) runs the count rule renumbered
@@ -476,8 +477,14 @@ def count_runs(mapping, numbers, order, direction, street, positions, home, prob
             continue
         used = [mapping.get(n) for n in run_n]
         placed = [u for u in used if u]
-        mismatched = (any(u is None for u in used) or len(set(placed)) < len(placed)
-                      or (extra == 0 and any(b not in used for b in run_b)))
+        if COUNT_TRIGGER == "drop_and_empty":
+            # High Head's signature: a number left out AND a house left empty in the same run. Two numbers on one
+            # place alone is normal where a number has no footprint (Topsham's Cathance Road 369 shares 377's
+            # house): renumbering those runs slid right numbers one house (Eider Lane -10, Cathance -8).
+            mismatched = any(u is None for u in used) and any(b not in used for b in run_b)
+        else:
+            mismatched = (any(u is None for u in used) or len(set(placed)) < len(placed)
+                          or (extra == 0 and any(b not in used for b in run_b)))
         if not mismatched:
             continue
         if extra == 0:
