@@ -65,7 +65,7 @@ EXT_FOUND: list = []  # last evaluate's extension streets (extensions.ext_picks)
 LAST_CHOICES: list = []  # per outer fold: True = optional features kept
 
 
-def cross_validated_scores(candidate_df, features=None, optional=None):
+def cross_validated_scores(candidate_df, features=None, optional=None, train_df=None):
     """candidate_df plus an out-of-fold ranker `score` per row, and the
     per-feature importance (gain) summed over folds.
     optional: extra features each outer fold keeps only if they win on its own
@@ -82,9 +82,25 @@ def cross_validated_scores(candidate_df, features=None, optional=None):
     df["score"] = np.nan
     importance = pd.Series(0.0, index=every)
     LAST_CHOICES.clear()
-    folds = GroupKFold(n_splits=N_FOLDS).split(X, df["label"], groups=df["street"])
+    # train_df: the rows each fold trains on (default: candidate_df itself). evaluate.CONTINUE_SCORE_ONLY trains on
+    # the candidates without TIGER continuation pieces and scores the ones with them, fold by street as usual.
+    tdf = None if train_df is None else train_df.sort_values(
+        ["address_id", "d_m0", "source_id"], kind="stable").reset_index(drop=True)
+    if tdf is None:
+        folds = list(GroupKFold(n_splits=N_FOLDS).split(X, df["label"], groups=df["street"]))
+    else:
+        # folds come from the training rows (GroupKFold deals streets by row count, so extra scoring rows would
+        # re-deal every fold); each fold scores the rows of its test streets
+        folds = []
+        for tr, te in GroupKFold(n_splits=N_FOLDS).split(tdf, tdf["label"], groups=tdf["street"]):
+            test_streets = set(tdf.iloc[te]["street"])
+            folds.append((tr, np.flatnonzero(df["street"].isin(test_streets).to_numpy())))
+        missing = ~df["street"].isin(set(tdf["street"]))
+        if missing.any():  # a street with rows only when the continuations are in: score it with the last fold
+            last_tr, last_te = folds[-1]
+            folds[-1] = (last_tr, np.union1d(last_te, np.flatnonzero(missing.to_numpy())))
     for train_idx, test_idx in folds:
-        train = df.iloc[train_idx]
+        train = df.iloc[train_idx] if tdf is None else tdf.iloc[train_idx]
         use = features
         if optional:
             wins = {False: 0, True: 0}
@@ -307,7 +323,53 @@ def save_review(dsn, region_id, town, address_df, candidate_df, picks, placed, e
                 "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING", review)
 
 
+# TIGER pieces named without their type word that continue a street past its dead end (street_match
+# CONTINUE_BASE_NAME, High Head Road's 78009083 "High Head"): with CONTINUE_SCORE_ONLY they're added to the
+# street's pieces for this run only -- candidates, positions and road order see them -- while the ranker trains
+# on the candidates without them, so no other street's training data changes. False = off.
+CONTINUE_SCORE_ONLY = False
+LAST_CONTINUATIONS: list = []
+
+
+def _train_rows(dsn, region, town, ranges):
+    """The candidate rows (with rate features) as they are without the continuation pieces."""
+    address_df, candidate_df = dataset.build(*dataset.load(dsn, region, town), ranges=ranges)
+    if rate_spots.RATE_SPOTS:
+        spots = rate_spots.street_spots(dsn, region, town, address_df)
+        candidate_df = rate_spots.add_rate_features(candidate_df, address_df, spots,
+                                                    order.load_positions(dsn, region, town))
+    return candidate_df
+
+
 def evaluate(dsn, region, town, save=False, ranges="tiger"):
+    if not CONTINUE_SCORE_ONLY:
+        return _evaluate(dsn, region, town, save, ranges)
+    from . import street_match
+    with psycopg.connect(dsn) as conn:
+        rows = street_match.continuation_rows(conn, town, region.state_abbr)
+    LAST_CONTINUATIONS[:] = rows
+    if not rows:
+        return _evaluate(dsn, region, town, save, ranges)
+    train_df = _train_rows(dsn, region, town, ranges)
+    key = {"region": region.id, "town": town}
+    with psycopg.connect(dsn) as conn:
+        conn.execute("""DELETE FROM address_inference.street_match_segments
+                        WHERE region_id = %(region)s AND town = %(town)s AND tlid = ANY(%(tlids)s)""",
+                     {**key, "tlids": [t for _, t in rows]})
+        with conn.cursor() as cur:
+            cur.executemany("INSERT INTO address_inference.street_match_segments VALUES (%s, %s, %s, %s)",
+                            [(region.id, town, street, t) for street, t in rows])
+    try:
+        return _evaluate(dsn, region, town, save, ranges, train_df=train_df)
+    finally:
+        with psycopg.connect(dsn) as conn:
+            conn.execute("""DELETE FROM address_inference.street_match_segments
+                            WHERE region_id = %(region)s AND town = %(town)s
+                              AND (label_street, tlid) IN (SELECT * FROM unnest(%(streets)s::text[], %(tlids)s::text[]))""",
+                         {**key, "streets": [st for st, _ in rows], "tlids": [t for _, t in rows]})
+
+
+def _evaluate(dsn, region, town, save=False, ranges="tiger", train_df=None):
     loaded = dataset.load(dsn, region, town)
     parcels = loaded[3]
     address_df, candidate_df = dataset.build(*loaded, ranges=ranges)
@@ -330,9 +392,9 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     if rate_spots.RATE_SPOTS == "auto":
         # each fold decides from its own training streets (Freeport's village
         # streets lost 21 numbers with them, rural towns gained up to 184)
-        scored, importance = cross_validated_scores(candidate_df, features, optional=extra)
+        scored, importance = cross_validated_scores(candidate_df, features, optional=extra, train_df=train_df)
     else:
-        scored, importance = cross_validated_scores(candidate_df, features + extra)
+        scored, importance = cross_validated_scores(candidate_df, features + extra, train_df=train_df)
     picks["ML"] = top_picks(scored)
     # Isolated buildings (loners.py): their own street's, and one number each.
     loner_ids, owner_streets = set(), {}

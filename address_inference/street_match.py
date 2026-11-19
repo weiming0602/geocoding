@@ -470,6 +470,25 @@ def add_continuations(conn, matches) -> int:
     return added
 
 
+def continuation_rows(conn, town: str, state: str) -> list:
+    """[(label_street, tlid)] the continuation rule would add (CONTINUE_MODE), computed without writing anything --
+    for evaluate's score-only use (evaluate.CONTINUE_SCORE_ONLY)."""
+    params = {"town": town, "state": state}
+    streets = dict(conn.execute(LABEL_STREETS_SQL, params).fetchall())
+    per_street = defaultdict(list)
+    for point_id, label_street, tlid, name, is_alias in conn.execute(CANDIDATES_SQL, params):
+        per_street[label_street].append((point_id, tlid, name, is_alias))
+    matches = [match_street(street, count, per_street.get(street, [])) for street, count in sorted(streets.items())]
+    for m in matches:
+        add_other_name(conn, params, m)
+        match_far(conn, params, m)
+    if SPLIT_SHARED:
+        split_shared(conn, params, matches)
+    LAST_CONTINUED.clear()
+    add_continuations(conn, matches)
+    return [(street, t) for street, tlids in LAST_CONTINUED for t in tlids]
+
+
 def match_town(dsn, region, town: str) -> list[StreetMatch]:
     with psycopg.connect(dsn) as conn:
         conn.execute(CREATE_TABLES_SQL)
