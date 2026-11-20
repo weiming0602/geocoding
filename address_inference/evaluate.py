@@ -339,11 +339,21 @@ CAP_M0_KEEP = None  # both set = on
 CAP_RATE_KEEP = None
 
 
-def cap_mix(candidate_df, m0_keep, rate_keep):
+# Road-start candidates only where TIGER's range overshoots the street side's real numbers (placeholder ranges:
+# Topsham's Birch Ridge 1-99 for 1-16). Where TIGER tracks the numbers, its spot is the better guide (Gray's
+# Mayberry Road: real house 47 m from TIGER's spot, 134 m from the road-start spot) and the extra candidates only
+# distract (mixed cap without this: New Gloucester -15, Gray -10.4). None = every address.
+CAP_RATE_MIN_INFLATION = None
+
+
+def cap_mix(candidate_df, m0_keep, rate_keep, eligible=None):
     df = candidate_df
     r_m0 = df.groupby("address_id")["d_m0"].rank(method="first")
     r_rate = df.groupby("address_id")["d_rate_len"].rank(method="first", na_option="bottom")
-    return df[(r_m0 <= m0_keep) | (r_rate <= rate_keep)].reset_index(drop=True)
+    rate_ok = r_rate <= rate_keep
+    if eligible is not None:
+        rate_ok &= df["address_id"].isin(eligible)
+    return df[(r_m0 <= m0_keep) | rate_ok].reset_index(drop=True)
 
 
 def _train_rows(dsn, region, town, ranges):
@@ -408,7 +418,11 @@ def _evaluate(dsn, region, town, save=False, ranges="tiger", train_df=None):
                                                     order.load_positions(dsn, region, town))
         extra = rate_spots.RATE_COLS + (["street_rate_m"] if rate_spots.WITH_STREET_RATE else [])
         if CAP_M0_KEEP is not None and CAP_RATE_KEEP is not None:
-            candidate_df = cap_mix(candidate_df, CAP_M0_KEEP, CAP_RATE_KEEP)
+            eligible = None
+            if CAP_RATE_MIN_INFLATION is not None:
+                rel = dataset.reliability_features(address_df, loaded[1])
+                eligible = {a for a, (infl, _u, _c) in rel.items() if infl == infl and infl >= CAP_RATE_MIN_INFLATION}
+            candidate_df = cap_mix(candidate_df, CAP_M0_KEEP, CAP_RATE_KEEP, eligible)
     else:
         extra = []
     if rate_spots.RATE_SPOTS == "auto":
