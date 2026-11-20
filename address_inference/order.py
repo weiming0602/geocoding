@@ -457,6 +457,7 @@ SKIP_SCORE = None
 # number takes the k-th place in road order. Every pair must be a candidate. False = off.
 COUNT_RUNS = True  # on 2026-11-19: 7 towns, drop_and_empty trigger: Harpswell +9, New Gloucester +1, others 0, none broke
 COUNT_TRIGGER = "drop_and_empty"  # "any" (also two numbers on one place): Topsham -18, Gray -3; "drop_and_empty": only a run with a number left out and a house left empty
+COUNT_SURPLUS_MAX = 0  # runs with up to this many more numbers than houses (some houses hold two)
 COUNT_EXTRA_MAX = 0  # runs with up to this many more home places than numbers (all numbers placed)
 COUNT_ANCHOR_P = 0.7  # 0.5: wrong picks (227, 291 at ~0.6) became anchors and nothing fired; 0.8: too sparse
 LAST_COUNTED: list = []  # (street, numbers) runs the count rule renumbered
@@ -475,10 +476,25 @@ def count_runs(mapping, numbers, order, direction, street, positions, home, prob
         run_n = [n for n in numbers if a < n < z]
         run_b = [b for b in order[ia + 1:iz] if (street, b) in home]
         extra = len(run_b) - len(run_n)
-        if not run_n or extra < 0 or extra > COUNT_EXTRA_MAX:
+        if not run_n or extra > COUNT_EXTRA_MAX or (extra < 0 and -extra > COUNT_SURPLUS_MAX):
             continue
         used = [mapping.get(n) for n in run_n]
         placed = [u for u in used if u]
+        if extra < 0:
+            # Owner's count rule, mirrored (Maquoit Drive, Freeport: E911 puts 42+44, 41+51, 83+91, 115+127 on one
+            # rooftop each): a few more numbers than houses between two good numbers means that many houses hold
+            # two. When road order instead pushed a run number outside the run or dropped one, every number is
+            # placed in house order on the run's houses, two at most per house; the ranker's scores pick which.
+            if not (any(u is None for u in used) or any(u not in set(run_b) for u in placed)):
+                continue
+            P = np.array([[np.log(np.mean(prob[(n, b)]) + 1e-9) if (n, b) in prob else -1e9 for b in run_b]
+                          for n in run_n])
+            _, match = monotone_assign(P, share_penalty=0.0, max_per_building=2, skip_score=-1e9)
+            if len(match) != len(run_n) or any(P[i, j] <= -1e8 for i, j in match.items()):
+                continue
+            out.update({run_n[i]: run_b[j] for i, j in match.items()})
+            LAST_COUNTED.append((street, tuple(run_n)))
+            continue
         if COUNT_TRIGGER == "out_and_empty":
             # also Barrows Drive / River Road (Topsham): nothing dropped, but a run number sits on a place outside
             # the run (pushed past its end) while a house inside it is left empty -- the run slid one house
