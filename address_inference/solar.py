@@ -29,7 +29,9 @@ MAX_M2 = 150
 LOW_COVER = 0.15
 LOW_H = 3.5          # low structure: lidar must have SEEN something, small and low (no lidar roof = no data,
                      # e.g. mobile homes under trees: 5 of the 7 Topsham houses the first version took)
-TRACKER_COVER = 0.9  # a tilted tracker panel covers less than its square; a square house's roof covers it all
+TRACKER_NEAR_M = 25
+TRACKER_RATIO = 3.0
+TRACKER_COVER = 0.7  # 0.9 caught 22 Omer Road, Freeport (a 47 m2 dark square house, lidar 77% cover); a tilted tracker panel covers less than its square; a square house's roof covers it all
 NDVI_MIN = -0.15
 NDVI_MAX = 0.12
 DARK_MAX = 115
@@ -63,10 +65,26 @@ WITH b AS (
     FROM b
 )
 SELECT source_id FROM e
-WHERE (roof_m2 > 0 AND roof_m2 / nullif(sqmeters, 0) < %(low_cover)s AND roof_h <= %(low_h)s AND ndvi > %(ndvi_min)s)
+-- only a secondary building: its tax lot holds a residential building at least twice its size (271's arrays stand
+-- 19-30 m from a 203 m2 house on the same lot; the small dark square camps the photo/shape tests also caught --
+-- 14 E911 houses in Harpswell, New Gloucester, Gray -- are the main building on their lots)
+WHERE EXISTS (
+    SELECT 1 FROM address_inference.building_parcels bp
+    JOIN address_inference.building_parcels bq ON bq.parcel_id = bp.parcel_id AND bq.source_id <> bp.source_id
+    JOIN address_inference.structures o ON o.source_id = bq.source_id
+    WHERE bp.source_id = e.source_id AND o.sqmeters >= 2 * e.sqmeters
+      AND o.prim_occ IN ('Single Family Dwelling', 'Multi - Family Dwelling', 'Manufactured Home'))
+  AND (roof_m2 > 0 AND roof_m2 / nullif(sqmeters, 0) < %(low_cover)s AND roof_h <= %(low_h)s AND ndvi > %(ndvi_min)s)
    OR (least(a, c) >= %(side_min)s AND greatest(a, c) <= %(side_max)s AND greatest(a, c) / nullif(least(a, c), 0) <= 1.2
        AND ST_Area(g) / nullif(ST_Area(env), 0) >= 0.97 AND ST_NPoints(g) <= 5
        AND roof_m2 > 0 AND roof_m2 / nullif(sqmeters, 0) <= %(tracker_cover)s
+       -- a tracker stands in a house's yard: within TRACKER_NEAR_M of a building TRACKER_RATIO x its size on its lot
+       -- (271's: 19 m from a 3.6x house). Without this, 11 small dark cabins (E911 houses) looked like trackers.
+       AND EXISTS (SELECT 1 FROM address_inference.building_parcels bp
+                   JOIN address_inference.building_parcels bq ON bq.parcel_id = bp.parcel_id AND bq.source_id <> bp.source_id
+                   JOIN address_inference.structures o ON o.source_id = bq.source_id
+                   WHERE bp.source_id = e.source_id AND o.sqmeters >= %(tracker_ratio)s * e.sqmeters
+                     AND ST_DWithin(o.geom::geography, ST_Transform(e.g, 4326)::geography, %(tracker_near)s))
        AND brightness < %(dark_max)s AND ndvi > %(ndvi_min)s AND ndvi <= %(ndvi_max)s)
 """
 
@@ -119,7 +137,8 @@ def solar_footprints(conn, region_state_abbr, state_fips, town) -> set:
     return {r[0] for r in conn.execute(FLAGS_SQL, {
         "state": region_state_abbr, "town": town, "fips": state_fips, "max_m2": MAX_M2, "low_cover": LOW_COVER,
         "ndvi_min": NDVI_MIN, "ndvi_max": NDVI_MAX, "dark_max": DARK_MAX, "side_min": SIDE_MIN,
-        "side_max": SIDE_MAX, "low_h": LOW_H, "tracker_cover": TRACKER_COVER})}
+        "side_max": SIDE_MAX, "low_h": LOW_H, "tracker_cover": TRACKER_COVER,
+        "tracker_near": TRACKER_NEAR_M, "tracker_ratio": TRACKER_RATIO})}
 
 
 def main():

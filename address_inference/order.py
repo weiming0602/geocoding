@@ -424,6 +424,8 @@ END_SLOT_HOMES = True   # count only home buildings (their nearest road is this 
 # a townhouse building on one side has one or two numbers; a gap in the
 # numbers is where the next building starts).
 MAX_PER_BUILDING = 2
+# Sharing a building costs this instead of SHARE_PENALTY on a street side with more numbers than houses. None = off.
+SURPLUS_SHARE_PENALTY = None
 
 
 def lane_end(df) -> pd.Series:
@@ -1042,6 +1044,11 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
                 if alone.any():
                     P = P + ISOLATED_BONUS * alone[None, :]
             P = np.where(np.isnan(P), -1e9, P + fit + MATCH_BONUS)
+            if (SURPLUS_SHARE_PENALTY is not None and share is None and not townhouses
+                    and k > len(home_buildings or candidates)):
+                # more numbers than houses on this side: some house must hold two (Maquoit Drive, Freeport: 41/51,
+                # 83/91, 115/127 and 42/44 share buildings; at the full SHARE_PENALTY road order slid the side instead)
+                share = SURPLUS_SHARE_PENALTY
             if share is None and two_home_places:
                 vec = np.array([LOT_SHARE_PENALTY if b in two_home_places else np.inf for b in order])
                 total, match = monotone_assign(P, share_penalty=vec if np.isfinite(vec).any() else None)
