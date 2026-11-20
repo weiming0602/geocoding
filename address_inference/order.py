@@ -457,6 +457,7 @@ SKIP_SCORE = None
 # number takes the k-th place in road order. Every pair must be a candidate. False = off.
 COUNT_RUNS = True  # on 2026-11-19: 7 towns, drop_and_empty trigger: Harpswell +9, New Gloucester +1, others 0, none broke
 COUNT_TRIGGER = "drop_and_empty"  # "any" (also two numbers on one place): Topsham -18, Gray -3; "drop_and_empty": only a run with a number left out and a house left empty
+COUNT_USE_ENDS = False  # also count from the side's start / to its end (no confident anchor needed)
 COUNT_SURPLUS_MAX = 0  # runs with up to this many more numbers than houses (some houses hold two)
 COUNT_EXTRA_MAX = 0  # runs with up to this many more home places than numbers (all numbers placed)
 COUNT_ANCHOR_P = 0.7  # 0.5: wrong picks (227, 291 at ~0.6) became anchors and nothing fired; 0.8: too sparse
@@ -469,8 +470,12 @@ def count_runs(mapping, numbers, order, direction, street, positions, home, prob
     out = dict(mapping)
     idx = {b: i for i, b in enumerate(order)}
     conf = sorted(n for n, b in mapping.items() if (n, b) in prob and np.mean(prob[(n, b)]) >= COUNT_ANCHOR_P)
-    for a, z in zip(conf, conf[1:]):
-        ia, iz = idx.get(mapping[a]), idx.get(mapping[z])
+    # (number, place index) anchors; with COUNT_USE_ENDS the side's two ends count as anchors too (Maquoit Drive,
+    # Freeport: road order is confident about no number on either side, so no run between anchors exists)
+    anchors = [(n, idx.get(mapping[n])) for n in conf]
+    if COUNT_USE_ENDS:
+        anchors = [(-np.inf, -1)] + anchors + [(np.inf, len(order))]
+    for (a, ia), (z, iz) in zip(anchors, anchors[1:]):
         if ia is None or iz is None or iz - ia < 2:
             continue
         run_n = [n for n in numbers if a < n < z]
