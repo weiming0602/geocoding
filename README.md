@@ -7,6 +7,8 @@ third-party geocoding API**. It is deployed as a web service with paid tiers at
 mobile apps, a road-hazard alerting product, and an ongoing machine-learning
 experiment that matches house numbers to actual buildings.
 
+**At a glance:** Maine **E911** address points + Census TIGER/Line in PostGIS · a **REST API** (forward, reverse and batch geocoding, service keys, Stripe) · in-house **routing** with pgRouting for hazard reroutes · **machine learning** (LightGBM learning-to-rank over building footprints, tax parcels, aerial imagery and lidar) that matches addresses to buildings.
+
 ## Highlights
 
 - **Geocoding engine** — Python ingest of TIGER/Line edges and Maine E911
