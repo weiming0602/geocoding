@@ -2,30 +2,30 @@
 
 An address geocoding platform for Maine and New Hampshire, built from public
 data (Census TIGER/Line streets, Maine E911 address points) with **no
-third-party geocoding API**. It runs in production as a paid web service at
+third-party geocoding API**. It is deployed as a web service with paid tiers at
 [meridiangeocoding.com](https://www.meridiangeocoding.com), with web and
 mobile apps, a road-hazard alerting product, and an ongoing machine-learning
 experiment that matches house numbers to actual buildings.
 
 ## Highlights
 
-- **Geocoding engine** -- Python ingest of TIGER/Line edges and Maine E911
+- **Geocoding engine** — Python ingest of TIGER/Line edges and Maine E911
   address points into PostgreSQL/PostGIS; street-name normalization and
   matching; address-range interpolation with side-of-street offsets (side
-  taken from each segment's own ranges -- TIGER has no fixed odd/even side);
+  taken from each segment's own ranges — TIGER has no fixed odd/even side);
   the town an address names beats its ZIP (TIGER county subdivisions).
-- **REST API** ([`geocoding-server`](geocoding-server), Express + `pg`) --
-  forward and reverse geocoding, batch geocoding (CSV in, ZIP or email out),
+- **REST API** ([`geocoding-server`](geocoding-server), Express + `pg`) —
+  forward and reverse geocoding, batch geocoding (CSV in, ZIP out),
   free-text place search (OpenStreetMap Nominatim/Overpass), quota-metered
   service keys, Stripe checkout with webhook fulfillment, per-IP rate
   limiting, and an LLM-assisted retry (Claude, forced tool-use choosing only
   among real street names) for addresses that fail to match.
-- **Road Alerts** -- live hazards from New England 511 and HERE Traffic
+- **Road Alerts** — live hazards from New England 511 and HERE Traffic
   matched to a driver's position, background Web Push alerts with a small
   sketch map, and reroutes around a hazard computed in-house with
   **pgRouting** on TIGER streets made one-way-aware from OpenStreetMap data.
 - **Machine learning: which building is this address?**
-  ([`address_inference`](address_inference)) -- FEMA/ORNL building
+  ([`address_inference`](address_inference)) — FEMA/ORNL building
   footprints, tax-parcel geometry, NAIP imagery (driveways, canopy) and
   USGS 3DEP lidar (roof size/height) feed a **LightGBM learning-to-rank**
   model trained on E911 points, followed by an in-order "road order"
@@ -33,11 +33,11 @@ experiment that matches house numbers to actual buildings.
   building rose from 24.5% (range interpolation) to 46.6% with the ranker
   alone, then higher with road order; an owner-only map in the web app
   reviews every pick.
-- **Apps** -- React + TypeScript web app ([`ui/desktop`](ui/desktop),
+- **Apps** — React + TypeScript web app ([`ui/desktop`](ui/desktop),
   installable PWA, two sites from one build) and an Expo/React Native app
   ([`ui/mobile`](ui/mobile)), sharing API/types code in
   [`ui/shared`](ui/shared).
-- **Operations** -- deployed on DigitalOcean (droplets behind nginx +
+- **Operations** — deployed on DigitalOcean (droplets behind nginx +
   Let's Encrypt, static site on App Platform), systemd services and timers
   for annual data refresh, backups and digests ([`ops/`](ops)), GitHub
   Actions CI, and Python/Node/Vitest test suites that each create and drop
