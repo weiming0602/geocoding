@@ -99,6 +99,23 @@ WHERE p.town = %(town)s AND p.state_fips = %(state_fips)s AND {not_row}
 ORDER BY s.source_id, ST_Area(p.geom)
 ON CONFLICT (state_fips, source_id) DO UPDATE SET parcel_id = EXCLUDED.parcel_id;
 """.format(not_row=NOT_ROW)
+# Owner (2026-11-23, 46 Birchwood Road, Gray): a house whose inner point falls in a gap between lots (39% of its
+# outline on lot "46 BIRCHWOOD RD", the rest off any lot) was left without a lot, so its 28 m2-roof shed stood
+# alone on that lot as its "house", took 48 and the even side slid. A building still without a lot goes to the lot
+# holding the biggest share of its outline, if that share is at least LINK_OVERLAP_MIN. None = off.
+LINK_OVERLAP_MIN = 0.25
+BUILDING_PARCELS_OVERLAP_SQL = """
+INSERT INTO address_inference.building_parcels (state_fips, source_id, parcel_id)
+SELECT DISTINCT ON (s.source_id) s.state_fips, s.source_id, p.parcel_id
+FROM address_inference.parcels p
+JOIN address_inference.structures s ON s.state_fips = p.state_fips AND s.geom && p.geom AND ST_Intersects(p.geom, s.geom)
+WHERE p.town = %(town)s AND p.state_fips = %(state_fips)s AND {not_row}
+  AND NOT EXISTS (SELECT 1 FROM address_inference.building_parcels bp
+                  WHERE bp.state_fips = s.state_fips AND bp.source_id = s.source_id)
+  AND ST_Area(ST_Intersection(p.geom, s.geom)::geography) >= %(min_share)s * ST_Area(s.geom::geography)
+ORDER BY s.source_id, ST_Area(ST_Intersection(p.geom, s.geom)::geography) DESC
+ON CONFLICT (state_fips, source_id) DO NOTHING;
+""".format(not_row=NOT_ROW)
 
 # Meters of each nearby street segment running within the buffer of a lot.
 FRONTAGE_SQL = f"""
@@ -165,9 +182,10 @@ def load(dsn, region, town, download=True):
             batch = list(rows(fetch(town), region.state_fips))
             with conn.cursor() as cur:
                 cur.executemany(UPSERT_SQL, batch)
-        for script in (BUILDING_PARCELS_SQL, FRONTAGE_SQL):
+        scripts = (BUILDING_PARCELS_SQL,) + ((BUILDING_PARCELS_OVERLAP_SQL,) if LINK_OVERLAP_MIN else ()) + (FRONTAGE_SQL,)
+        for script in scripts:
             for statement in filter(str.strip, script.split(";")):
-                conn.execute(statement, params if "%(" in statement else None)
+                conn.execute(statement, {**params, "min_share": LINK_OVERLAP_MIN} if "%(" in statement else None)
         counts = conn.execute("""
             SELECT (SELECT count(*) FROM address_inference.parcels WHERE town = %(town)s AND state_fips = %(state_fips)s),
                    (SELECT count(*) FROM address_inference.building_parcels bp JOIN address_inference.parcels p USING (parcel_id)

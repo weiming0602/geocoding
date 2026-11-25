@@ -30,6 +30,9 @@ from .regions import load_region
 from .street_names import base_name, canonical
 
 PLACEHOLDER = 2.0
+PLACEHOLDER_SHARE = 0.5  # per piece: share of its range past the real top number
+CONDO_RATIO = 1.8        # numbers per house lot on the side
+PARK_HOMES = 5           # homes on one parcel
 UNCOVERED = 0.15
 UNEVEN = 8.0
 CRAMMED_M = 80
@@ -70,7 +73,7 @@ WHERE NOT (s.tlid = ANY(%(tlids)s)) AND NOT (s.tlid = ANY(%(claimed)s)) AND coal
   AND ST_DWithin(s.geom::geography, t.geom::geography, 2)
 """
 HOUSES_SQL = """
-SELECT DISTINCT ON (b.source_id) b.tlid, b.side, coalesce(bp.parcel_id, b.source_id)
+SELECT DISTINCT ON (b.source_id) b.tlid, b.side, coalesce(bp.parcel_id, b.source_id), b.source_id
 FROM address_inference.building_segments b
 JOIN address_inference.structures s USING (source_id)
 LEFT JOIN address_inference.building_parcels bp USING (source_id)
@@ -105,14 +108,19 @@ def validate(dsn, region, town) -> list:
             cont = sum(1 for t, name in conn.execute(TOUCHING_SQL, {"tlids": tlids, "claimed": claimed})
                        if base and base_name(canonical(name)) == base)
             lots = defaultdict(set)
-            for tlid, side, lot in conn.execute(HOUSES_SQL, {"tlids": tlids, "homes": list(HOMES)}):
+            homes_on_lot = defaultdict(set)
+            side_homes = defaultdict(list)
+            for tlid, side, lot, sid in conn.execute(HOUSES_SQL, {"tlids": tlids, "homes": list(HOMES)}):
                 lots[(tlid, side)].add(lot)
+                homes_on_lot[lot].add(sid)
+                side_homes[(tlid, side)].append(lot)
             for parity in (0, 1):
                 nums = sorted(numbers.get((street, parity), ()))
                 if not nums:
                     continue
                 ranged, dens, length_all, length_none, houses = [], [], 0.0, 0.0, set()
                 crammed = 0
+                homes_here, pieces_side = [], []
                 for _, tlid, _name, lf, lt, rf, rt, length in pieces:
                     length = float(length or 0)
                     length_all += length
@@ -127,6 +135,8 @@ def validate(dsn, region, town) -> list:
                             dens.append(d)
                             crammed += length < CRAMMED_M and d > CRAMMED_PER_M
                         houses |= lots.get((tlid, side), set())
+                        homes_here.extend(side_homes.get((tlid, side), []))
+                        pieces_side.append((min(a, b), max(a, b), length))
                     if not have:
                         length_none += length
                 tiger_top = max((hi for _, hi, _ in ranged), default=None)
@@ -137,8 +147,18 @@ def validate(dsn, region, town) -> list:
                 one_sided = length_none / length_all if length_all else 0.0
                 dup_n = sum(1 for _, _, t in ranged if t in dup)
                 gap = abs(len(nums) - len(houses)) / len(nums)
+                # placeholder, per piece: the piece holding the side's top numbers reserves at least half its
+                # range for numbers that don't exist (Eider Lane's 25-99 over 398 m for 25-43: 76%)
+                over = 0.0
+                for lo, hi, length in pieces_side:
+                    if lo <= nums[-1] <= hi and hi > lo and length >= 100:
+                        over = max(over, (hi - nums[-1]) / (hi - lo))
+                park_share = (sum(len(homes_on_lot[l]) >= PARK_HOMES for l in homes_here) / len(homes_here)
+                              if homes_here else 0.0)
                 flags = [name for name, on in (
-                    ("placeholder", placeholder is not None and placeholder >= PLACEHOLDER),
+                    ("placeholder", over >= PLACEHOLDER_SHARE),
+                    ("condo", len(houses) > 0 and len(nums) >= CONDO_RATIO * len(houses)),
+                    ("park", park_share >= 0.5),
                     ("uncovered", uncovered >= UNCOVERED),
                     ("uneven", uneven >= UNEVEN),
                     ("crammed", crammed > 0),

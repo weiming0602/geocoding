@@ -64,6 +64,16 @@ def median_step(numbers) -> float:
 STRETCH_MIN_M = None
 STRETCH_WINDOW = 60
 _STRETCH: dict = {}  # street -> (numbers, along_m) of its curve, set by street_spots
+# "theil": every street with RATE_MIN_NUMBERS+ TIGER spots gets its spots from one robust (Theil-Sen) line
+# through (number, TIGER spot) instead of start + n x length/top. Maquoit Drive, Freeport: numbers start at 39
+# ~50 m from TIGER's line start and top out at 159, so length/top put 70's spot 93 m ahead of its house
+# (owner's Maquoit case, 2026-11-24); the fit through TIGER's own ranges puts it 7 m off. None = off.
+RATE_FIT = None
+# Only where TIGER's meters per number are at least this share of length/top: a subdivision lane with
+# placeholder ranges (Gray's Maggie Lane: numbers to 30, TIGER's to ~99) gives a far too flat fit (2026-11-24,
+# Freeport+Gray median spot error by street: gated at 0.5 keeps 53 of the 65 streets the fit improves by 20 m+
+# and drops 146 of the 220 it worsens). None = no gate.
+RATE_FIT_MIN_RATIO = 0.5
 
 
 def stretch_curve(ns, qs, direction):
@@ -86,6 +96,26 @@ def stretch_curve(ns, qs, direction):
     fit = np.array(fit)
     fit = np.maximum.accumulate(fit) if direction > 0 else np.minimum.accumulate(fit)
     return uniq, fit
+
+
+def theil_line(ns, qs, direction, len_rate=None):
+    """(sorted distinct numbers, along_m on one Theil-Sen line), or None when too few spots or the slope
+    disagrees with the street's direction."""
+    ok = ~np.isnan(qs)
+    ns, qs = ns[ok], qs[ok]
+    if len(set(ns)) < RATE_MIN_NUMBERS:
+        return None
+    i, j = np.triu_indices(len(ns), 1)
+    dx = ns[j] - ns[i]
+    keep = dx != 0
+    slope = float(np.median((qs[j] - qs[i])[keep] / dx[keep]))
+    if slope * direction <= 0:
+        return None
+    if RATE_FIT_MIN_RATIO is not None and len_rate and abs(slope) < RATE_FIT_MIN_RATIO * len_rate:
+        return None
+    icpt = float(np.median(qs - slope * ns))
+    uniq = np.unique(ns)
+    return uniq, icpt + slope * uniq
 
 
 def street_spots(dsn, region, town, address_df) -> dict:
@@ -127,6 +157,10 @@ def street_spots(dsn, region, town, address_df) -> dict:
         out[street] = (0.0 if direction > 0 else length, direction, length / top, length, len(set(ns)))
         if STRETCH_MIN_M is not None and length >= STRETCH_MIN_M and len(set(ns)) >= 10:
             _STRETCH[street] = stretch_curve(ns, qs, direction)
+        elif RATE_FIT == "theil":
+            fit = theil_line(ns, qs, direction, length / top)
+            if fit is not None:
+                _STRETCH[street] = fit
     rates = [v[2] for v in out.values() if v[4] >= RATE_MIN_NUMBERS]
     out[None] = float(np.median(rates)) if rates else None
     return out

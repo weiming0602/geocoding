@@ -460,11 +460,15 @@ def _evaluate(dsn, region, town, save=False, ranges="tiger", train_df=None):
         # Each ordinary multi-building tax lot is one place along the road.
         parcel_of = {sid: info["parcel"] for sid, info in parcels["buildings"].items()}
         lot_addresses = order.load_lot_addresses(dsn, region, town)
+        known_streets = None
+        if order.OTHER_STREET_REAL_NAMES or order.OTHER_STREET_FUZZY is not None:  # TIGER's names + the address list's own street names (US ROUTE ONE = US Hwy 1)
+            from .street_names import canonical
+            known_streets = order.load_town_streets(dsn, town) | {canonical(s) for s in address_df["street"].unique()}
         # Only the tax roll's street names (order.OTHER_STREET_LOTS), never its numbers.
-        fallback = (order.allowed_top_picks(scored, address_df, parcel_of, order.lot_streets(lot_addresses))
+        fallback = (order.allowed_top_picks(scored, address_df, parcel_of, order.lot_streets(lot_addresses, known_streets))
                     if order.FALLBACK_LOT_RULE else ml_fallback)
         lot_kwargs = dict(street_order=street_order, roof_of=order.load_roofs(dsn),
-                          streets_of_lot=order.lot_streets(lot_addresses),
+                          streets_of_lot=order.lot_streets(lot_addresses, known_streets),
                           fronts_of_lot=order.load_lot_fronts(dsn, town, order.LOT_FRONTS)
                           if order.LOT_FRONTS else None, side_directions=side_dirs)
         picks["ML+order"] = order.lot_picks(address_df, scored, positions, fallback, parcel_of, **lot_kwargs)

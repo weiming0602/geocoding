@@ -31,6 +31,14 @@ from geocoding.interpolate import interpolate_along_line, parse_linestring
 from .street_names import canonical
 
 MAX_CANDIDATES = 50
+# Owner (2026-11-21, Williams Drive, Topsham): TIGER's placeholder 1-99 for real numbers 1-38 put every number's spot
+# (M0) near the "1" end; in a dense subdivision the 50 nearest buildings were mostly the parallel streets' houses, so
+# 24 of 35 numbers never had their own house as a candidate and road order fell into townhouse mode. Also keep the
+# street's own houses (nearest road = this street) among the next KEEP_HOME_EXTRA nearest. None = off.
+KEEP_HOME_EXTRA = None
+# Owner (2026-11-20, Maquoit Drive): a building past the end of the number's own TIGER piece but beside another
+# piece of the street takes its side from that piece's ranges (parity), not from the extended line. False = off.
+SIDE_PAST_COVER_END = False
 TRUE_BUILDING_RADIUS_M = 30
 OFFSET_FEET = 20  # same as geocoding-server's default OFFSET_FEET
 # Buildings this close to a bigger building nearer the road are likely its
@@ -541,18 +549,102 @@ ORDER BY l.street, p.parcel_id
 """
 
 
+# Owner's shore rule (2026-11-24, Maquoit Drive): along the shore, houses stand in a row by the water and a lot
+# often also holds a building near the road; the smaller shore house is still a home, not that building's shed
+# (70 Maquoit: 94 m2 house 46 m from the water, 0.45 of the road-side building on lot "72" -> p 0.01). With
+# SHORE_LOT_M set, a building within that many meters of water (building_water) and at least SHORE_HOUSE_MIN_M2
+# counts as its lot's largest (ratio 1.0). None = off.
+SHORE_LOT_M = None
+SHORE_HOUSE_MIN_M2 = 40.0
+SHORE_SQL = """SELECT w.source_id FROM address_inference.building_water w
+JOIN address_inference.structures s ON s.state_fips = w.state_fips AND s.source_id = w.source_id
+WHERE w.state_fips = %(state_fips)s AND w.water_dist_m <= %(m)s AND s.sqmeters >= %(min_m2)s"""
+
+
 def load_parcels(conn, params) -> dict | None:
     if conn.execute("SELECT to_regclass('address_inference.building_parcels') IS NULL").fetchone()[0]:
         return None
     buildings = {sid: {"parcel": pid, "area": area, "buildings": n, "largest": bool(largest),
                        "size_ratio": ratio}
                  for sid, pid, area, n, largest, ratio in conn.execute(sized(PARCELS_SQL, conn), params).fetchall()}
+    if SHORE_LOT_M is not None and not conn.execute(
+            "SELECT to_regclass('address_inference.building_water') IS NULL").fetchone()[0]:
+        for (sid,) in conn.execute(SHORE_SQL, {"state_fips": params["state_fips"], "m": float(SHORE_LOT_M),
+                                               "min_m2": float(SHORE_HOUSE_MIN_M2)}).fetchall():
+            if sid in buildings and buildings[sid]["buildings"] > 1:
+                buildings[sid]["largest"] = True
+                buildings[sid]["size_ratio"] = 1.0
     frontage = defaultdict(dict)
     for pid, tlid, m in conn.execute(FRONTAGE_SQL, params).fetchall():
         frontage[pid][tlid] = m
     street_lines(conn, params)
     access = {(street, pid): (lat, lon) for street, pid, lat, lon in conn.execute(LOT_ACCESS_SQL, params).fetchall()}
     return {"buildings": buildings, "frontage": dict(frontage), "access": access} if buildings else None
+
+
+# TIGER repair stage, first classes (2026-11-21, data/session_2026-11-21_issues/tiger_repair/: detectors use TIGER and
+# town lines only; precision measured against E911): 2 extra-digit typo ranges (Harpswell Indian Rest R 2699-195 ->
+# 299-195; 86%), 3 hyphenated/lettered values ("370-99-370-1"; 67%), 5 pieces mostly outside the town (91%) dropped
+# from the street. Path to flagged.csv; None = off.
+TIGER_REPAIR = None
+TIGER_REPAIR_CLASSES = ("2_typo_digit", "3_non_numeric", "5_out_of_town")
+_REPAIR_CACHE: dict = {}
+
+
+def _load_repairs(path):
+    if path not in _REPAIR_CACHE:
+        import csv
+        _REPAIR_CACHE[path] = [r for r in csv.DictReader(open(path)) if r["cls"] in TIGER_REPAIR_CLASSES]
+    return _REPAIR_CACHE[path]
+
+
+def apply_tiger_repairs(segments, candidates, town):
+    """Segments/candidates rows with the repairs applied (ranges rewritten; out-of-town pieces dropped)."""
+    import re
+    rows = [r for r in _load_repairs(TIGER_REPAIR) if r["town"] == town]
+    drop = {r["tlid"] for r in rows if r["cls"] == "5_out_of_town"}
+    fixes = {}
+    for r in rows:
+        rep = r["repair"]
+        m = re.match(r"([LR]):\s*(\d+)-(\d+)$", rep)
+        if m:
+            fixes.setdefault(r["tlid"], []).append((m.group(1), "both", int(m.group(2)), int(m.group(3))))
+            continue
+        m = re.match(r"([LR]) (from|to):\s*\d+->(\d+)$", rep)
+        if m:
+            fixes.setdefault(r["tlid"], []).append((m.group(1), m.group(2), int(m.group(3)), None))
+            continue
+        if rep.startswith("borrow other side"):
+            fixes.setdefault(r["tlid"], []).append(("borrow", None, None, None))
+    idx = {"L": (2, 3), "R": (4, 5)}
+    out = []
+    for seg in segments:
+        tlid = str(seg[1])
+        if tlid in drop:
+            continue
+        if tlid in fixes:
+            seg = list(seg)
+            for side, kind, a, b in fixes[tlid]:
+                if side == "borrow":
+                    good = next((sd for sd in "LR" if _int_or_none(seg[idx[sd][0]]) is not None
+                                 and _int_or_none(seg[idx[sd][1]]) is not None), None)
+                    if good:
+                        bad = "R" if good == "L" else "L"
+                        f, t = int(seg[idx[good][0]]), int(seg[idx[good][1]])
+                        step = 1 if f <= t else -1
+                        seg[idx[bad][0]], seg[idx[bad][1]] = str(max(0, f + step)), str(max(0, t + step))
+                    continue
+                fi, ti = idx[side]
+                if kind == "both":
+                    seg[fi], seg[ti] = str(a), str(b)
+                elif kind == "from":
+                    seg[fi] = str(a)
+                else:
+                    seg[ti] = str(a)
+            seg = tuple(seg)
+        out.append(seg)
+    cands = [c for c in candidates if str(c[2]) not in drop]
+    return out, cands
 
 
 def load(dsn, region, town: str):
@@ -562,6 +654,8 @@ def load(dsn, region, town: str):
         addresses = conn.execute(ADDRESSES_SQL, params).fetchall()
         segments = conn.execute(SEGMENTS_SQL, params).fetchall()
         candidates = conn.execute(sized(CANDIDATES_SQL, conn), params).fetchall()
+        if TIGER_REPAIR:
+            segments, candidates = apply_tiger_repairs(segments, candidates, town)
         parcels = load_parcels(conn, params)
         if parcels is not None:
             parcels["pools"] = load_pools(conn)
@@ -816,6 +910,7 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
     street_tlids = {s["tlid"] for s in street_segs}
     street_names = {canonical(s.get("fullname")) for s in street_segs if s.get("fullname")}
     points_by_tlid = {s["tlid"]: s["points"] for s in street_segs}
+    seg_by_tlid = {s["tlid"]: s for s in street_segs}
     # Which ends are dead ends (unknown -- e.g. rows without the flags -- counts as one).
     dead_by_tlid = {s["tlid"]: (s.get("dead_start", True), s.get("dead_end", True)) for s in street_segs}
     by_building = defaultdict(list)
@@ -849,6 +944,18 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
         past_end = all(c["at_end"] for c in cands) and at_dead_end and beyond_end(
             points_by_tlid.get(best["tlid"], []), best["t"], best["lat"], best["lon"])
         own_side = on_cover["side"] if on_cover else best["side"]
+        if (SIDE_PAST_COVER_END and on_cover is not None and on_cover["at_end"] and not best["at_end"]
+                and best["tlid"] != cover_seg["tlid"]):
+            # Past the end of the number's own piece but squarely beside another piece of the street: the side
+            # of the extended line means nothing there (51 and 55 Maquoit Drive, Freeport: left = odd of their
+            # own piece 78055130, "right" = even of 627023974 extended back past its start). Use the parity
+            # the nearer piece's ranges put on the building's side.
+            seg = seg_by_tlid.get(best["tlid"])
+            f = seg and seg.get("lfromadd" if best["side"] == "L" else "rfromadd")
+            try:
+                own_side = side if int(f) % 2 == range_start % 2 else ("L" if side == "R" else "R")
+            except (TypeError, ValueError):
+                pass
         info[source_id] = (best, on_cover, past_end, own_side)
 
     def dead_end_side(source_id):
@@ -923,7 +1030,12 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
         })
 
     rows.sort(key=lambda r: r["d_m0"])
-    rows = rows[:int(MAX_CANDIDATES)]
+    if KEEP_HOME_EXTRA:
+        # the street's own houses stay candidates even when TIGER's spot is far off (placeholder ranges)
+        rows = rows[:int(MAX_CANDIDATES)] + [r for r in rows[int(MAX_CANDIDATES):int(MAX_CANDIDATES + KEEP_HOME_EXTRA)]
+                                              if r["nearest_road_is_street"]]
+    else:
+        rows = rows[:int(MAX_CANDIDATES)]
     # Bigger building closer to the road, nearby: likely this one's garage/barn.
     for r in rows:
         r["bigger_in_front"] = any(
