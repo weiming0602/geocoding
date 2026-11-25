@@ -40,6 +40,7 @@ const STATUS_LABELS: Record<TrainingStatus, string> = {
 };
 const METHOD_LABELS: Record<TrainingMethod, string> = {
   ml_order: 'ML + road order',
+  house_on_lot: 'ML + road order, new house-on-lot rule (2026-11-22)',
   ml: 'ML alone',
   ml_order_e911roads: 'E911 roads: ML + road order',
   ml_e911roads: 'E911 roads: ML alone',
@@ -84,6 +85,7 @@ const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   rural_osm: 'ml_order',
   best_option: 'ml_order',
   ml_order_review: 'ml_order',
+  house_on_lot: 'ml_order',
 };
 // Rural shapes (data/session_2026-11-11_pownal/rural_shapes.py): what decided each number.
 const ROAD_SHAPE_LABEL: Record<string, string> = {

@@ -581,6 +581,7 @@ export type TrainingAddress = {
 export type TrainingMethod =
   | 'ml'
   | 'ml_order'
+  | 'house_on_lot'
   | 'ml_e911roads'
   | 'ml_order_e911roads'
   | 'ml_auto'

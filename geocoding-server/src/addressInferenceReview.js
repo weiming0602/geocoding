@@ -31,7 +31,7 @@ const UNDEFINED_TABLE = '42P01';
 // townhouse complexes by ML + road order, rural streets by the tax roll --
 // compared against the tax roll everywhere (assessor).
 const METHODS = [
-  'ml_order', 'ml',
+  'ml_order', 'house_on_lot', 'ml',
   'assessor', 'assessor_e911roads',
   'pattern', 'pattern_pairs', 'pattern_ml',
   'rural_shapes', 'rural_swapped', 'rural_osm', 'best_option', 'ml_order_review',
@@ -44,7 +44,7 @@ const METHODS = [
 const BASE_METHOD = Object.fromEntries(
   METHODS.map((m) => [
     m,
-    (m === 'rural_shapes' || m === 'rural_swapped' || m === 'rural_osm' || m === 'best_option' || m === 'ml_order_review') ? 'ml_order' : m.startsWith('pattern') ? 'assessor' : m.startsWith('assessor') ? m.replace('assessor', 'ml_order') : m.replace('ml_order', 'ml'),
+    (m === 'rural_shapes' || m === 'rural_swapped' || m === 'rural_osm' || m === 'best_option' || m === 'ml_order_review' || m === 'house_on_lot') ? 'ml_order' : m.startsWith('pattern') ? 'assessor' : m.startsWith('assessor') ? m.replace('assessor', 'ml_order') : m.replace('ml_order', 'ml'),
   ])
 );
 
