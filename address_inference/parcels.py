@@ -80,6 +80,12 @@ ON CONFLICT (state_fips, source, parcel_id) DO UPDATE SET
 """
 
 # Each building in the town's parcels -> the parcel holding its inner point.
+# Road right-of-way polygons in the tax map are not lots: Harpswell's "ROW-ALL" is
+# one 284-acre polygon touching 596 road segments, so a building on it became a
+# "deep lot" candidate for every street (11 Atlantic Place went to a building
+# 2.7 km away). Any map/block/lot with ROW as its own token is left out.
+NOT_ROW = "NOT coalesce(p.map_bk_lot, '') ~* '(^|[^A-Z])ROW([^A-Z]|$)'"
+
 BUILDING_PARCELS_SQL = """
 DELETE FROM address_inference.building_parcels bp
 USING address_inference.parcels p
@@ -89,10 +95,27 @@ SELECT DISTINCT ON (s.source_id) s.state_fips, s.source_id, p.parcel_id
 FROM address_inference.parcels p
 JOIN address_inference.structures s
   ON s.state_fips = p.state_fips AND s.inner_point && p.geom AND ST_Intersects(p.geom, s.inner_point)
-WHERE p.town = %(town)s AND p.state_fips = %(state_fips)s
+WHERE p.town = %(town)s AND p.state_fips = %(state_fips)s AND {not_row}
 ORDER BY s.source_id, ST_Area(p.geom)
 ON CONFLICT (state_fips, source_id) DO UPDATE SET parcel_id = EXCLUDED.parcel_id;
-"""
+""".format(not_row=NOT_ROW)
+# Owner (2026-11-23, 46 Birchwood Road, Gray): a house whose inner point falls in a gap between lots (39% of its
+# outline on lot "46 BIRCHWOOD RD", the rest off any lot) was left without a lot, so its 28 m2-roof shed stood
+# alone on that lot as its "house", took 48 and the even side slid. A building still without a lot goes to the lot
+# holding the biggest share of its outline, if that share is at least LINK_OVERLAP_MIN. None = off.
+LINK_OVERLAP_MIN = 0.25
+BUILDING_PARCELS_OVERLAP_SQL = """
+INSERT INTO address_inference.building_parcels (state_fips, source_id, parcel_id)
+SELECT DISTINCT ON (s.source_id) s.state_fips, s.source_id, p.parcel_id
+FROM address_inference.parcels p
+JOIN address_inference.structures s ON s.state_fips = p.state_fips AND s.geom && p.geom AND ST_Intersects(p.geom, s.geom)
+WHERE p.town = %(town)s AND p.state_fips = %(state_fips)s AND {not_row}
+  AND NOT EXISTS (SELECT 1 FROM address_inference.building_parcels bp
+                  WHERE bp.state_fips = s.state_fips AND bp.source_id = s.source_id)
+  AND ST_Area(ST_Intersection(p.geom, s.geom)::geography) >= %(min_share)s * ST_Area(s.geom::geography)
+ORDER BY s.source_id, ST_Area(ST_Intersection(p.geom, s.geom)::geography) DESC
+ON CONFLICT (state_fips, source_id) DO NOTHING;
+""".format(not_row=NOT_ROW)
 
 # Meters of each nearby street segment running within the buffer of a lot.
 FRONTAGE_SQL = f"""
@@ -105,7 +128,7 @@ SELECT p.parcel_id, st.tlid,
 FROM address_inference.parcels p
 JOIN streets st ON st.geom && ST_Expand(p.geom, 0.0003)
  AND ST_DWithin(st.geom::geography, p.geom::geography, {FRONTAGE_BUFFER_M})
-WHERE p.town = %(town)s AND p.state_fips = %(state_fips)s
+WHERE p.town = %(town)s AND p.state_fips = %(state_fips)s AND {NOT_ROW}
 ON CONFLICT (parcel_id, tlid) DO NOTHING;
 DELETE FROM address_inference.parcel_frontage WHERE frontage_m < 1;
 """
@@ -159,9 +182,10 @@ def load(dsn, region, town, download=True):
             batch = list(rows(fetch(town), region.state_fips))
             with conn.cursor() as cur:
                 cur.executemany(UPSERT_SQL, batch)
-        for script in (BUILDING_PARCELS_SQL, FRONTAGE_SQL):
+        scripts = (BUILDING_PARCELS_SQL,) + ((BUILDING_PARCELS_OVERLAP_SQL,) if LINK_OVERLAP_MIN else ()) + (FRONTAGE_SQL,)
+        for script in scripts:
             for statement in filter(str.strip, script.split(";")):
-                conn.execute(statement, params if "%(" in statement else None)
+                conn.execute(statement, {**params, "min_share": LINK_OVERLAP_MIN} if "%(" in statement else None)
         counts = conn.execute("""
             SELECT (SELECT count(*) FROM address_inference.parcels WHERE town = %(town)s AND state_fips = %(state_fips)s),
                    (SELECT count(*) FROM address_inference.building_parcels bp JOIN address_inference.parcels p USING (parcel_id)

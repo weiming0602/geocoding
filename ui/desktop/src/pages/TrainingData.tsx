@@ -36,9 +36,11 @@ const STATUS_LABELS: Record<TrainingStatus, string> = {
   missed: 'True building not a candidate',
   no_building: 'No building at the E911 point',
   estimated: 'Estimated point (no house)',
+  review: 'Needs review (not assigned)',
 };
 const METHOD_LABELS: Record<TrainingMethod, string> = {
   ml_order: 'ML + road order',
+  house_on_lot: 'ML + road order, new house-on-lot rule (2026-11-22)',
   ml: 'ML alone',
   ml_order_e911roads: 'E911 roads: ML + road order',
   ml_e911roads: 'E911 roads: ML alone',
@@ -53,6 +55,11 @@ const METHOD_LABELS: Record<TrainingMethod, string> = {
   pattern: 'Pattern (dead ends): park / townhouse / rural',
   pattern_pairs: 'Pattern + pairs across the road (dead ends)',
   pattern_ml: 'Pattern + ML membership (dead ends)',
+  rural_shapes: 'Rural shapes: drive the road, no tax roll',
+  rural_swapped: "Rural shapes, odd/even sides swapped from TIGER's",
+  rural_osm: 'Rural shapes on OSM roads only (no TIGER), internal',
+  best_option: 'Best option per street side (fewest issues), no tax roll',
+  ml_order_review: 'ML + road order, numbers road order could not place left for review',
 };
 const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   ml_order: 'ml',
@@ -72,6 +79,35 @@ const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   pattern: 'assessor',
   pattern_pairs: 'assessor',
   pattern_ml: 'assessor',
+  // compared against ML + road order: neither uses the tax roll
+  rural_shapes: 'ml_order',
+  rural_swapped: 'ml_order',
+  rural_osm: 'ml_order',
+  best_option: 'ml_order',
+  ml_order_review: 'ml_order',
+  house_on_lot: 'ml_order',
+};
+// Rural shapes (data/session_2026-11-11_pownal/rural_shapes.py): what decided each number.
+const ROAD_SHAPE_LABEL: Record<string, string> = {
+  distance: 'numbered by distance from the road start',
+  shifted: 'numbered by distance, start slid to fit',
+  pieces: 'fork: each piece its own start',
+  sequential: 'not by distance: ML + road order',
+  park: "dead-end park: owner's drive rule",
+  'no TIGER': 'no TIGER line: ML + road order',
+};
+const HOUSE_SHAPE_LABEL: Record<string, string> = {
+  house: 'the one house on its lot at the spot',
+  farm: 'farm lot: the biggest roof, barns skipped',
+  lane: 'house far back: where its driveway meets the road',
+  second: 'second house on a nearby lot',
+  ml: "nothing at the spot: ML + road order's pick",
+  estimated: 'no house: point estimated at the spot, set back like the neighbors',
+  unplaced: 'not placed',
+  'lane road': 'house on a short lane: the lane is its driveway to this street (old lot split once)',
+  split: 'lot split once: the old lot keeps the smaller (old) number, the split-off lot the bigger',
+  displaced: "its in-order number went to a neighbour: nearest leftover number",
+  park: "park street: owner's drive rule",
 };
 const isAssessorMethod = (m: TrainingMethod) => m.startsWith('assessor');
 const isOrderMethod = (m: TrainingMethod) => BASE_METHOD[m] !== m;
@@ -88,7 +124,7 @@ const PATTERN_METHOD_LABEL: Record<string, string> = {
   ml_order: 'ML + road order',
   assessor: "the tax roll's lot address, else ML + road order",
 };
-const STATUS_ORDER: TrainingStatus[] = ['wrong', 'missed', 'right', 'no_building', 'estimated'];
+const STATUS_ORDER: TrainingStatus[] = ['wrong', 'missed', 'review', 'right', 'no_building', 'estimated'];
 const LIST_LIMIT = 200;
 const SUGGESTION_KINDS: { kind: SuggestionKind; label: string }[] = [
   { kind: 'second', label: 'Second house on a numbered lot' },
@@ -152,7 +188,7 @@ export default function TrainingData() {
   const [data, setData] = useState<AddressInferenceReviewResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [visible, setVisible] = useState<Set<TrainingStatus>>(() => new Set(['wrong', 'missed', 'estimated']));
+  const [visible, setVisible] = useState<Set<TrainingStatus>>(() => new Set(['wrong', 'missed', 'estimated', 'review']));
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState<TrainingAddress | null>(null);
   const [showSuggestions, setShowSuggestions] = useState(true);
@@ -411,13 +447,16 @@ export default function TrainingData() {
             }}
           >
             {data.towns.length > 1 ? (
-              <select className="input" style={{ width: 'auto' }} value={data.town} onChange={(e) => setTown(e.target.value)}>
-                {data.towns.map((t) => (
-                  <option key={t.town} value={t.town}>
-                    {t.town}
-                  </option>
-                ))}
-              </select>
+              <label style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-2)' }}>
+                <strong>Town:</strong>
+                <select className="input" style={{ width: 'auto' }} value={data.town} onChange={(e) => setTown(e.target.value)}>
+                  {data.towns.map((t) => (
+                    <option key={t.town} value={t.town}>
+                      {t.town} ({t.addresses.toLocaleString()})
+                    </option>
+                  ))}
+                </select>
+              </label>
             ) : (
               <strong>{data.town}</strong>
             )}
@@ -758,12 +797,26 @@ export default function TrainingData() {
               <div>{describe(selected)}</div>
               {isOrderMethod(data.method) && (
                 <div style={{ fontSize: 13, marginTop: 4 }}>
-                  {selected.changedFromMl
+                  {selected.changedFromMl && data.method === 'rural_shapes'
+                    ? `Rural shapes changed the pick. ML + road order instead: ${STATUS_LABELS[selected.mlStatus].toLowerCase()}.`
+                    : selected.changedFromMl
                     ? `${isPatternMethod(data.method) ? "The street's pattern" : isAssessorMethod(data.method) ? "The assessor's lot address" : 'Road order'} changed the pick. With the tax roll everywhere instead: ${STATUS_LABELS[selected.mlStatus].toLowerCase()}.`
                     : 'Same pick as ML alone.'}
                 </div>
               )}
-              {selected.pattern && (
+              {data.method === 'rural_shapes' && selected.roadShape && (
+                <div style={{ fontSize: 13, marginTop: 4 }}>
+                  Road shape: <strong>{ROAD_SHAPE_LABEL[selected.roadShape] ?? selected.roadShape}</strong>. House shape:{' '}
+                  <strong>{HOUSE_SHAPE_LABEL[selected.houseShape ?? ''] ?? selected.houseShape}</strong>.
+                </div>
+              )}
+              {selected.status === 'review' && (
+                <div style={{ fontSize: 13, marginTop: 4 }}>
+                  <strong>Not assigned: needs your review.</strong> {selected.reviewReason ?? ''}
+                  {selected.reviewGuess ? <> Best guess (not assigned): building {selected.reviewGuess.slice(0, 8)}.</> : null}
+                </div>
+              )}
+              {selected.pattern && data.method !== 'rural_shapes' && (
                 <div style={{ fontSize: 13, marginTop: 4 }}>
                   <Swatch color={PATTERNS.find((p) => p.pattern === selected.pattern)!.color} square />
                   {selected.street} is a {PATTERN_LABEL[selected.pattern]} street, numbered by{' '}

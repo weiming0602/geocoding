@@ -33,6 +33,7 @@ import re
 
 import psycopg
 
+from .extend_lines import ensure_view
 from .load_footprints import town_envelope
 from .regions import load_region
 
@@ -69,8 +70,65 @@ CREATE INDEX IF NOT EXISTS idx_ai_building_segments_tlid ON address_inference.bu
 FRONTAGE_CLAUSE = """UNION
         SELECT st.* FROM address_inference.building_parcels bp
         JOIN address_inference.parcel_frontage pf ON pf.parcel_id = bp.parcel_id
-        JOIN streets st ON st.tlid = pf.tlid
+        JOIN address_inference.streets_ext st ON st.tlid = pf.tlid
         WHERE bp.state_fips = b.state_fips AND bp.source_id = b.source_id"""
+
+# A house down a long unnamed lane is addressed on the street the lane leaves
+# (Harpswell: 123 HARPSWELL NECK ROAD is 917 m from that road, 62 m from a 938 m
+# unnamed TIGER private road that joins it). Such a building -- within LANE_NEAR_M
+# of an unnamed TIGER piece whose end is within LANE_JOIN_M of an addressable
+# segment -- is also attached to that segment AT THE JUNCTION: t is where the lane
+# meets it, side is the side the lane leaves on, dist_m the building's distance to
+# the lane (its set-back along its own way in), rank LANE_RANK.
+LANE_NEAR_M = 100
+LANE_JOIN_M = 20
+LANE_RANK = 99
+# ...and a house much nearer the lane than the street (33 Williams Road: 15 m from
+# TIGER's unnamed private lane, 103 m straight across to Williams Rd, nearer
+# Fairhaven Ln -- so the nearer-road rule threw it out) is placed at the junction
+# too: the street is at least LANE_PREFER_MIN_M away and LANE_PREFER_RATIO times
+# the lane's distance. None = only past ATTACH_RADIUS_M, as before.
+LANE_PREFER_MIN_M = 60
+LANE_PREFER_RATIO = 3
+LANE_SQL = f"""
+INSERT INTO address_inference.building_segments
+    (state_fips, source, source_id, tlid, side, t, at_end, dist_m, rank, range_on_side)
+SELECT DISTINCT ON (b.source, b.source_id, st.tlid)
+       b.state_fips, b.source, b.source_id, st.tlid, j.side, j.t, false,
+       ST_Distance(lane.geom::geography, b.inner_point::geography), {LANE_RANK},
+       CASE j.side WHEN 'L' THEN coalesce(st.lfromadd, '') <> '' ELSE coalesce(st.rfromadd, '') <> '' END
+FROM address_inference.structures b
+JOIN streets lane
+  ON coalesce(lane.fullname, '') = '' AND lane.geom && ST_Expand(b.inner_point, 0.002)
+ AND ST_DWithin(lane.geom::geography, b.inner_point::geography, {LANE_NEAR_M})
+CROSS JOIN LATERAL (VALUES (ST_StartPoint(lane.geom), ST_LineInterpolatePoint(lane.geom, least(1, 30 / greatest(ST_Length(lane.geom::geography), 30)))),
+                           (ST_EndPoint(lane.geom), ST_LineInterpolatePoint(lane.geom, greatest(0, 1 - 30 / greatest(ST_Length(lane.geom::geography), 30))))) e(pt, inward)
+JOIN streets st
+  ON st.tlid <> lane.tlid AND st.geom && ST_Expand(e.pt, 0.0005)
+ AND ST_DWithin(st.geom::geography, e.pt::geography, {LANE_JOIN_M})
+ AND (coalesce(st.lfromadd, '') <> '' OR coalesce(st.rfromadd, '') <> '')
+CROSS JOIN LATERAL (
+    SELECT ST_LineLocatePoint(st.geom, e.pt) AS t,
+           CASE sign((ST_X(ST_LineInterpolatePoint(st.geom, least(ST_LineLocatePoint(st.geom, e.pt) + {TANGENT_FRACTION}, 1)))
+                      - ST_X(ST_LineInterpolatePoint(st.geom, greatest(ST_LineLocatePoint(st.geom, e.pt) - {TANGENT_FRACTION}, 0))))
+                     * (ST_Y(e.inward) - ST_Y(ST_ClosestPoint(st.geom, e.pt)))
+                   - (ST_Y(ST_LineInterpolatePoint(st.geom, least(ST_LineLocatePoint(st.geom, e.pt) + {TANGENT_FRACTION}, 1)))
+                      - ST_Y(ST_LineInterpolatePoint(st.geom, greatest(ST_LineLocatePoint(st.geom, e.pt) - {TANGENT_FRACTION}, 0))))
+                     * (ST_X(e.inward) - ST_X(ST_ClosestPoint(st.geom, e.pt))))
+                WHEN 1 THEN 'L' WHEN -1 THEN 'R' END AS side
+) j
+WHERE b.state_fips = %(state_fips)s AND {{scope}} AND j.side IS NOT NULL
+ORDER BY b.source, b.source_id, st.tlid, ST_Distance(lane.geom::geography, b.inner_point::geography)
+ON CONFLICT (state_fips, source, source_id, tlid) DO UPDATE
+   SET side = EXCLUDED.side, t = EXCLUDED.t, at_end = false, dist_m = EXCLUDED.dist_m,
+       rank = EXCLUDED.rank, range_on_side = EXCLUDED.range_on_side
+ -- a far link (the deep-lot rule puts 123's house at the segment's end, 910 m off)
+ -- gives way to the junction; so does one much farther than the lane (LANE_PREFER_*);
+ -- a building already near the segment keeps its own row
+ WHERE address_inference.building_segments.dist_m > {ATTACH_RADIUS_M}
+    OR (address_inference.building_segments.dist_m >= {LANE_PREFER_MIN_M}
+        AND address_inference.building_segments.dist_m >= {LANE_PREFER_RATIO} * EXCLUDED.dist_m)
+"""
 
 # %(scope)s is replaced (not bound) with one of the SCOPE_* clauses below.
 DELETE_SQL = """
@@ -79,6 +137,16 @@ USING address_inference.structures b
 WHERE bs.state_fips = b.state_fips AND bs.source = b.source AND bs.source_id = b.source_id
   AND b.state_fips = %(state_fips)s AND {scope}
 """
+
+# Owner: a short TIGER piece often has no range (Harpswell: 407 of 1,589
+# matched pieces, typically 40-67 m vs 115-165 m for ranged ones; Ash Cove's
+# two branches) -- its houses still belong to the street. Buildings are also
+# attached to NAMED pieces without a range, only when the piece is very short
+# (owner: "prerequisite is that the road is very short"): at most
+# UNRANGED_MAX_M (range_on_side false there). None = off.
+UNRANGED_MAX_M = 150
+UNRANGED_CLAUSE = (f" OR (coalesce(st.fullname, '') <> '' AND ST_Length(st.geom::geography) <= {UNRANGED_MAX_M})"
+                   if UNRANGED_MAX_M else "")
 
 INSERT_SQL = f"""
 INSERT INTO address_inference.building_segments
@@ -102,6 +170,13 @@ CROSS JOIN LATERAL (
         SELECT st.* FROM streets st
         WHERE st.geom && ST_Expand(b.inner_point, {PREFILTER_DEGREES})
           AND ST_DWithin(st.geom::geography, b.inner_point::geography, {ATTACH_RADIUS_M})
+          AND st.tlid NOT IN (SELECT tlid FROM address_inference.line_extensions)
+        UNION
+        -- TIGER pieces extended along the road past their dead end (extend_lines.py)
+        SELECT st.* FROM address_inference.line_extensions e
+        JOIN address_inference.streets_ext st ON st.tlid = e.tlid
+        WHERE e.geom && ST_Expand(b.inner_point, {PREFILTER_DEGREES})
+          AND ST_DWithin(e.geom::geography, b.inner_point::geography, {ATTACH_RADIUS_M})
         {{frontage}}
     ) st
     CROSS JOIN LATERAL (SELECT ST_LineLocatePoint(st.geom, b.inner_point) AS t) loc
@@ -109,7 +184,7 @@ CROSS JOIN LATERAL (
         SELECT ST_LineInterpolatePoint(st.geom, greatest(loc.t - {TANGENT_FRACTION}, 0)) AS p1,
                ST_LineInterpolatePoint(st.geom, least(loc.t + {TANGENT_FRACTION}, 1)) AS p2
     ) tan
-    WHERE (coalesce(st.lfromadd, '') <> '' OR coalesce(st.rfromadd, '') <> '')
+    WHERE (coalesce(st.lfromadd, '') <> '' OR coalesce(st.rfromadd, '') <> ''{UNRANGED_CLAUSE})
 ) c
 WHERE b.state_fips = %(state_fips)s AND {{scope}}
 """
@@ -129,11 +204,14 @@ def ensure_tables(conn, state_fips: str) -> None:
 
 
 def _attach_scope(conn, scope_sql: str, params: dict) -> int:
+    ensure_view(conn)
     conn.execute(DELETE_SQL.format(scope=scope_sql), params)
     has_parcels = not conn.execute(
         "SELECT to_regclass('address_inference.parcel_frontage') IS NULL").fetchone()[0]
     sql = INSERT_SQL.format(scope=scope_sql, frontage=FRONTAGE_CLAUSE if has_parcels else "")
-    return conn.execute(sql, params).rowcount
+    n = conn.execute(sql, params).rowcount
+    # lane houses: only where the building isn't already attached to that segment
+    return n + conn.execute(LANE_SQL.format(scope=scope_sql), params).rowcount
 
 
 def attach(dsn, region, town=None, county_fips=None, progress=print) -> int:

@@ -28,6 +28,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
+import numpy as np
 import psycopg
 
 from .regions import load_region
@@ -51,10 +52,36 @@ MIN_SUPPORT_BASE_NAME = 0.5
 # an unmatched street is reported as missing from TIGER rather than as a
 # naming problem.
 MIN_ROAD_COVERAGE = 0.5
+# A street left unmatched whose exact name TIGER has only farther away: TIGER
+# drew a short stub off the real road (Harpswell's KALM HARBOUR ROAD: a 12 m
+# "Kalm Harbour Rd" 191 m from its point). Unmatched, its buildings were free
+# for the next street's numbers (37 and 89 Mallard Pond Road went to 34 Kalm
+# Harbour Road's buildings), so the stub is taken within FAR_RADIUS_M.
+FAR_RADIUS_M = 500
 # Near-miss spelling ("WOLFS" vs "WOLFES"): needs a close name AND most of
 # the street's points beside it, since a fuzzy name alone is weak evidence.
 MIN_SIMILARITY_FUZZY = 0.85
 MIN_SUPPORT_FUZZY = 0.6
+# The road under another name: TIGER may give the label street's name to only
+# a few short pieces and call the rest of the same road something else
+# (Harpswell's BASIN POINT ROAD: "Basin Point Rd" on ~300 m near the tip, 19%
+# of its points; "Basin Cove Rd" along the whole 4 km, 92%). When the chosen
+# name covers less than OTHER_NAME_MAX_SUPPORT of the points and one other
+# TIGER name covers at least OTHER_NAME_MIN_SUPPORT, that name's segments are
+# added -- but only if the points run ALONG it: their nearest spots on it
+# spread at least OTHER_NAME_MIN_SPREAD of the points' own spread. A side lane
+# beside a main road projects onto a short stretch of it and stays out.
+OTHER_NAME_MAX_SUPPORT = 0.5
+OTHER_NAME_MIN_SUPPORT = 0.8
+OTHER_NAME_MIN_SPREAD = 0.5
+# Such a road's TIGER pieces can be a mess where it was redrawn: at Basin Point
+# Road's Bufflehead Ln junction four stubs of 18-40 m claim 1-399 (6-11 numbers
+# per meter; the road averages ~0.15), pulling its low numbers ~1 km off. On a
+# street that took another name's pieces, a piece shorter than CRAMMED_MAX_M
+# whose range packs more than CRAMMED_RATIO x the street's median numbers per
+# meter is dropped (its range is unusable; the road lost is negligible).
+CRAMMED_MAX_M = 60
+CRAMMED_RATIO = 10
 
 CREATE_TABLES_SQL = """
 CREATE SCHEMA IF NOT EXISTS address_inference;
@@ -64,7 +91,7 @@ CREATE TABLE IF NOT EXISTS address_inference.street_matches (
     label_street TEXT NOT NULL,
     label_points INTEGER NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('matched', 'unmatched')),
-    method TEXT,                 -- exact | alias | fuzzy | base_name (matched only)
+    method TEXT,                 -- exact | alias | fuzzy | base_name | exact_far (matched only)
     unmatched_reason TEXT,       -- no_road_nearby | name_mismatch (unmatched only)
     road_coverage DOUBLE PRECISION, -- share of points with any TIGER segment nearby
     tiger_name TEXT,
@@ -72,9 +99,11 @@ CREATE TABLE IF NOT EXISTS address_inference.street_matches (
     support DOUBLE PRECISION,
     nearest_tiger_name TEXT,     -- most-supported TIGER name, matched or not
     nearest_support DOUBLE PRECISION,
+    other_tiger_name TEXT,       -- the same road under another TIGER name, its segments added
     matched_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (region_id, town, label_street)
 );
+ALTER TABLE address_inference.street_matches ADD COLUMN IF NOT EXISTS other_tiger_name TEXT;
 CREATE TABLE IF NOT EXISTS address_inference.street_match_segments (
     region_id TEXT NOT NULL,
     town TEXT NOT NULL,
@@ -126,6 +155,12 @@ class StreetMatch:
     nearest_tiger_name: str | None = None
     nearest_support: float | None = None
     tlids: tuple = ()
+    # A candidate for the road under another name (see OTHER_NAME_*): match_town
+    # checks the spread and, if it holds, adds other_tlids and sets other_tiger_name.
+    other_candidate: str | None = None
+    other_tlids: tuple = ()
+    other_tiger_name: str | None = None
+    dropped_tlids: tuple = ()
 
 
 def match_street(label_street: str, label_points: int, candidates) -> StreetMatch:
@@ -195,7 +230,263 @@ def match_street(label_street: str, label_points: int, candidates) -> StreetMatc
     result.name_similarity = round(similarity, 3)
     result.support = round(support, 3)
     result.tlids = tuple(sorted(entry["tlids"]))
+    nearest = by_name[nearest_key]
+    if (support < OTHER_NAME_MAX_SUPPORT and nearest is not entry
+            and result.nearest_support >= OTHER_NAME_MIN_SUPPORT):
+        result.other_candidate = display(nearest)
+        result.other_tlids = tuple(sorted(nearest["tlids"] - entry["tlids"]))
     return result
+
+
+# Named TIGER segments within FAR_RADIUS_M of a street's points (any of their names).
+FAR_SQL = f"""
+SELECT DISTINCT s.tlid, n.name
+FROM address_points a
+JOIN streets s
+  ON s.geom && ST_Expand(a.geom, 0.008)
+ AND ST_DWithin(s.geom::geography, a.geom::geography, {FAR_RADIUS_M})
+CROSS JOIN LATERAL (
+    SELECT s.fullname AS name UNION SELECT sn.fullname FROM street_names sn WHERE sn.tlid = s.tlid
+) n
+WHERE a.town = %(town)s AND a.state_abbr = %(state)s AND upper(a.street_fullname) = %(street)s
+  AND n.name IS NOT NULL AND n.name <> ''
+"""
+
+
+def match_far(conn, params, m) -> None:
+    """An unmatched street takes TIGER segments with its exact name within FAR_RADIUS_M."""
+    if m.status != "unmatched":
+        return
+    want = canonical(m.label_street)
+    rows = conn.execute(FAR_SQL, {**params, "street": m.label_street}).fetchall()
+    tlids = sorted({tlid for tlid, name in rows if canonical(name) == want})
+    if tlids:
+        m.status, m.method, m.unmatched_reason = "matched", "exact_far", None
+        m.tiger_name = next(name for tlid, name in rows if canonical(name) == want)
+        m.name_similarity, m.support, m.tlids = 1.0, 0.0, tuple(tlids)
+
+
+# Each segment's length (m) and the span of numbers its ranges claim.
+RANGES_SQL = """
+SELECT tlid, ST_Length(geom::geography),
+       (SELECT max(v) - min(v) FROM unnest(ARRAY[lfromadd, ltoadd, rfromadd, rtoadd]) r,
+               LATERAL (SELECT nullif(regexp_replace(r, '[^0-9]', '', 'g'), '')::int v) x)
+FROM streets WHERE tlid = ANY(%(tlids)s)
+"""
+
+
+def crammed_pieces(rows) -> set:
+    """rows: (tlid, length_m, number_span or None). Short pieces whose ranges
+    pack far more numbers per meter than the street's median."""
+    dens = sorted(span / length for _, length, span in rows if span and length >= CRAMMED_MAX_M)
+    if not dens:
+        return set()
+    median = dens[len(dens) // 2]
+    return {tlid for tlid, length, span in rows
+            if span and length < CRAMMED_MAX_M and span / max(length, 1.0) > CRAMMED_RATIO * median}
+
+
+# Points' own spread vs the spread of their nearest spots on the other road's
+# segments (meters, UTM 19N -- Maine/NH).
+SPREAD_SQL = """
+WITH p AS (SELECT ST_Transform(geom, 26919) g FROM address_points
+           WHERE town = %(town)s AND state_abbr = %(state)s AND upper(street_fullname) = %(street)s),
+r AS (SELECT ST_Transform(ST_Collect(geom), 26919) g FROM streets WHERE tlid = ANY(%(tlids)s)),
+q AS (SELECT ST_ClosestPoint(r.g, p.g) g FROM p, r)
+SELECT (SELECT ST_MaxDistance(ST_Collect(g), ST_Collect(g)) FROM p),
+       (SELECT ST_MaxDistance(ST_Collect(g), ST_Collect(g)) FROM q)
+"""
+
+
+def add_other_name(conn, params, m) -> None:
+    """Adds the other TIGER name's segments to `m` if its points run along them."""
+    if not m.other_candidate or not m.other_tlids:
+        return
+    own, along = conn.execute(SPREAD_SQL, {**params, "street": m.label_street, "tlids": list(m.other_tlids)}).fetchone()
+    if own and along is not None and along >= OTHER_NAME_MIN_SPREAD * own:
+        m.other_tiger_name = m.other_candidate
+        tlids = set(m.tlids) | set(m.other_tlids)
+        m.dropped_tlids = tuple(sorted(crammed_pieces(conn.execute(RANGES_SQL, {"tlids": list(tlids)}).fetchall())))
+        m.tlids = tuple(sorted(tlids - set(m.dropped_tlids)))
+
+
+# Two E911 streets matched to the same TIGER piece (TIGER names the whole
+# road "Ash Cove Rd S"; E911 splits it into Ash Cove Road -- main stretch and
+# north branch -- and Ash Cove South -- the south branch): each shared piece
+# stays only with the street whose own address points are nearest it, unless
+# that would leave a street with no pieces. Ash Cove South's 2-12 had been
+# placed along the main road's 2-98 range, 420+ m from their houses.
+SPLIT_SHARED = True  # with dataset.RELIST_MIN_SHARE = 1.0 and attach.UNRANGED_MAX_M: Ash Cove South 2-12 right; Harpswell 2,218 vs 2,220 (noise)
+SHARED_DIST_SQL = """
+SELECT upper(a.street_fullname), s.tlid, min(ST_Distance(s.geom::geography, a.geom::geography))
+FROM address_points a
+JOIN streets s ON s.tlid = ANY(%(tlids)s) AND s.geom && ST_Expand(a.geom, 0.01)
+WHERE a.town = %(town)s AND a.state_abbr = %(state)s AND upper(a.street_fullname) = ANY(%(labels)s)
+GROUP BY 1, 2
+"""
+
+
+def split_shared(conn, params, matches) -> int:
+    """Give each piece claimed by several matched streets to the nearest one. Returns pieces moved."""
+    owners = defaultdict(list)
+    for m in matches:
+        for tlid in m.tlids:
+            owners[tlid].append(m)
+    shared = {tlid: ms for tlid, ms in owners.items() if len(ms) > 1}
+    if not shared:
+        return 0
+    labels = sorted({m.label_street for ms in shared.values() for m in ms})
+    dist = {(lab, tlid): d for lab, tlid, d in conn.execute(
+        SHARED_DIST_SQL, {**params, "tlids": list(shared), "labels": labels}).fetchall()}
+    moved = 0
+    for tlid, ms in sorted(shared.items()):
+        ranked = sorted(ms, key=lambda m: dist.get((m.label_street, tlid), float("inf")))
+        best = dist.get((ranked[0].label_street, tlid), float("inf"))
+        for m in ranked[1:]:
+            if dist.get((m.label_street, tlid), float("inf")) <= best:
+                continue  # tie: keep both
+            if len(m.tlids) > 1:
+                m.tlids = tuple(x for x in m.tlids if x != tlid)
+                moved += 1
+    return moved
+
+
+# Owner's go (2026-11-18): where TIGER 2026 redrew a stretch as one coarse piece and the retired 2024 pieces
+# (still in streets, address_inference.tiger_retired via tiger_vintage.py) split it finely, number from the fine
+# old pieces. High Head Road, Harpswell: 655906711 (657 m, right 245-61) over 165-61 / 181-167 / 197-183 /
+# 245-199. A current ranged piece is coarse when at least FINE_COVER of its length lies within FINE_NEAR_M of
+# FINE_MIN_PIECES or more retired ranged pieces of the same street; it is left out of the street's pieces.
+# False = off (both stay, as before).
+FINE_OLD_PIECES = False
+FINE_NEAR_M = 15
+FINE_COVER = 0.8
+FINE_MIN_PIECES = 2
+COARSE_SQL = """
+WITH p AS (
+    SELECT s.tlid, s.geom, ST_Length(s.geom::geography) AS len,
+           EXISTS (SELECT 1 FROM address_inference.tiger_retired r WHERE r.tlid = s.tlid) AS retired
+    FROM streets s
+    WHERE s.tlid = ANY(%(tlids)s) AND (coalesce(s.lfromadd, '') <> '' OR coalesce(s.rfromadd, '') <> ''))
+SELECT c.tlid FROM p c
+CROSS JOIN LATERAL (
+    SELECT count(*) AS n, ST_Union(ST_Buffer(o.geom::geography, %(near)s)::geometry) AS cover
+    FROM p o WHERE o.retired AND o.geom && ST_Expand(c.geom, 0.0003)
+      AND ST_DWithin(o.geom::geography, c.geom::geography, %(near)s)
+      AND ST_Length(ST_Intersection(o.geom, ST_Buffer(c.geom::geography, %(near)s)::geometry)::geography)
+          >= 0.5 * ST_Length(o.geom::geography)) f
+WHERE NOT c.retired AND f.n >= %(min_pieces)s
+  AND ST_Length(ST_Intersection(c.geom, f.cover)::geography) >= %(cover)s * c.len
+"""
+
+
+def coarse_pieces(conn, tlids) -> set:
+    if not tlids or conn.execute("SELECT to_regclass('address_inference.tiger_retired') IS NULL").fetchone()[0]:
+        return set()
+    return {r[0] for r in conn.execute(COARSE_SQL, {"tlids": list(tlids), "near": FINE_NEAR_M,
+                                                    "cover": FINE_COVER, "min_pieces": FINE_MIN_PIECES})}
+
+
+# TIGER sometimes names a street's last piece without its type word: High Head Road, Harpswell, ends (ranged up
+# to 498/499) at 43.79865,-69.96702, where 78009083 "High Head" (400-498 / 401-499, 292 m) carries the road on to
+# its last houses (388-437). By name it never joined HIGH HEAD ROAD, so those houses were no candidates and
+# 388+ slid one house back on both sides. With CONTINUE_BASE_NAME, an unclaimed piece whose base name (type word
+# dropped) equals the street's and that touches one of its pieces within CONTINUE_TOUCH_M joins it, repeatedly.
+CONTINUE_BASE_NAME = False
+CONTINUE_TOUCH_M = 2
+TOUCHING_SQL = """
+SELECT DISTINCT s.tlid, s.fullname FROM streets s
+JOIN streets t ON t.tlid = ANY(%(tlids)s) AND s.geom && ST_Expand(t.geom, 0.0001)
+WHERE NOT (s.tlid = ANY(%(tlids)s)) AND coalesce(s.fullname, '') <> ''
+  AND ST_DWithin(s.geom::geography, t.geom::geography, %(near)s)
+"""
+LAST_CONTINUED: list = []
+
+
+# "dead_end": only a piece with its own address ranges that starts where the street dead-ends (every piece of the
+# street at that point runs off the same way -- TIGER 2024/2026 duplicates overlap there), so the road goes on
+# under another name. "any" (every touching piece): Harpswell 72 pieces, -57 (retraining churn); off.
+CONTINUE_MODE = "dead_end"
+PIECES_SQL = """
+SELECT tlid, ST_AsBinary(geom), (coalesce(lfromadd, '') <> '' OR coalesce(rfromadd, '') <> '') FROM streets
+WHERE tlid = ANY(%(tlids)s)
+"""
+
+
+def _dead_end_joins(conn, own, cand) -> list:
+    """Of the candidate tlids, those with ranges that touch an end of the street's pieces where the street stops."""
+    from shapely import wkb
+    from shapely.geometry import Point
+    geo = {t: (wkb.loads(bytes(g)), r) for t, g, r in conn.execute(PIECES_SQL, {"tlids": list(own) + list(cand)})}
+    deg = CONTINUE_TOUCH_M / 111000.0
+    ends = []  # (point, bearing into the piece) for every end of the street's pieces
+    for t in own:
+        if t not in geo:
+            continue
+        c = list(geo[t][0].coords)
+        for p, q in ((c[0], c[1]), (c[-1], c[-2])):
+            ends.append((p, np.degrees(np.arctan2(q[1] - p[1], q[0] - p[0]))))
+    out = []
+    for t in cand:
+        if t not in geo or not geo[t][1]:
+            continue
+        line = geo[t][0]
+        for p, _ in ends:
+            if line.distance(Point(p)) > deg:
+                continue
+            here = [b for e, b in ends if Point(e).distance(Point(p)) <= deg]
+            # also any own piece passing THROUGH p (not ending there) = the street continues: not a dead end
+            through = any(geo[o][0].distance(Point(p)) <= deg and
+                          min(Point(geo[o][0].coords[0]).distance(Point(p)),
+                              Point(geo[o][0].coords[-1]).distance(Point(p))) > deg for o in own if o in geo)
+            spread = max(abs(((a - b + 180) % 360) - 180) for a in here for b in here) if here else 0
+            if not through and spread <= 45:
+                out.append(t)
+                break
+    return out
+
+
+def add_continuations(conn, matches) -> int:
+    taken = {t for m in matches for t in m.tlids}
+    added = 0
+    for m in matches:
+        if not m.tlids:
+            continue
+        base = base_name(canonical(m.label_street))
+        if not base:
+            continue
+        tlids = list(m.tlids)
+        for _ in range(10):
+            new = [t for t, name in conn.execute(TOUCHING_SQL, {"tlids": tlids, "near": CONTINUE_TOUCH_M})
+                   if t not in taken and base_name(canonical(name)) == base]
+            if CONTINUE_MODE == "dead_end":
+                new = _dead_end_joins(conn, tlids, new)
+            if not new:
+                break
+            tlids += new
+            taken |= set(new)
+            LAST_CONTINUED.append((m.label_street, tuple(new)))
+            added += len(new)
+        m.tlids = tuple(sorted(tlids))
+    return added
+
+
+def continuation_rows(conn, town: str, state: str) -> list:
+    """[(label_street, tlid)] the continuation rule would add (CONTINUE_MODE), computed without writing anything --
+    for evaluate's score-only use (evaluate.CONTINUE_SCORE_ONLY)."""
+    params = {"town": town, "state": state}
+    streets = dict(conn.execute(LABEL_STREETS_SQL, params).fetchall())
+    per_street = defaultdict(list)
+    for point_id, label_street, tlid, name, is_alias in conn.execute(CANDIDATES_SQL, params):
+        per_street[label_street].append((point_id, tlid, name, is_alias))
+    matches = [match_street(street, count, per_street.get(street, [])) for street, count in sorted(streets.items())]
+    for m in matches:
+        add_other_name(conn, params, m)
+        match_far(conn, params, m)
+    if SPLIT_SHARED:
+        split_shared(conn, params, matches)
+    LAST_CONTINUED.clear()
+    add_continuations(conn, matches)
+    return [(street, t) for street, tlids in LAST_CONTINUED for t in tlids]
 
 
 def match_town(dsn, region, town: str) -> list[StreetMatch]:
@@ -211,6 +502,22 @@ def match_town(dsn, region, town: str) -> list[StreetMatch]:
             per_street[label_street].append((point_id, tlid, name, is_alias))
 
         matches = [match_street(street, count, per_street.get(street, [])) for street, count in sorted(streets.items())]
+        for m in matches:
+            add_other_name(conn, params, m)
+            match_far(conn, params, m)
+        if CONTINUE_BASE_NAME:
+            LAST_CONTINUED.clear()
+            print(f"  continuations: {add_continuations(conn, matches)} pieces named without their type word joined")
+        if SPLIT_SHARED:
+            split_shared(conn, params, matches)
+        if FINE_OLD_PIECES:
+            dropped = 0
+            for m in matches:
+                coarse = coarse_pieces(conn, m.tlids)
+                if coarse:
+                    m.tlids = tuple(t for t in m.tlids if t not in coarse)
+                    dropped += len(coarse)
+            print(f"  fine old pieces: {dropped} coarse current TIGER pieces left out")
 
         key = {"region": region.id, "town": town}
         conn.execute("DELETE FROM address_inference.street_matches WHERE region_id = %(region)s AND town = %(town)s", key)
@@ -219,12 +526,13 @@ def match_town(dsn, region, town: str) -> list[StreetMatch]:
             cur.executemany(
                 """INSERT INTO address_inference.street_matches
                    (region_id, town, label_street, label_points, status, method, unmatched_reason,
-                    road_coverage, tiger_name, name_similarity, support, nearest_tiger_name, nearest_support)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                    road_coverage, tiger_name, name_similarity, support, nearest_tiger_name, nearest_support,
+                    other_tiger_name)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                 [
                     (region.id, town, m.label_street, m.label_points, m.status, m.method, m.unmatched_reason,
                      m.road_coverage, m.tiger_name, m.name_similarity, m.support, m.nearest_tiger_name,
-                     m.nearest_support)
+                     m.nearest_support, m.other_tiger_name)
                     for m in matches
                 ],
             )
@@ -239,7 +547,7 @@ def summarize(matches) -> str:
     total_streets = len(matches)
     total_points = sum(m.label_points for m in matches)
     lines = []
-    for category in ("exact", "alias", "fuzzy", "base_name", "no_road_nearby", "name_mismatch"):
+    for category in ("exact", "alias", "fuzzy", "base_name", "exact_far", "no_road_nearby", "name_mismatch"):
         group = [m for m in matches if (m.method or m.unmatched_reason) == category]
         points = sum(m.label_points for m in group)
         lines.append(
@@ -258,6 +566,10 @@ def main():
     matches = match_town(args.dsn, load_region(args.region), args.town)
     print(f"{args.town}: {len(matches)} label streets")
     print(summarize(matches))
+    for m in matches:
+        if m.other_tiger_name:
+            print(f"  {m.label_street}: TIGER's {m.tiger_name!r} plus the same road as {m.other_tiger_name!r}"
+                  f" ({len(m.dropped_tlids)} crammed pieces dropped)")
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ import pandas as pd
 import psycopg
 from sklearn.model_selection import GroupKFold
 
-from . import dataset, order
+from . import cross_side, dataset, extensions, loners, order, rate_spots, sites
 from .regions import load_region
 
 N_FOLDS = 5
@@ -41,28 +41,82 @@ MODEL_PARAMS = dict(
 )
 
 
-def cross_validated_scores(candidate_df):
+def _fit(train, features):
+    # Addresses whose true building isn't a candidate teach nothing.
+    has_positive = train.groupby("address_id")["label"].transform("max") == 1
+    train = train[has_positive]
+    model = lgb.LGBMRanker(**MODEL_PARAMS)
+    model.fit(train[features].astype(float), train["label"],
+              group=train.groupby("address_id", sort=False).size().to_numpy())
+    return model
+
+
+def _top1(df, scores) -> int:
+    """Addresses whose highest-scored candidate is the true building."""
+    d = df.assign(_s=scores)
+    best = d.loc[d.groupby("address_id")["_s"].idxmax()]
+    return int(best["label"].sum())
+
+
+INNER_FOLDS = 3
+SITES_FOUND: list = []  # last evaluate's sites (sites.site_picks)
+CROSS_FOUND: dict = {}  # last evaluate's across-the-road numbers (cross_side.apply)
+EXT_FOUND: list = []  # last evaluate's extension streets (extensions.ext_picks)
+LAST_CHOICES: list = []  # per outer fold: True = optional features kept
+
+
+def cross_validated_scores(candidate_df, features=None, optional=None, train_df=None):
     """candidate_df plus an out-of-fold ranker `score` per row, and the
-    per-feature importance (gain) summed over folds."""
+    per-feature importance (gain) summed over folds.
+    optional: extra features each outer fold keeps only if they win on its own
+    training streets (inner GroupKFold, top-1 right building) -- the test streets
+    never take part in the choice."""
+    features = list(dataset.FEATURES if features is None else features)
+    optional = list(optional or [])
+    every = features + optional
     # A total order (source_id breaks ties): the database returns rows in
     # no fixed order, and LightGBM's bagging depends on row order -- without
     # this, the same data gave results that differed run to run.
     df = candidate_df.sort_values(["address_id", "d_m0", "source_id"], kind="stable").reset_index(drop=True)
-    X = df[dataset.FEATURES].astype(float)
+    X = df[every].astype(float)
     df["score"] = np.nan
-    importance = np.zeros(len(dataset.FEATURES))
-    folds = GroupKFold(n_splits=N_FOLDS).split(X, df["label"], groups=df["street"])
+    importance = pd.Series(0.0, index=every)
+    LAST_CHOICES.clear()
+    # train_df: the rows each fold trains on (default: candidate_df itself). evaluate.CONTINUE_SCORE_ONLY trains on
+    # the candidates without TIGER continuation pieces and scores the ones with them, fold by street as usual.
+    tdf = None if train_df is None else train_df.sort_values(
+        ["address_id", "d_m0", "source_id"], kind="stable").reset_index(drop=True)
+    if tdf is None:
+        folds = list(GroupKFold(n_splits=N_FOLDS).split(X, df["label"], groups=df["street"]))
+    else:
+        # folds come from the training rows (GroupKFold deals streets by row count, so extra scoring rows would
+        # re-deal every fold); each fold scores the rows of its test streets
+        folds = []
+        for tr, te in GroupKFold(n_splits=N_FOLDS).split(tdf, tdf["label"], groups=tdf["street"]):
+            test_streets = set(tdf.iloc[te]["street"])
+            folds.append((tr, np.flatnonzero(df["street"].isin(test_streets).to_numpy())))
+        missing = ~df["street"].isin(set(tdf["street"]))
+        if missing.any():  # a street with rows only when the continuations are in: score it with the last fold
+            last_tr, last_te = folds[-1]
+            folds[-1] = (last_tr, np.union1d(last_te, np.flatnonzero(missing.to_numpy())))
     for train_idx, test_idx in folds:
-        train = df.iloc[train_idx]
-        # Addresses whose true building isn't a candidate teach nothing.
-        has_positive = train.groupby("address_id")["label"].transform("max") == 1
-        train = train[has_positive]
-        model = lgb.LGBMRanker(**MODEL_PARAMS)
-        model.fit(train[dataset.FEATURES].astype(float), train["label"],
-                  group=train.groupby("address_id", sort=False).size().to_numpy())
-        importance += model.booster_.feature_importance("gain")
-        df.loc[test_idx, "score"] = model.predict(X.iloc[test_idx])
-    return df, pd.Series(importance, index=dataset.FEATURES).sort_values(ascending=False)
+        train = df.iloc[train_idx] if tdf is None else tdf.iloc[train_idx]
+        use = features
+        if optional:
+            wins = {False: 0, True: 0}
+            inner = GroupKFold(n_splits=INNER_FOLDS).split(train, train["label"], groups=train["street"])
+            for in_tr, in_te in inner:
+                tr, te = train.iloc[in_tr], train.iloc[in_te]
+                for keep in (False, True):
+                    cols = every if keep else features
+                    wins[keep] += _top1(te, _fit(tr, cols).predict(te[cols].astype(float)))
+            keep = wins[True] > wins[False]
+            LAST_CHOICES.append(keep)
+            use = every if keep else features
+        model = _fit(train, use)
+        importance[use] += model.booster_.feature_importance("gain")
+        df.loc[test_idx, "score"] = model.predict(X.iloc[test_idx][use])
+    return df, importance.sort_values(ascending=False)
 
 
 def top_picks(scored_df) -> dict:
@@ -240,7 +294,107 @@ def save_predictions(dsn, region_id, town, rows, methods):
             )
 
 
+# Owner: "if you're not sure how to assign a building with a street number,
+# don't randomly do it -- leave it in another list for me to review." Method
+# ml_order_review = ML + road order, except numbers road order itself couldn't
+# place (they only had the ranker's guess) are status 'review', no building, with
+# a review_list row holding the guess.
+def save_review(dsn, region_id, town, address_df, candidate_df, picks, placed, extra_coords=None, far=frozenset()):
+    rows = prediction_rows(region_id, town, "ml_order_review", address_df, candidate_df, picks, date.today(),
+                           extra_coords=extra_coords)
+    out, review = [], []
+    for r in rows:
+        address_id, number, street, pick = r[3], r[4], r[5], r[11]
+        if address_id in placed and address_id not in far:
+            out.append(r)
+            continue
+        reason = ("far from where its street's numbering puts it" if address_id in placed
+                  else "road order could not place it (only the ranker's guess)")
+        r = list(r)
+        r[11], r[12], r[13], r[15] = None, None, None, "review"
+        out.append(tuple(r))
+        review.append((town, street, number, "ml_order_review", reason, pick))
+    save_predictions(dsn, region_id, town, out, ["ml_order_review"])
+    with psycopg.connect(dsn) as conn:
+        conn.execute("DELETE FROM address_inference.review_list WHERE town = %s AND method = 'ml_order_review'", (town,))
+        with conn.cursor() as cur:
+            cur.executemany(
+                "INSERT INTO address_inference.review_list (town, street, address_number, method, reason, guess_building) "
+                "VALUES (%s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING", review)
+
+
+# TIGER pieces named without their type word that continue a street past its dead end (street_match
+# CONTINUE_BASE_NAME, High Head Road's 78009083 "High Head"): with CONTINUE_SCORE_ONLY they're added to the
+# street's pieces for this run only -- candidates, positions and road order see them -- while the ranker trains
+# on the candidates without them, so no other street's training data changes. False = off.
+CONTINUE_SCORE_ONLY = False
+LAST_CONTINUATIONS: list = []
+
+
+# Candidates per address: the M0_KEEP nearest TIGER's interpolated spot (as before) plus the RATE_KEEP nearest the
+# road-start spot (rate_spots, which doesn't use TIGER's range), out of dataset.MAX_CANDIDATES built. A flat cap of
+# 100 nearest M0: Topsham +94.6 (placeholder ranges: Birch Ridge 1-99 vs real 1-16 pushed true houses out of the
+# 50), but Freeport -33, Harpswell -16 (good ranges, more far-off confusers). (m0_keep, rate_keep) or None = off.
+CAP_M0_KEEP = None  # both set = on
+CAP_RATE_KEEP = None
+
+
+# Road-start candidates only where TIGER's range overshoots the street side's real numbers (placeholder ranges:
+# Topsham's Birch Ridge 1-99 for 1-16). Where TIGER tracks the numbers, its spot is the better guide (Gray's
+# Mayberry Road: real house 47 m from TIGER's spot, 134 m from the road-start spot) and the extra candidates only
+# distract (mixed cap without this: New Gloucester -15, Gray -10.4). None = every address.
+CAP_RATE_MIN_INFLATION = None
+
+
+def cap_mix(candidate_df, m0_keep, rate_keep, eligible=None):
+    df = candidate_df
+    r_m0 = df.groupby("address_id")["d_m0"].rank(method="first")
+    r_rate = df.groupby("address_id")["d_rate_len"].rank(method="first", na_option="bottom")
+    rate_ok = r_rate <= rate_keep
+    if eligible is not None:
+        rate_ok &= df["address_id"].isin(eligible)
+    return df[(r_m0 <= m0_keep) | rate_ok].reset_index(drop=True)
+
+
+def _train_rows(dsn, region, town, ranges):
+    """The candidate rows (with rate features) as they are without the continuation pieces."""
+    address_df, candidate_df = dataset.build(*dataset.load(dsn, region, town), ranges=ranges)
+    if rate_spots.RATE_SPOTS:
+        spots = rate_spots.street_spots(dsn, region, town, address_df)
+        candidate_df = rate_spots.add_rate_features(candidate_df, address_df, spots,
+                                                    order.load_positions(dsn, region, town))
+    return candidate_df
+
+
 def evaluate(dsn, region, town, save=False, ranges="tiger"):
+    if not CONTINUE_SCORE_ONLY:
+        return _evaluate(dsn, region, town, save, ranges)
+    from . import street_match
+    with psycopg.connect(dsn) as conn:
+        rows = street_match.continuation_rows(conn, town, region.state_abbr)
+    LAST_CONTINUATIONS[:] = rows
+    if not rows:
+        return _evaluate(dsn, region, town, save, ranges)
+    train_df = _train_rows(dsn, region, town, ranges)
+    key = {"region": region.id, "town": town}
+    with psycopg.connect(dsn) as conn:
+        conn.execute("""DELETE FROM address_inference.street_match_segments
+                        WHERE region_id = %(region)s AND town = %(town)s AND tlid = ANY(%(tlids)s)""",
+                     {**key, "tlids": [t for _, t in rows]})
+        with conn.cursor() as cur:
+            cur.executemany("INSERT INTO address_inference.street_match_segments VALUES (%s, %s, %s, %s)",
+                            [(region.id, town, street, t) for street, t in rows])
+    try:
+        return _evaluate(dsn, region, town, save, ranges, train_df=train_df)
+    finally:
+        with psycopg.connect(dsn) as conn:
+            conn.execute("""DELETE FROM address_inference.street_match_segments
+                            WHERE region_id = %(region)s AND town = %(town)s
+                              AND (label_street, tlid) IN (SELECT * FROM unnest(%(streets)s::text[], %(tlids)s::text[]))""",
+                         {**key, "streets": [st for st, _ in rows], "tlids": [t for _, t in rows]})
+
+
+def _evaluate(dsn, region, town, save=False, ranges="tiger", train_df=None):
     loaded = dataset.load(dsn, region, town)
     parcels = loaded[3]
     address_df, candidate_df = dataset.build(*loaded, ranges=ranges)
@@ -249,23 +403,112 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
     in_candidates = set(candidate_df.loc[candidate_df["label"] == 1, "address_id"])
 
     picks = dataset.baseline_picks(candidate_df)
-    scored, importance = cross_validated_scores(candidate_df)
+    features = list(dataset.FEATURES)
+    if dataset.RELIABILITY:
+        rel = dataset.reliability_features(address_df, loaded[1])
+        cols = list(zip(*[rel.get(a, (np.nan, np.nan, np.nan)) for a in candidate_df["address_id"]]))
+        candidate_df = candidate_df.assign(**{c: list(v) for c, v in zip(dataset.RELIABILITY_COLS, cols)})
+        features += dataset.RELIABILITY_COLS
+    if rate_spots.RATE_SPOTS:
+        # The addresser's own measure: distance from the road's start (rate_spots.py).
+        spots = rate_spots.street_spots(dsn, region, town, address_df)
+        order._SPOTS.clear()
+        order._SPOTS.update(spots)
+        candidate_df = rate_spots.add_rate_features(candidate_df, address_df, spots,
+                                                    order.load_positions(dsn, region, town))
+        extra = rate_spots.RATE_COLS + (["street_rate_m"] if rate_spots.WITH_STREET_RATE else [])
+        if CAP_M0_KEEP is not None and CAP_RATE_KEEP is not None:
+            eligible = None
+            if CAP_RATE_MIN_INFLATION is not None:
+                rel = dataset.reliability_features(address_df, loaded[1])
+                eligible = {a for a, (infl, _u, _c) in rel.items() if infl == infl and infl >= CAP_RATE_MIN_INFLATION}
+            candidate_df = cap_mix(candidate_df, CAP_M0_KEEP, CAP_RATE_KEEP, eligible)
+    else:
+        extra = []
+    if rate_spots.RATE_SPOTS == "auto":
+        # each fold decides from its own training streets (Freeport's village
+        # streets lost 21 numbers with them, rural towns gained up to 184)
+        scored, importance = cross_validated_scores(candidate_df, features, optional=extra, train_df=train_df)
+    else:
+        scored, importance = cross_validated_scores(candidate_df, features + extra, train_df=train_df)
     picks["ML"] = top_picks(scored)
+    # Isolated buildings (loners.py): their own street's, and one number each.
+    loner_ids, owner_streets = set(), {}
+    if loners.LONER_STREET or loners.LONER_ONE:
+        iso = order.load_isolation(dsn, town)
+        loner_ids = {sid for sid, d in iso.items() if d is not None and d >= loners.LONER_M}
+        owner_streets = loners.access_streets(scored, address_df, loner_ids, loners.load_access(dsn, loner_ids))
+        if loners.LONER_STREET:
+            scored = loners.street_filter(scored, address_df, owner_streets)
+    # Road order's own side judgment (dataset.ORDER_SIDE_REAL_FACTOR): after scoring, so nothing retrains.
+    if dataset.ORDER_SIDE_REAL_FACTOR is not None and "same_side_order" in scored.columns:
+        scored = scored.assign(same_side=scored["same_side_order"])
+    # The building at a number's road-start spot counts more in road order (rate_spots.RATE_BONUS).
+    scored = rate_spots.rate_rescore(scored)
+    # Numbers the addresser put across the road (cross_side.py).
+    scored, CROSS_FOUND_LAST = cross_side.apply(scored, address_df)
+    CROSS_FOUND.clear()
+    CROSS_FOUND.update(CROSS_FOUND_LAST)
+    ml_fallback = (top_picks(scored) if (loners.LONER_STREET or CROSS_FOUND_LAST) else picks["ML"])
     # Main roads first: a building a more important street confidently takes
     # is off limits to the streets after it (order.CLAIM_MIN_P).
     street_order = order.street_priority(address_df, order.load_street_classes(dsn, region, town))
     positions = order.load_positions(dsn, region, town)
+    side_dirs = order.load_side_directions(dsn, region, town) if order.SIDE_DIRECTIONS else None
+    order.set_guard_town(dsn, town)
     if parcels:
         # Each ordinary multi-building tax lot is one place along the road.
         parcel_of = {sid: info["parcel"] for sid, info in parcels["buildings"].items()}
         lot_addresses = order.load_lot_addresses(dsn, region, town)
+        known_streets = None
+        if order.OTHER_STREET_REAL_NAMES or order.OTHER_STREET_FUZZY is not None:  # TIGER's names + the address list's own street names (US ROUTE ONE = US Hwy 1)
+            from .street_names import canonical
+            known_streets = order.load_town_streets(dsn, town) | {canonical(s) for s in address_df["street"].unique()}
         # Only the tax roll's street names (order.OTHER_STREET_LOTS), never its numbers.
-        picks["ML+order"] = order.lot_picks(address_df, scored, positions, picks["ML"], parcel_of,
-                                            street_order=street_order, roof_of=order.load_roofs(dsn),
-                                            streets_of_lot=order.lot_streets(lot_addresses))
+        fallback = (order.allowed_top_picks(scored, address_df, parcel_of, order.lot_streets(lot_addresses, known_streets))
+                    if order.FALLBACK_LOT_RULE else ml_fallback)
+        lot_kwargs = dict(street_order=street_order, roof_of=order.load_roofs(dsn),
+                          streets_of_lot=order.lot_streets(lot_addresses, known_streets),
+                          fronts_of_lot=order.load_lot_fronts(dsn, town, order.LOT_FRONTS)
+                          if order.LOT_FRONTS else None, side_directions=side_dirs)
+        picks["ML+order"] = order.lot_picks(address_df, scored, positions, fallback, parcel_of, **lot_kwargs)
+        # Second pass: each side's own number-by-distance line (order.LINE_BONUS).
+        rescored = order.line_rescore(address_df, scored, positions, picks["ML+order"], set(order.LAST_PLACED))
+        if rescored is not None:
+            picks["ML+order"] = order.lot_picks(address_df, rescored, positions, fallback, parcel_of, **lot_kwargs)
+        # Third pass: spots interpolated between the numbers already placed where
+        # the addresser's rate says (order.ANCHOR_BONUS).
+        anchored = order.anchor_rescore(address_df, scored, positions, picks["ML+order"], set(order.LAST_PLACED))
+        if anchored is not None:
+            picks["ML+order"] = order.lot_picks(address_df, anchored, positions, fallback, parcel_of, **lot_kwargs)
     else:
-        picks["ML+order"] = order.order_constrained_picks(address_df, scored, positions, picks["ML"],
-                                                          street_order=street_order)
+        picks["ML+order"] = order.order_constrained_picks(address_df, scored, positions, ml_fallback,
+                                                          street_order=street_order, side_directions=side_dirs)
+    if parcels:
+        # Owner's two-houses-one-lot rule (order.LOT_PAIR_FILL).
+        size_of = {sid: s for sid, s in zip(candidate_df["source_id"], candidate_df["sqmeters"])}
+        picks["ML+order"] = order.lot_pair_fill(dsn, region, town, address_df, picks["ML+order"],
+                                                set(order.LAST_PLACED), parcel_of, size_of)
+    placed_by_order = set(order.LAST_PLACED) if parcels else None
+    # Owner's options + spacing check (order.SPACING_WEIGHT).
+    if placed_by_order is not None:
+        picks["ML+order"] = order.spacing_options(address_df, scored, positions, picks["ML+order"], placed_by_order)
+        picks["ML+order"] = order.run_shift_options(address_df, scored, positions, picks["ML+order"], placed_by_order)
+        picks["ML+order"] = order.drop_one_options(address_df, scored, positions, picks["ML+order"],
+                                                   placed_by_order, ml_fallback)
+        placed_by_order -= order.LAST_DROPPED
+    # Owner's short-end-branch rule (order.END_BRANCH_MAX_M).
+    picks["ML+order"] = order.end_branch_picks(dsn, region, town, address_df, positions, picks["ML+order"],
+                                               parcel_of if parcels else None, side_dirs)
+    # Campus / institutional sites are numbered as one set (sites.py).
+    picks["ML+order"], SITES_FOUND[:] = sites.site_picks(dsn, region, town, address_df, picks["ML+order"],
+                                                        dict(order._SPOTS) if rate_spots.RATE_SPOTS else {})
+    # Extension streets that borrow their parent's line start where the parent ends (extensions.py).
+    sheds = {b for b, r in order._NEAR_BIGGEST.items() if order.ACCESSORY_MAX_RATIO and r < order.ACCESSORY_MAX_RATIO}
+    picks["ML+order"], EXT_FOUND[:] = extensions.ext_picks(dsn, region, town, address_df, picks["ML+order"],
+                                                          positions, skip=sheds)
+    if loners.LONER_ONE:
+        picks["ML+order"] = loners.one_number(picks["ML+order"], scored, address_df, loner_ids, owner_streets)
     assessor_matched = set()
     extra_coords = None
     if parcels:
@@ -319,6 +562,9 @@ def evaluate(dsn, region, town, save=False, ranges="tiger"):
             rows += prediction_rows(region.id, town, method + suffix, address_df, candidate_df, picks[name], date.today(),
                                     tax_roll=assessor_matched if name == "assessor" else None, extra_coords=extra_coords)
         save_predictions(dsn, region.id, town, rows, [m + suffix for m in saved.values()])
+        if suffix == "" and "ML+order" in picks and placed_by_order is not None:
+            far = order.far_from_line(address_df, positions, picks["ML+order"], placed_by_order)
+            save_review(dsn, region.id, town, address_df, candidate_df, picks["ML+order"], placed_by_order, extra_coords, far)
     return pd.DataFrame(table), coverage, importance
 
 

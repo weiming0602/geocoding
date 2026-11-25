@@ -24,11 +24,21 @@ import numpy as np
 import pandas as pd
 import psycopg
 
+from .street_lines import street_lines
+
 from geocoding.interpolate import interpolate_along_line, parse_linestring
 
 from .street_names import canonical
 
 MAX_CANDIDATES = 50
+# Owner (2026-11-21, Williams Drive, Topsham): TIGER's placeholder 1-99 for real numbers 1-38 put every number's spot
+# (M0) near the "1" end; in a dense subdivision the 50 nearest buildings were mostly the parallel streets' houses, so
+# 24 of 35 numbers never had their own house as a candidate and road order fell into townhouse mode. Also keep the
+# street's own houses (nearest road = this street) among the next KEEP_HOME_EXTRA nearest. None = off.
+KEEP_HOME_EXTRA = None
+# Owner (2026-11-20, Maquoit Drive): a building past the end of the number's own TIGER piece but beside another
+# piece of the street takes its side from that piece's ranges (parity), not from the extended line. False = off.
+SIDE_PAST_COVER_END = False
 TRUE_BUILDING_RADIUS_M = 30
 OFFSET_FEET = 20  # same as geocoding-server's default OFFSET_FEET
 # Buildings this close to a bigger building nearer the road are likely its
@@ -66,7 +76,7 @@ SELECT sms.label_street, st.tlid, st.lfromadd, st.ltoadd, st.rfromadd, st.rtoadd
                      AND ST_DWithin(o.geom::geography, ST_EndPoint(st.geom)::geography, 2)) AS dead_end,
        st.fullname
 FROM address_inference.street_match_segments sms
-JOIN streets st ON st.tlid = sms.tlid
+JOIN address_inference.streets_ext st ON st.tlid = sms.tlid
 WHERE sms.region_id = %(region)s AND sms.town = %(town)s
 ORDER BY sms.label_street, st.tlid
 """
@@ -76,7 +86,8 @@ ORDER BY sms.label_street, st.tlid
 CANDIDATES_SQL = """
 SELECT sms.label_street, bs.source_id, bs.tlid, bs.side, bs.t, bs.at_end, bs.dist_m,
        {size} AS sqmeters, s.occ_cls, s.prim_occ, s.outbldg, ST_Y(s.inner_point), ST_X(s.inner_point),
-       nearest.tlid AS nearest_tlid, nearest.dist_m AS nearest_dist_m
+       nearest.tlid AS nearest_tlid, nearest.dist_m AS nearest_dist_m,
+       bs.rank = 99 AS via_lane  -- attach.LANE_RANK: a lane house, placed where its lane meets the road
 FROM address_inference.street_match_segments sms
 JOIN address_inference.building_segments bs ON bs.tlid = sms.tlid AND bs.state_fips = %(state_fips)s
 JOIN address_inference.structures s
@@ -159,11 +170,183 @@ def _int_or_none(value):
     return int(value) if value and str(value).isdigit() else None
 
 
+# Owner's rule: a TIGER piece with a range on one side only gets the other
+# side's range mirrored onto its empty side, in the other parity (even 26->2
+# -> odd 25->1). Basin Point Road: TIGER has no odd range on its first 430 m
+# (even 2-26 there) and puts odd 1-299 on the next 600 m, so 11-35 were looked
+# for ~400 m past their houses. The tightest covering range wins
+# (covering_range), so the borrowed one takes over where both cover.
+FILL_MISSING_SIDE = True
+
+
+def _other_parity(x: int) -> int:
+    return x - 1 if x - 1 >= 1 else x + 1
+
+
+def fill_missing_sides(segs) -> None:
+    """In place: mirror a one-sided piece's range onto its empty side."""
+    for seg in segs:
+        lf, lt = _int_or_none(seg["lfromadd"]), _int_or_none(seg["ltoadd"])
+        rf, rt = _int_or_none(seg["rfromadd"]), _int_or_none(seg["rtoadd"])
+        if lf is not None and lt is not None and (rf is None or rt is None):
+            seg["rfromadd"], seg["rtoadd"] = str(_other_parity(lf)), str(_other_parity(lt))
+            seg["filled_side"] = "R"
+        elif rf is not None and rt is not None and (lf is None or lt is None):
+            seg["lfromadd"], seg["ltoadd"] = str(_other_parity(rf)), str(_other_parity(rt))
+            seg["filled_side"] = "L"
+
+
+# Owner's rule: a street whose TIGER pieces include ones with NO range on
+# either side (branches, lanes TIGER never numbered) is numbered from its own
+# address list instead, spread in order along the whole street line (Ash Cove
+# South's south branch had no range at all; Ash Cove Road's north branch none,
+# so 64/75 fell on the main stretch). Applies when unranged pieces make up at
+# least RELIST_MIN_SHARE of the street's length (1.0 = only streets with no
+# range at all). Direction and odd/even side come from TIGER's ranged pieces
+# where there are any; with none, low numbers start at the end that joins
+# another road and either side is allowed (no parity -> side guess).
+RELIST_MIN_SHARE = 1.0  # only streets with no TIGER range at all (Harpswell, short links + split: 2,218 vs 2,220 best, Ash Cove South 2-12 all right). Earlier, without short links: 2026-11-13 Harpswell (split on): off 2,215 | 1.0 2,215 | 0.5 2,211 | 0.25 2,157 | 0.15 1,982 right -- off; unranged pieces get no building attachments (attach.py), so relisting them finds no houses
+
+
+def _unranged(seg) -> bool:
+    return all(_int_or_none(seg[k]) is None for k in ("lfromadd", "ltoadd", "rfromadd", "rtoadd"))
+
+
+def relist_streets(segs_by_street, side_numbers, min_share=None) -> list:
+    """In place: list-based ranges on streets with unranged pieces. Returns the streets changed."""
+    from shapely.geometry import LineString, MultiLineString, Point as SPoint
+    from shapely.ops import linemerge, unary_union
+    from .street_lines import single_line
+    share_min = RELIST_MIN_SHARE if min_share is None else min_share
+    changed = []
+    for street, segs in segs_by_street.items():
+        lines = [LineString(s["points"]) for s in segs if len(s["points"]) >= 2]
+        if not lines:
+            continue
+        total = sum(l.length for l in lines)
+        bare = sum(LineString(s["points"]).length for s in segs if _unranged(s) and len(s["points"]) >= 2)
+        if total == 0 or bare / total < share_min:
+            continue
+        u = unary_union(lines)
+        merged = u if isinstance(u, LineString) else linemerge(u)
+        line = single_line(merged)
+        if line is None or line.length == 0:
+            continue
+        L = line.length
+        pos = lambda p: line.project(SPoint(p))
+        # TIGER's own say, from ranged pieces: per parity, which way numbers grow
+        # along `line`, and which side of `line` holds them.
+        grow, side_vote = defaultdict(float), defaultdict(float)
+        for s in segs:
+            if _unranged(s) or len(s["points"]) < 2:
+                continue
+            a0, a1 = pos(s["points"][0]), pos(s["points"][-1])
+            if a0 == a1:
+                continue
+            same_dir = a1 > a0
+            w = LineString(s["points"]).length
+            for side, fk, tk in (("L", "lfromadd", "ltoadd"), ("R", "rfromadd", "rtoadd")):
+                fr, to = _int_or_none(s[fk]), _int_or_none(s[tk])
+                if fr is None or to is None or fr == to:
+                    continue
+                parity = fr % 2
+                grow[parity] += (1 if same_dir else -1) * (1 if to > fr else -1) * w
+                line_side = side if same_dir else ("R" if side == "L" else "L")
+                side_vote[parity] += (1 if line_side == "L" else -1) * w
+        # Fallback direction: low numbers at the end joining another road.
+        start_pt, end_pt = line.coords[0], line.coords[-1]
+        def dead_at(pt):
+            for s in segs:
+                if len(s["points"]) < 2:
+                    continue
+                if SPoint(s["points"][0]).distance(SPoint(pt)) < 1e-6:
+                    return bool(s.get("dead_start", True))
+                if SPoint(s["points"][-1]).distance(SPoint(pt)) < 1e-6:
+                    return bool(s.get("dead_end", True))
+            return True
+        default_dir = -1 if (dead_at(start_pt) and not dead_at(end_pt)) else 1
+        new = {}
+        for parity in (0, 1):
+            nums = side_numbers.get((street, parity))
+            if not nums:
+                continue
+            lo, hi = nums[0], nums[-1]
+            d = (1 if grow[parity] > 0 else -1) if grow[parity] else default_dir
+            side = ("L" if side_vote[parity] > 0 else "R") if side_vote[parity] else None
+            new[parity] = (lo, hi, d, side)
+        if not new:
+            continue
+        for s in segs:
+            if len(s["points"]) < 2:
+                continue
+            p0, p1 = pos(s["points"][0]), pos(s["points"][-1])
+            for k in ("lfromadd", "ltoadd", "rfromadd", "rtoadd"):
+                s[k] = None
+            both = False
+            for parity, (lo, hi, d, side) in new.items():
+                def num_at(p):
+                    f = p / L if d > 0 else 1 - p / L
+                    n = int(round(lo + f * (hi - lo)))
+                    return n if n % 2 == parity else (n + 1 if n < hi else n - 1)
+                fr, to = num_at(p0), num_at(p1)
+                if side is None:
+                    both = True
+                    side = "L" if parity == 0 else "R"  # placeholder slot; either side counts (both_sides)
+                # side is relative to `line`; flip to the piece's own L/R when it runs the other way
+                piece_side = side if p1 >= p0 else ("R" if side == "L" else "L")
+                fk, tk = ("lfromadd", "ltoadd") if piece_side == "L" else ("rfromadd", "rtoadd")
+                if s[fk] is not None:  # both parities on one side: keep the other side's slot
+                    fk, tk = ("rfromadd", "rtoadd") if fk == "lfromadd" else ("lfromadd", "ltoadd")
+                    both = True
+                s[fk], s[tk] = str(fr), str(to)
+            s["both_sides"] = both
+            s["relisted"] = True
+        changed.append(street)
+    return changed
+
+
+# A range borrowed by FILL_MISSING_SIDE beats a real TIGER range of the same parity only when the real one is at
+# least this many times looser (Basin Point Road: real odd 1-299 over 600 m vs borrowed 25-1 -> borrowed wins;
+# Washington Avenue: real odd 25-1 where 13-21 are vs a 50 m piece's borrowed 23-1 -> the real one must win, the
+# borrowed one put 13-21's spots on 3's house). None = tightest always wins.
+BORROWED_WIN_FACTOR = None
+# The same tie-break, but for road order's side only (column same_side_order; the model keeps same_side): None = off.
+ORDER_SIDE_REAL_FACTOR = None
+
+
+# A borrowed (FILL_MISSING_SIDE) range on a short stub never beats a real range covering the number. High Head
+# Road, Harpswell: 78061145, 60 m, left 220-210 only, borrowed odd ~221-211 took 215 from the real 245-199 and
+# put 215 on 227's house (215-291 one step off); Washington Ave 13-21 the same on a 50 m even-only piece. Unlike
+# BORROWED_WIN_FACTOR (range sizes), this goes by the piece's length. None = off.
+BORROWED_STUB_M = None
+
+
+# A crammed stub never beats a normal piece covering the number. Lewiston Road, Topsham: 608202923, 72 m, right
+# 647-753, left borrowed (FILL_MISSING_SIDE) ~646-752 = 1.5 numbers per meter, tighter than 75603208's 682-798
+# over 627 m, so 682-730 were squeezed into 72 m and picked 600-900 m from their houses. A cover packing more than
+# CRAMMED_COVER_FACTOR x the street's median numbers per meter loses to the tightest normal one. None = off.
+CRAMMED_COVER_FACTOR = None
+
+
+def _all_covers(number: int, segments):
+    """Every (segment, side, fraction, span) whose range holds the number with its parity."""
+    out = []
+    for seg in segments:
+        for side, lo_key, hi_key in (("L", "lfromadd", "ltoadd"), ("R", "rfromadd", "rtoadd")):
+            start, end = _int_or_none(seg[lo_key]), _int_or_none(seg[hi_key])
+            if start is None or end is None or not min(start, end) <= number <= max(start, end):
+                continue
+            if start % 2 == end % 2 and number % 2 != start % 2:
+                continue
+            out.append((seg, side, 0.5 if start == end else (number - start) / (end - start), abs(end - start)))
+    return out
+
+
 def covering_range(number: int, segments):
     """(segment, side 'L'/'R', fraction f, range size) whose range holds
     `number` with the range's own parity -- or None. When several ranges
     cover it (overlapping TIGER ranges), the tightest one wins."""
-    best = None
+    best = best_real = None
     for seg in segments:
         for side, lo_key, hi_key in (("L", "lfromadd", "ltoadd"), ("R", "rfromadd", "rtoadd")):
             start, end = _int_or_none(seg[lo_key]), _int_or_none(seg[hi_key])
@@ -179,17 +362,53 @@ def covering_range(number: int, segments):
             # answer never depends on the order segments arrive in.
             if best is None or (span, str(seg["tlid"])) < (best[3], str(best[0]["tlid"])):
                 best = (seg, side, fraction, span)
+            if seg.get("filled_side") != side and (
+                    best_real is None or (span, str(seg["tlid"])) < (best_real[3], str(best_real[0]["tlid"]))):
+                best_real = (seg, side, fraction, span)
+    if CRAMMED_COVER_FACTOR is not None and best is not None:
+        dens = [abs(_int_or_none(s[a]) - _int_or_none(s[b])) / max(s.get("length_m") or 0, 1.0)
+                for s in segments for a, b in (("lfromadd", "ltoadd"), ("rfromadd", "rtoadd"))
+                if _int_or_none(s[a]) is not None and _int_or_none(s[b]) is not None and (s.get("length_m") or 0) > 0]
+        if dens:
+            limit = CRAMMED_COVER_FACTOR * max(float(np.median(dens)), 1e-6)
+
+            def density(c):
+                return c[3] / max(c[0].get("length_m") or 0, 1.0)
+            if density(best) > limit:
+                ok = [c for c in _all_covers(number, segments) if density(c) <= limit]
+                if ok:
+                    return min(ok, key=lambda c: (c[3], str(c[0]["tlid"])))
+    if (BORROWED_STUB_M is not None and best is not None and best_real is not None and best is not best_real
+            and best[0].get("filled_side") == best[1] and (best[0].get("length_m") or 0) < BORROWED_STUB_M):
+        return best_real
+    if (BORROWED_WIN_FACTOR is not None and best is not None and best_real is not None and best is not best_real
+            and best[0].get("filled_side") == best[1] and best_real[3] < BORROWED_WIN_FACTOR * max(best[3], 1)):
+        return best_real
     return best
 
 
 # Each candidate building's tax parcel (address_inference.parcels): the
 # lot's frontage on each street segment, how many buildings share the lot,
 # and which is the biggest. Empty when parcels aren't loaded.
+# Owner's rule (2026-11-16): a shed stands close to its house, so a building
+# far from every other building is never a shed, whatever its size. With
+# SHED_NEAR_M set, parcel_size_ratio compares a building only with the
+# buildings of its lot within SHED_NEAR_M (itself included): none that close ->
+# 1.0. Bowdoin's campus lot (Bayview Road): 250's 124 m2 house was 0.19 of the
+# 658 m2 lab across the site and the ranker scored it -0.91 for that alone;
+# 252's building, 144 m from any other, was 0.23. None = the whole lot's biggest.
+SHED_NEAR_M = None
+# "near": compare only with same-lot buildings within SHED_NEAR_M (none -> 1.0).
+# "alone": owner's literal rule -- only a building with no other building at all
+# within SHED_NEAR_M has its size ignored (1.0); every other building keeps the
+# whole-lot comparison. 2026-11-16, 7 towns right numbers (14,237 off): near 40 m
+# 14,115 (Yarmouth -133, Harpswell -32, Freeport +20, Topsham +23).
+SHED_MODE = "near"
 PARCELS_SQL = """
 SELECT bp.source_id, bp.parcel_id, ST_Area(p.geom::geography),
        count(*) OVER (PARTITION BY bp.parcel_id),
        {size} = max({size}) OVER (PARTITION BY bp.parcel_id),
-       {size} / nullif(max({size}) OVER (PARTITION BY bp.parcel_id), 0)
+       {ratio}
 FROM address_inference.building_parcels bp
 JOIN address_inference.parcels p ON p.parcel_id = bp.parcel_id AND p.state_fips = bp.state_fips
 JOIN address_inference.structures s ON s.state_fips = bp.state_fips AND s.source_id = bp.source_id
@@ -216,6 +435,20 @@ POOLS_SQL = "SELECT source_id, d FROM address_inference.building_pool"
 DRIVEWAYS_SQL = "SELECT source_id, road, cost, off_m FROM address_inference.building_driveways"
 
 
+# Owner's idea (2026-11-14): a house reached by a foot path/trail, like a
+# driveway (252 Bayview Road: no driveway in the imagery, 179 m from the
+# campus drive, but an OSM trail walks 242 m to Bayview and 1,037 m+ to any
+# other road). building_trails (data/session_2026-11-14_trails/trails.py):
+# walk length over OSM paths + drives to each street. Used only for buildings
+# with no imagery driveway and at least TRAIL_MIN_PATH_M walked on paths
+# (a house beside a drive isn't a trail house); the walk counts as a fully
+# visible driveway (off pavement 0). Never changes a building's position.
+TRAILS = False  # 2026-11-14 Harpswell: 3,285 -> 3,284 (170 Bayview broke, 252 unchanged); campus-core buildings on trails also got the lane signal
+TRAIL_MIN_PATH_M = 40
+TRAILS_SQL = """SELECT t.source_id, t.road, t.walk_m FROM address_inference.building_trails t
+WHERE t.source_id IN (SELECT source_id FROM address_inference.building_trails WHERE path_m >= %s)"""
+
+
 def load_driveways(conn) -> tuple[dict, dict]:
     """({source_id: {road: path cost}}, {source_id: {road: meters off pavement}})."""
     if conn.execute("SELECT to_regclass('address_inference.building_driveways') IS NULL").fetchone()[0]:
@@ -225,6 +458,14 @@ def load_driveways(conn) -> tuple[dict, dict]:
         costs[sid][road] = cost
         if off_m is not None:
             offs[sid][road] = off_m
+    if TRAILS and not conn.execute("SELECT to_regclass('address_inference.building_trails') IS NULL").fetchone()[0]:
+        trails = defaultdict(dict)
+        for sid, road, walk_m in conn.execute(TRAILS_SQL, (TRAIL_MIN_PATH_M,)).fetchall():
+            if sid not in costs:
+                trails[sid][road] = walk_m
+        for sid, roads in trails.items():
+            costs[sid] = roads
+            offs[sid] = {road: 0.0 for road in roads}
     return dict(costs), dict(offs)
 
 
@@ -248,13 +489,38 @@ def load_canopy(conn) -> dict:
 LIDAR_SIZE = False
 
 
+def size_ratio_sql(size: str, lidar: bool) -> str:
+    """parcel_size_ratio: against the whole lot's biggest, or (SHED_NEAR_M) only the lot's
+    buildings within SHED_NEAR_M of this one."""
+    lot_ratio = f"{size} / nullif(max({size}) OVER (PARTITION BY bp.parcel_id), 0)"
+    if SHED_NEAR_M is None:
+        return lot_ratio
+    if SHED_MODE == "alone":
+        return f"""CASE WHEN EXISTS (SELECT 1 FROM address_inference.structures o
+                         WHERE o.state_fips = s.state_fips AND o.source_id != s.source_id
+                           AND o.geom && ST_Expand(s.geom, 0.002)
+                           AND ST_DWithin(o.geom::geography, s.geom::geography, {float(SHED_NEAR_M)}))
+                       THEN {lot_ratio} ELSE 1.0 END"""
+    osize = "greatest(o.sqmeters, ol.roof_m2)" if lidar else "o.sqmeters"
+    ojoin = ("LEFT JOIN address_inference.building_lidar ol ON ol.state_fips = o.state_fips "
+             "AND ol.source_id = o.source_id") if lidar else ""
+    return f"""{size} / nullif(greatest({size}, (
+        SELECT max({osize}) FROM address_inference.building_parcels ob
+        JOIN address_inference.structures o ON o.state_fips = ob.state_fips AND o.source_id = ob.source_id
+        {ojoin}
+        WHERE ob.state_fips = bp.state_fips AND ob.parcel_id = bp.parcel_id AND ob.source_id != bp.source_id
+          AND o.geom && ST_Expand(s.geom, 0.001)
+          AND ST_DWithin(o.geom::geography, s.geom::geography, {float(SHED_NEAR_M)}))), 0)"""
+
+
 def sized(sql: str, conn) -> str:
-    """`sql` with {size} / {lidar_join} filled in for this database."""
+    """`sql` with {size} / {lidar_join} / {ratio} filled in for this database."""
     use = LIDAR_SIZE and not conn.execute(
         "SELECT to_regclass('address_inference.building_lidar') IS NULL").fetchone()[0]
     if not use:
-        return sql.format(size="s.sqmeters", lidar_join="")
-    return sql.format(size="greatest(s.sqmeters, bl.roof_m2)",
+        return sql.format(size="s.sqmeters", lidar_join="", ratio=size_ratio_sql("s.sqmeters", False))
+    size = "greatest(s.sqmeters, bl.roof_m2)"
+    return sql.format(size=size, ratio=size_ratio_sql(size, True),
                       lidar_join="LEFT JOIN address_inference.building_lidar bl\n"
                                  "  ON bl.state_fips = s.state_fips AND bl.source_id = s.source_id")
 
@@ -270,13 +536,7 @@ def load_pools(conn) -> dict:
 # house far back at the end of a long driveway (48 Flying Point Road: 226 m)
 # is measured from there too (d_m0_access), not only from where it sits.
 LOT_ACCESS_SQL = """
-WITH lines AS (
-    SELECT sms.label_street AS street, ST_LineMerge(ST_Union(s.geom)) AS g
-    FROM address_inference.street_match_segments sms
-    JOIN streets s ON s.tlid = sms.tlid
-    WHERE sms.region_id = %(region)s AND sms.town = %(town)s
-    GROUP BY sms.label_street
-)
+WITH lines AS (SELECT street, g FROM street_lines)
 SELECT l.street, p.parcel_id, ST_Y(pt), ST_X(pt)
 FROM lines l
 JOIN address_inference.parcels p
@@ -289,17 +549,102 @@ ORDER BY l.street, p.parcel_id
 """
 
 
+# Owner's shore rule (2026-11-24, Maquoit Drive): along the shore, houses stand in a row by the water and a lot
+# often also holds a building near the road; the smaller shore house is still a home, not that building's shed
+# (70 Maquoit: 94 m2 house 46 m from the water, 0.45 of the road-side building on lot "72" -> p 0.01). With
+# SHORE_LOT_M set, a building within that many meters of water (building_water) and at least SHORE_HOUSE_MIN_M2
+# counts as its lot's largest (ratio 1.0). None = off.
+SHORE_LOT_M = None
+SHORE_HOUSE_MIN_M2 = 40.0
+SHORE_SQL = """SELECT w.source_id FROM address_inference.building_water w
+JOIN address_inference.structures s ON s.state_fips = w.state_fips AND s.source_id = w.source_id
+WHERE w.state_fips = %(state_fips)s AND w.water_dist_m <= %(m)s AND s.sqmeters >= %(min_m2)s"""
+
+
 def load_parcels(conn, params) -> dict | None:
     if conn.execute("SELECT to_regclass('address_inference.building_parcels') IS NULL").fetchone()[0]:
         return None
     buildings = {sid: {"parcel": pid, "area": area, "buildings": n, "largest": bool(largest),
                        "size_ratio": ratio}
                  for sid, pid, area, n, largest, ratio in conn.execute(sized(PARCELS_SQL, conn), params).fetchall()}
+    if SHORE_LOT_M is not None and not conn.execute(
+            "SELECT to_regclass('address_inference.building_water') IS NULL").fetchone()[0]:
+        for (sid,) in conn.execute(SHORE_SQL, {"state_fips": params["state_fips"], "m": float(SHORE_LOT_M),
+                                               "min_m2": float(SHORE_HOUSE_MIN_M2)}).fetchall():
+            if sid in buildings and buildings[sid]["buildings"] > 1:
+                buildings[sid]["largest"] = True
+                buildings[sid]["size_ratio"] = 1.0
     frontage = defaultdict(dict)
     for pid, tlid, m in conn.execute(FRONTAGE_SQL, params).fetchall():
         frontage[pid][tlid] = m
+    street_lines(conn, params)
     access = {(street, pid): (lat, lon) for street, pid, lat, lon in conn.execute(LOT_ACCESS_SQL, params).fetchall()}
     return {"buildings": buildings, "frontage": dict(frontage), "access": access} if buildings else None
+
+
+# TIGER repair stage, first classes (2026-11-21, data/session_2026-11-21_issues/tiger_repair/: detectors use TIGER and
+# town lines only; precision measured against E911): 2 extra-digit typo ranges (Harpswell Indian Rest R 2699-195 ->
+# 299-195; 86%), 3 hyphenated/lettered values ("370-99-370-1"; 67%), 5 pieces mostly outside the town (91%) dropped
+# from the street. Path to flagged.csv; None = off.
+TIGER_REPAIR = None
+TIGER_REPAIR_CLASSES = ("2_typo_digit", "3_non_numeric", "5_out_of_town")
+_REPAIR_CACHE: dict = {}
+
+
+def _load_repairs(path):
+    if path not in _REPAIR_CACHE:
+        import csv
+        _REPAIR_CACHE[path] = [r for r in csv.DictReader(open(path)) if r["cls"] in TIGER_REPAIR_CLASSES]
+    return _REPAIR_CACHE[path]
+
+
+def apply_tiger_repairs(segments, candidates, town):
+    """Segments/candidates rows with the repairs applied (ranges rewritten; out-of-town pieces dropped)."""
+    import re
+    rows = [r for r in _load_repairs(TIGER_REPAIR) if r["town"] == town]
+    drop = {r["tlid"] for r in rows if r["cls"] == "5_out_of_town"}
+    fixes = {}
+    for r in rows:
+        rep = r["repair"]
+        m = re.match(r"([LR]):\s*(\d+)-(\d+)$", rep)
+        if m:
+            fixes.setdefault(r["tlid"], []).append((m.group(1), "both", int(m.group(2)), int(m.group(3))))
+            continue
+        m = re.match(r"([LR]) (from|to):\s*\d+->(\d+)$", rep)
+        if m:
+            fixes.setdefault(r["tlid"], []).append((m.group(1), m.group(2), int(m.group(3)), None))
+            continue
+        if rep.startswith("borrow other side"):
+            fixes.setdefault(r["tlid"], []).append(("borrow", None, None, None))
+    idx = {"L": (2, 3), "R": (4, 5)}
+    out = []
+    for seg in segments:
+        tlid = str(seg[1])
+        if tlid in drop:
+            continue
+        if tlid in fixes:
+            seg = list(seg)
+            for side, kind, a, b in fixes[tlid]:
+                if side == "borrow":
+                    good = next((sd for sd in "LR" if _int_or_none(seg[idx[sd][0]]) is not None
+                                 and _int_or_none(seg[idx[sd][1]]) is not None), None)
+                    if good:
+                        bad = "R" if good == "L" else "L"
+                        f, t = int(seg[idx[good][0]]), int(seg[idx[good][1]])
+                        step = 1 if f <= t else -1
+                        seg[idx[bad][0]], seg[idx[bad][1]] = str(max(0, f + step)), str(max(0, t + step))
+                    continue
+                fi, ti = idx[side]
+                if kind == "both":
+                    seg[fi], seg[ti] = str(a), str(b)
+                elif kind == "from":
+                    seg[fi] = str(a)
+                else:
+                    seg[ti] = str(a)
+            seg = tuple(seg)
+        out.append(seg)
+    cands = [c for c in candidates if str(c[2]) not in drop]
+    return out, cands
 
 
 def load(dsn, region, town: str):
@@ -309,6 +654,8 @@ def load(dsn, region, town: str):
         addresses = conn.execute(ADDRESSES_SQL, params).fetchall()
         segments = conn.execute(SEGMENTS_SQL, params).fetchall()
         candidates = conn.execute(sized(CANDIDATES_SQL, conn), params).fetchall()
+        if TIGER_REPAIR:
+            segments, candidates = apply_tiger_repairs(segments, candidates, town)
         parcels = load_parcels(conn, params)
         if parcels is not None:
             parcels["pools"] = load_pools(conn)
@@ -344,6 +691,50 @@ AUTO_INFLATION = 2.0
 # wide range can be right even when the houses stop early. Density = how
 # many of the parity's slots between min and max are taken.
 AUTO_MIN_DENSITY = 0.7
+
+
+# Uneven TIGER splits (owner: "target on something like Maquoit Drive"): Maquoit Drive, Freeport, even side = 6-48 on
+# a 32 m stub (1.3 numbers per meter), 50-58 over 120 m, 60-136 over 528 m, 138-198 over 149 m, for real numbers
+# 42-150 -- 44-150 each took the next number's house. When one side's pieces differ more than RESPREAD_UNEVEN x in
+# numbers per meter, that side's ranges are re-set from the list's own lowest..highest number, shared out by each
+# piece's length in range order (each piece keeps its direction). None = off.
+RESPREAD_UNEVEN = None
+RESPREAD_MIN_PIECES = 2
+LAST_RESPREAD: list = []
+
+
+def respread_uneven(segs, side_numbers_for) -> int:
+    """In place, before FILL_MISSING_SIDE. side_numbers_for(parity) -> the side's sorted list numbers."""
+    changed = 0
+    for parity in (0, 1):
+        nums = side_numbers_for(parity)
+        if len(nums) < 2:
+            continue
+        pieces = []
+        for seg in segs:
+            for side, a, b in (("L", "lfromadd", "ltoadd"), ("R", "rfromadd", "rtoadd")):
+                s, e = _int_or_none(seg[a]), _int_or_none(seg[b])
+                if s is None or e is None or s % 2 != parity or e % 2 != parity or not seg.get("length_m"):
+                    continue
+                pieces.append((min(s, e), max(s, e), seg, a, b, s > e, float(seg["length_m"])))
+        if len(pieces) < RESPREAD_MIN_PIECES:
+            continue
+        dens = [max(hi - lo, 2) / max(length, 1.0) for lo, hi, *_r, length in pieces]
+        if max(dens) < RESPREAD_UNEVEN * min(dens):
+            continue
+        pieces.sort(key=lambda p: (p[0], p[1]))
+        total = sum(p[6] for p in pieces)
+        lo, hi = nums[0], nums[-1]
+        cum = 0.0
+        for p_lo, p_hi, seg, a, b, desc, length in pieces:
+            n0 = lo + (hi - lo) * cum / total
+            cum += length
+            n1 = lo + (hi - lo) * cum / total
+            r0 = int(round((n0 - parity) / 2)) * 2 + parity
+            r1 = max(r0, int(round((n1 - parity) / 2)) * 2 + parity)
+            seg[a], seg[b] = (str(r1), str(r0)) if desc else (str(r0), str(r1))
+            changed += 1
+    return changed
 
 
 def list_range_number(number, side_numbers, segments, min_inflation=None):
@@ -385,9 +776,20 @@ def build(addresses, segments, candidates, parcels=None, ranges="tiger"):
         seg = dict(zip(seg_keys, row))
         seg["points"] = parse_linestring(seg["geometry"])
         segs_by_street[seg["label_street"]].append(seg)
+    if RESPREAD_UNEVEN is not None:
+        nums_by = defaultdict(set)
+        for _, number, street, *_rest in addresses:
+            nums_by[(street, number % 2)].add(number)
+        LAST_RESPREAD.clear()
+        for street, segs in segs_by_street.items():
+            if respread_uneven(segs, lambda par, st=street: sorted(nums_by.get((st, par), ()))):
+                LAST_RESPREAD.append(street)
+    if FILL_MISSING_SIDE:
+        for segs in segs_by_street.values():
+            fill_missing_sides(segs)
 
     cand_keys = ("label_street", "source_id", "tlid", "side", "t", "at_end", "dist_m", "sqmeters", "occ_cls",
-                 "prim_occ", "outbldg", "lat", "lon", "nearest_tlid", "nearest_dist_m")
+                 "prim_occ", "outbldg", "lat", "lon", "nearest_tlid", "nearest_dist_m", "via_lane")
     cands_by_street = defaultdict(list)
     for row in candidates:
         cand = dict(zip(cand_keys, row))
@@ -397,6 +799,8 @@ def build(addresses, segments, candidates, parcels=None, ranges="tiger"):
     for _, number, street, *_rest in addresses:
         side_numbers[(street, number % 2)].add(number)
     side_numbers = {key: sorted(nums) for key, nums in side_numbers.items()}
+    if RELIST_MIN_SHARE is not None:
+        relist_streets(segs_by_street, side_numbers)
 
     address_rows, cand_rows = [], []
     for site_uid, number, street, method, lat, lon, true_id in addresses:
@@ -415,10 +819,28 @@ def build(addresses, segments, candidates, parcels=None, ranges="tiger"):
         seg, side, fraction, span = cover
         m0_lon, m0_lat = interpolate_along_line(seg["points"], fraction, OFFSET_FEET,
                                                 "left" if side == "L" else "right")
-        addr.update(m0_lat=m0_lat, m0_lon=m0_lon, cover_tlid=seg["tlid"], cover_side=side, f=fraction)
+        addr.update(m0_lat=m0_lat, m0_lon=m0_lon, cover_tlid=seg["tlid"], cover_side=side, f=fraction,
+                    cover_borrowed=seg.get("filled_side") == side)
         address_rows.append(addr)
-        cand_rows.extend(_candidates_for(addr, seg, side, fraction, span, street_segs, cands_by_street[street],
-                                         parcels))
+        rows = _candidates_for(addr, seg, side, fraction, span, street_segs, cands_by_street[street], parcels)
+        # Road order's side (never a model input): judged on the real TIGER range when a borrowed one won only by
+        # being a little tighter (ORDER_SIDE_REAL_FACTOR; Washington Avenue 13-21, Harpswell).
+        alt = None
+        if ORDER_SIDE_REAL_FACTOR is not None:
+            saved, globals()["BORROWED_WIN_FACTOR"] = BORROWED_WIN_FACTOR, ORDER_SIDE_REAL_FACTOR
+            try:
+                alt = covering_range(range_number, street_segs)
+            finally:
+                globals()["BORROWED_WIN_FACTOR"] = saved
+        if alt is not None and (alt[0]["tlid"], alt[1]) != (seg["tlid"], side):
+            side_on = {(c["source_id"], c["tlid"]): c["side"] for c in cands_by_street[street]}
+            for r in rows:
+                s = side_on.get((r["source_id"], alt[0]["tlid"]))
+                r["same_side_order"] = (s == alt[1]) if s is not None else r["same_side"]
+        else:
+            for r in rows:
+                r["same_side_order"] = r["same_side"]
+        cand_rows.extend(rows)
 
     address_df = pd.DataFrame(address_rows)
     candidate_df = pd.DataFrame(cand_rows)
@@ -460,7 +882,7 @@ def _driveway_features(source_id, street_names, parcels) -> dict:
     the easiest. NaN for buildings near the road (no driveway question) or
     when this street isn't among the building's nearby roads."""
     costs = (parcels or {}).get("driveways", {}).get(source_id)
-    none = {"drive_ratio": np.nan, "drive_best": np.nan, "drive_off_m": np.nan}
+    none = {"drive_ratio": np.nan, "drive_best": np.nan, "drive_off_m": np.nan, "drive_margin": np.nan}
     if not costs:
         return none
     mine = min((c for road, c in costs.items() if road in street_names), default=None)
@@ -470,7 +892,7 @@ def _driveway_features(source_id, street_names, parcels) -> dict:
     offs = parcels.get("driveway_off", {}).get(source_id, {})
     off = min((o for road, o in offs.items() if road in street_names), default=np.nan)
     return {"drive_ratio": mine / best if best > 0 else 1.0, "drive_best": float(mine <= best),
-            "drive_off_m": off}
+            "drive_off_m": off, "drive_margin": mine - best}
 
 
 def _access_distance(addr, source_id, d_m0, parcels) -> float:
@@ -488,6 +910,7 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
     street_tlids = {s["tlid"] for s in street_segs}
     street_names = {canonical(s.get("fullname")) for s in street_segs if s.get("fullname")}
     points_by_tlid = {s["tlid"]: s["points"] for s in street_segs}
+    seg_by_tlid = {s["tlid"]: s for s in street_segs}
     # Which ends are dead ends (unknown -- e.g. rows without the flags -- counts as one).
     dead_by_tlid = {s["tlid"]: (s.get("dead_start", True), s.get("dead_end", True)) for s in street_segs}
     by_building = defaultdict(list)
@@ -521,6 +944,18 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
         past_end = all(c["at_end"] for c in cands) and at_dead_end and beyond_end(
             points_by_tlid.get(best["tlid"], []), best["t"], best["lat"], best["lon"])
         own_side = on_cover["side"] if on_cover else best["side"]
+        if (SIDE_PAST_COVER_END and on_cover is not None and on_cover["at_end"] and not best["at_end"]
+                and best["tlid"] != cover_seg["tlid"]):
+            # Past the end of the number's own piece but squarely beside another piece of the street: the side
+            # of the extended line means nothing there (51 and 55 Maquoit Drive, Freeport: left = odd of their
+            # own piece 78055130, "right" = even of 627023974 extended back past its start). Use the parity
+            # the nearer piece's ranges put on the building's side.
+            seg = seg_by_tlid.get(best["tlid"])
+            f = seg and seg.get("lfromadd" if best["side"] == "L" else "rfromadd")
+            try:
+                own_side = side if int(f) % 2 == range_start % 2 else ("L" if side == "R" else "R")
+            except (TypeError, ValueError):
+                pass
         info[source_id] = (best, on_cover, past_end, own_side)
 
     def dead_end_side(source_id):
@@ -544,9 +979,17 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
             # say which side it's on (DEAD_END_SIDE).
             decided = dead_end_side(source_id)
             same_side = True if decided is None else decided == side
+        elif cover_seg.get("both_sides"):
+            same_side = True  # relisted street, no TIGER side for this parity
         else:
             same_side = own_side == side
-        d_m0 = float(haversine_m(addr["m0_lat"], addr["m0_lon"], best["lat"], best["lon"]))
+        if best.get("via_lane") and points_by_tlid.get(best["tlid"]):
+            # A lane house sits where its lane meets the road (attach.LANE_SQL), not
+            # where its roof is (123 Harpswell Neck Road: 917 m back down the lane).
+            j_lon, j_lat = interpolate_along_line(points_by_tlid[best["tlid"]], best["t"])
+            d_m0 = float(haversine_m(addr["m0_lat"], addr["m0_lon"], j_lat, j_lon))
+        else:
+            d_m0 = float(haversine_m(addr["m0_lat"], addr["m0_lon"], best["lat"], best["lon"]))
         rows.append({
             "address_id": addr["id"],
             "street": addr["street"],
@@ -587,7 +1030,12 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
         })
 
     rows.sort(key=lambda r: r["d_m0"])
-    rows = rows[:MAX_CANDIDATES]
+    if KEEP_HOME_EXTRA:
+        # the street's own houses stay candidates even when TIGER's spot is far off (placeholder ranges)
+        rows = rows[:int(MAX_CANDIDATES)] + [r for r in rows[int(MAX_CANDIDATES):int(MAX_CANDIDATES + KEEP_HOME_EXTRA)]
+                                              if r["nearest_road_is_street"]]
+    else:
+        rows = rows[:int(MAX_CANDIDATES)]
     # Bigger building closer to the road, nearby: likely this one's garage/barn.
     for r in rows:
         r["bigger_in_front"] = any(
@@ -609,6 +1057,66 @@ FEATURES = [
     "parcel_frontage_this", "parcel_frontage_other", "parcel_frontage_share", "parcel_buildings",
     "parcel_largest", "parcel_area_m2", "parcel_size_ratio", "pool_m",
 ]
+# TIGER-reliability inputs (owner, 2026-11-19: "the way you use machine learning is where tiger data is with its
+# original issues"): most inputs are built on TIGER's ranges, and the ranker has no way to know when they're
+# placeholders or badly split. Per address, from TIGER and the address list only:
+#   tiger_inflation  the side's highest TIGER number / the list's highest on that side (Eider Lane: 99 / 43)
+#   tiger_uneven     max / min numbers-per-meter over the side's ranged pieces (Maquoit Drive: ~20)
+#   cover_crammed    the covering piece's numbers per meter / the street's median (Lewiston Road's 72 m stub)
+# False = off (not computed, not model inputs).
+RELIABILITY = False
+RELIABILITY_COLS = ["tiger_inflation", "tiger_uneven", "cover_crammed"]
+
+
+def reliability_features(address_df, segments) -> dict:
+    """{address_id: (tiger_inflation, tiger_uneven, cover_crammed)}."""
+    seg_keys = ("label_street", "tlid", "lfromadd", "ltoadd", "rfromadd", "rtoadd", "geometry", "length_m")
+    by_street = defaultdict(list)
+    for row in segments:
+        by_street[row[0]].append(dict(zip(seg_keys, row[:8])))
+    side_top = defaultdict(int)
+    for street, n in zip(address_df["street"], address_df["number"]):
+        side_top[(street, n % 2)] = max(side_top[(street, n % 2)], int(n))
+    stats = {}
+    for street, segs in by_street.items():
+        dens_all, per_side = [], defaultdict(list)
+        top = defaultdict(int)
+        for seg in segs:
+            length = float(seg["length_m"] or 0)
+            for a, b in (("lfromadd", "ltoadd"), ("rfromadd", "rtoadd")):
+                lo, hi = _int_or_none(seg[a]), _int_or_none(seg[b])
+                if lo is None or hi is None or length <= 0:
+                    continue
+                d = max(abs(hi - lo), 2) / length
+                dens_all.append(d)
+                if lo % 2 == hi % 2:
+                    per_side[lo % 2].append(d)
+                    top[lo % 2] = max(top[lo % 2], lo, hi)
+        med = float(np.median(dens_all)) if dens_all else np.nan
+        stats[street] = (per_side, top, med, {s["tlid"]: s for s in segs})
+    out = {}
+    for aid, street, n, cover in zip(address_df["id"], address_df["street"], address_df["number"],
+                                     address_df.get("cover_tlid", [None] * len(address_df))):
+        if street not in stats:
+            out[aid] = (np.nan, np.nan, np.nan)
+            continue
+        per_side, top, med, by_tlid = stats[street]
+        par = int(n) % 2
+        lt = side_top.get((street, par)) or 0
+        infl = top[par] / lt if lt and top.get(par) else np.nan
+        dl = per_side.get(par, [])
+        uneven = max(dl) / min(dl) if len(dl) >= 2 and min(dl) > 0 else 1.0
+        crammed = np.nan
+        seg = by_tlid.get(cover)
+        if seg is not None and med and med == med:
+            ds = [max(abs(_int_or_none(seg[b]) - _int_or_none(seg[a])), 2) / max(float(seg["length_m"] or 0), 1.0)
+                  for a, b in (("lfromadd", "ltoadd"), ("rfromadd", "rtoadd"))
+                  if _int_or_none(seg[a]) is not None and _int_or_none(seg[b]) is not None]
+            crammed = max(ds) / med if ds else np.nan
+        out[aid] = (infl, uneven, crammed)
+    return out
+
+
 # canopy_over / canopy_ring / width_m (canopy.py) are computed for road
 # order's tree-covered rule but are not model inputs: as inputs they cost
 # TIGER 0.7 and E911 roads 1.2 points (Freeport, 2026-11-07).

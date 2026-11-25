@@ -665,3 +665,14 @@ def test_a_lot_the_tax_roll_puts_on_another_street_is_no_place_in_this_streets_o
     from address_inference import order
     lots = {(18, "CURTIS RD"): ["C"], (2, "DIAMOND DR"): ["D"], (16, "CURTIS RD"): ["B"]}
     assert order.lot_streets(lots) == {"C": {"CURTIS RD"}, "D": {"DIAMOND DR"}, "B": {"CURTIS RD"}}
+
+
+def test_monotone_assign_handles_more_than_127_numbers_on_a_side():
+    # Backpointers are int8; their arithmetic used to overflow past 127
+    # numbers under NumPy 2 (Harpswell: OverflowError, 139 out of bounds).
+    from address_inference.order import monotone_assign
+    k = 150
+    P = np.full((k, k), -5.0)
+    np.fill_diagonal(P, 1.0)  # number i belongs on building i
+    total, match = monotone_assign(P)
+    assert match == {i: i for i in range(k)}

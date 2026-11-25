@@ -43,7 +43,11 @@ read-write).
   segments by canonical name + location, never ZIP: `python -m
   address_inference.street_match "dbname=geocoding" me --town Freeport`
   (Freeport: 90.7% of addresses matched; the rest are on roads TIGER
-  lacks). Stage 2 attaches every building to each addressable TIGER
+  lacks). When TIGER gives a street's own name to pieces near under half
+  its points but another name runs along 80%+ of them, that name's
+  segments are added (`street_match.OTHER_NAME_*`; Harpswell's Basin Point
+  Road is TIGER's Basin Cove Rd), minus stubs under 60 m packing 10x+ the
+  street's numbers per meter (`CRAMMED_*`): Harpswell 51.1% -> 52.7%. Stage 2 attaches every building to each addressable TIGER
   segment within 200 m (side/position/distance): `python -m
   address_inference.attach "dbname=geocoding" me --town Freeport`. Stages
   3-4 train a LightGBM ranker on E911 labels and score it against today's
@@ -139,6 +143,23 @@ read-write).
   biggest building even when TIGER draws the street too far away for it to be
   a candidate (Dune Drive's TIGER line turns into the sand; 87-143 were
   "missed"): assessor TIGER 80.5% -> 82.2%, E911 roads 83.7% -> 83.8%.
+  The ranker also gets the addresser's own measure (`rate_spots.py`, owner's
+  "think like the addresser"): each number's spot = the road's start + number x
+  the street's meters per number along the merged street line (Bayview Road,
+  Harpswell: ~7.6 m, 210/mile), as `d_rate_len`/`d_rate_town`; with
+  `order.MATCH_BONUS` 0.3 -> 0.6, seven towns' right numbers 13,785 -> 14,238
+  (Yarmouth +217, Harpswell +123, Freeport -1). With the old MATCH_BONUS it cost
+  Freeport ~20 (village streets numbered in sequence, e.g. Holbrook Street),
+  although it helped Freeport's ranker alone (41.9% -> 45.7%).
+  Road order then applies the owner's count rule (`order.COUNT_RUNS`, on): between
+  two numbers it placed with probability >= 0.7 on a street side, a run where a
+  number was left out AND a house left empty, with as many houses as numbers, is
+  numbered in house order (TIGER ended High Head Road's odd 199-245 piece a few
+  houses early; 215-291 had each slid onto the house before theirs): Harpswell +9,
+  New Gloucester +1, the other five towns unchanged. Also triggering on two numbers
+  sharing a house cost Topsham 18 (a number with no footprint shares its
+  neighbor's house normally). Most switches tried around it are kept, off, with
+  their numbers in their comments.
 - Python tests: `.venv\Scripts\python -m pytest` (`tests/`) —
   each test creates and drops its own throwaway Postgres database (see
   `tests/conftest.py`'s `dsn` fixture)

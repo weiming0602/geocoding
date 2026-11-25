@@ -66,9 +66,9 @@ def test_driveway_features_compare_this_street_with_the_easiest_road():
     parcels = {"driveways": {"b": {"ASH RD": 900.0, "BIRCH RD": 300.0}},
                "driveway_off": {"b": {"ASH RD": 250.0, "BIRCH RD": 2.0}}}
     assert dataset._driveway_features("b", {"BIRCH RD"}, parcels) == {
-        "drive_ratio": 1.0, "drive_best": 1.0, "drive_off_m": 2.0}
+        "drive_ratio": 1.0, "drive_best": 1.0, "drive_off_m": 2.0, "drive_margin": 0.0}
     f = dataset._driveway_features("b", {"ASH RD"}, parcels)
-    assert f["drive_ratio"] == pytest.approx(3.0) and f["drive_best"] == 0.0
+    assert f["drive_ratio"] == pytest.approx(3.0) and f["drive_best"] == 0.0 and f["drive_margin"] == 600.0
     assert all(np.isnan(v) for v in dataset._driveway_features("b", {"ELM ST"}, parcels).values())
     assert all(np.isnan(v) for v in dataset._driveway_features("near_the_road", {"ASH RD"}, parcels).values())
 
