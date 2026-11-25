@@ -26,6 +26,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -e ".[dev]"
+      # the address_inference tests need the experiment's own packages (numpy, pandas, shapely, ...)
+      - run: pip install -r address_inference/requirements.txt
       - run: pytest
 
   server-tests:
