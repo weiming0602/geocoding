@@ -21,6 +21,8 @@ Phase 2-3); this is the Freeport proof.
 """
 
 import argparse
+from collections import defaultdict
+import os
 from datetime import date
 
 import lightgbm as lgb
@@ -405,7 +407,7 @@ def _evaluate(dsn, region, town, save=False, ranges="tiger", train_df=None):
     picks = dataset.baseline_picks(candidate_df)
     features = list(dataset.FEATURES)
     if dataset.RELIABILITY:
-        rel = dataset.reliability_features(address_df, loaded[1])
+        rel = dataset.reliability_features(address_df, dataset.reliability_segments(loaded[1]))
         cols = list(zip(*[rel.get(a, (np.nan, np.nan, np.nan)) for a in candidate_df["address_id"]]))
         candidate_df = candidate_df.assign(**{c: list(v) for c, v in zip(dataset.RELIABILITY_COLS, cols)})
         features += dataset.RELIABILITY_COLS
@@ -417,10 +419,11 @@ def _evaluate(dsn, region, town, save=False, ranges="tiger", train_df=None):
         candidate_df = rate_spots.add_rate_features(candidate_df, address_df, spots,
                                                     order.load_positions(dsn, region, town))
         extra = rate_spots.RATE_COLS + (["street_rate_m"] if rate_spots.WITH_STREET_RATE else [])
+        extra += (["d_rate_local"] if rate_spots.WITH_LOCAL_RATE else []) + (["d_rate_lots"] if rate_spots.WITH_LOT_RATE else [])
         if CAP_M0_KEEP is not None and CAP_RATE_KEEP is not None:
             eligible = None
             if CAP_RATE_MIN_INFLATION is not None:
-                rel = dataset.reliability_features(address_df, loaded[1])
+                rel = dataset.reliability_features(address_df, dataset.reliability_segments(loaded[1]))
                 eligible = {a for a, (infl, _u, _c) in rel.items() if infl == infl and infl >= CAP_RATE_MIN_INFLATION}
             candidate_df = cap_mix(candidate_df, CAP_M0_KEEP, CAP_RATE_KEEP, eligible)
     else:
@@ -443,6 +446,103 @@ def _evaluate(dsn, region, town, save=False, ranges="tiger", train_df=None):
     # Road order's own side judgment (dataset.ORDER_SIDE_REAL_FACTOR): after scoring, so nothing retrains.
     if dataset.ORDER_SIDE_REAL_FACTOR is not None and "same_side_order" in scored.columns:
         scored = scored.assign(same_side=scored["same_side_order"])
+    # Around a cul-de-sac either side (dataset.CUL_DE_SAC_M): after scoring, so nothing retrains.
+    if dataset.CUL_DE_SAC_M is not None and "end_dist_m" in scored.columns:
+        near_end = (scored["end_dist_m"] <= dataset.CUL_DE_SAC_M).fillna(False)
+        if dataset.CUL_DE_SAC_SKIP_COASTAL:
+            # owner: a road running out to the shore (Maquoit Drive) is no cul-de-sac
+            from .street_lines import street_lines
+            with psycopg.connect(dsn) as conn:
+                params = {"region": region.id, "town": town, "state_fips": region.state_fips}
+                street_lines(conn, params)
+                coastal = order.coastal_dead_ends(conn, params)
+            street_of = dict(zip(address_df["id"], address_df["street"]))
+            near_end &= ~scored["address_id"].map(street_of).isin(coastal)
+        if dataset.CUL_DE_SAC_PARITY_CHECK and near_end.any():
+            # a house at the end switches to a parity only if the ranker likes that parity at least as much as the
+            # other for it (Gray, Partridge Lane: 15's house stays odd; Todd Brook: 55's house, "even" by geometry, odd)
+            num_of = dict(zip(address_df["id"], address_df["number"]))
+            st_of = dict(zip(address_df["id"], address_df["street"]))
+            par = scored["address_id"].map(num_of).astype(int) % 2
+            pr = pd.DataFrame({"st": scored["address_id"].map(st_of), "b": scored["source_id"], "par": par,
+                               "p": order.probabilities(scored)})
+            best = pr.groupby(["st", "b", "par"])["p"].max().to_dict()
+            # a switch to the other side needs CUL_DE_SAC_PARITY_RATIO x the house's own side's best (Partridge Lane:
+            # 20 at 0.149 vs 15 at 0.140 is no evidence 15's end house is even)
+            ok = [best.get((st, b, pa), 0.0) >= (dataset.CUL_DE_SAC_PARITY_RATIO if not s0 else 1.0) * best.get((st, b, 1 - pa), 0.0)
+                  for st, b, pa, s0 in zip(pr["st"], pr["b"], pr["par"], scored["same_side"].astype(bool))]
+            near_end &= np.array(ok, dtype=bool)
+        if dataset.CUL_DE_SAC_SHORT_CHECK and near_end.any():
+            # an end house only crosses to a side that is short of houses: more numbers than distinct own-side top
+            # picks (Gray, Alling Drive: evens 2-20 already have their 6 houses, so 20 can't take 13's end house)
+            num_of = dict(zip(address_df["id"], address_df["number"]))
+            st_of = dict(zip(address_df["id"], address_df["street"]))
+            own_mask = scored["same_side"].astype(bool).to_numpy()
+            own = scored[own_mask].assign(_p=order.probabilities(scored)[own_mask])
+            top = own.sort_values(["address_id", "_p", "source_id"], ascending=[True, False, True]).drop_duplicates("address_id")
+            key = list(zip(address_df["street"], address_df["number"].astype(int) % 2))
+            n_numbers = pd.Series(1, index=pd.MultiIndex.from_tuples(key)).groupby(level=[0, 1]).sum().to_dict()
+            tk = list(zip(top["address_id"].map(st_of), top["address_id"].map(num_of).astype(int) % 2))
+            n_houses = pd.DataFrame({"k": tk, "b": top["source_id"].to_numpy()}).groupby("k")["b"].nunique().to_dict()
+            rk = list(zip(scored["address_id"].map(st_of), scored["address_id"].map(num_of).astype(int) % 2))
+            if dataset.CUL_DE_SAC_SHORT_CHECK == "count":
+                # houses a side seriously considers (own-side p >= CUL_DE_SAC_HOUSE_P), not top picks, which collide
+                # (Miles Way's 22 has no house of its own; Norton Farm's odds share a top pick): the giving side must
+                # keep one house per number after losing this one (Alling: odds 5 houses for 5 numbers keep 13's)
+                considered = own[own["_p"] >= dataset.CUL_DE_SAC_HOUSE_P]
+                ck = list(zip(considered["address_id"].map(st_of), considered["address_id"].map(num_of).astype(int) % 2))
+                n_cand = pd.DataFrame({"k": ck, "b": considered["source_id"].to_numpy()}).groupby("k")["b"].nunique().to_dict()
+                # a side with no numbers is never short (Breezy Acres: evens only, its end house can cross)
+                giver_tight = np.array([0 < n_numbers.get((st, 1 - pa), 0) >= n_cand.get((st, 1 - pa), 0) for st, pa in rk], dtype=bool)
+                near_end &= ~(~scored["same_side"].astype(bool) & giver_tight)
+            elif dataset.CUL_DE_SAC_SHORT_CHECK == "giver":
+                # the house's own side (the other parity) must not already be short: taking from it makes it slide
+                # (Alling: odds 5 numbers on 4 distinct picks keep 13's house; Miles Way: 22 alone gives fb9b to 11)
+                giver_short = np.array([n_numbers.get((st, 1 - pa), 0) > n_houses.get((st, 1 - pa), 0) for st, pa in rk], dtype=bool)
+                near_end &= ~(~scored["same_side"].astype(bool) & giver_short)
+            else:
+                short = np.array([n_numbers.get(k, 0) > n_houses.get(k, 0) for k in rk], dtype=bool)
+                near_end &= ~(~scored["same_side"].astype(bool) & ~short)
+        scored = scored.assign(same_side=scored["same_side"].astype(bool) | near_end)
+    if dataset.CUL_DE_SAC_ENTRY_M is not None:
+        from .street_names import canonical
+        with psycopg.connect(dsn) as conn:
+            ends = {(sid, canonical(road)) for sid, road in conn.execute(
+                dataset.CUL_DE_SAC_ENTRY_SQL, {"town": town, "m": float(dataset.CUL_DE_SAC_ENTRY_M), "min_piece": float(dataset.CUL_DE_SAC_MIN_PIECE_M), "near": float(dataset.CUL_DE_SAC_NEAR_M)})}
+        if ends:
+            street_of = {a: canonical(st) for a, st in zip(address_df["id"], address_df["street"])}
+            at_end = [(b, street_of.get(a)) in ends for a, b in zip(scored["address_id"], scored["source_id"])]
+            scored = scored.assign(same_side=scored["same_side"].astype(bool) | np.array(at_end, dtype=bool))
+    if dataset.LOOP_ENTRY_SIDE:
+        with psycopg.connect(dsn) as conn:
+            entries = conn.execute(dataset.LOOP_ENTRY_SQL, {"region": region.id, "town": town}).fetchall()
+            seg_of = {str(sg[1]): sg for sg in loaded[1]}
+            side_par = {}  # (street, source_id) -> parity of its side
+            for loop_tlid, entry_tlid, starts_at_loop, _e, _l, street in entries:
+                loop = seg_of.get(str(loop_tlid))
+                if loop is None:
+                    continue
+                lf, rf = dataset._int_or_none(loop[2]), dataset._int_or_none(loop[4])
+                left_par = lf % 2 if lf is not None else (1 - rf % 2 if rf is not None else None)
+                if left_par is None:
+                    continue
+                for sid, side in conn.execute("SELECT source_id, side FROM address_inference.building_segments "
+                                              "WHERE tlid = %s AND NOT at_end", (str(entry_tlid),)).fetchall():
+                    travel_left = (side == "R") if starts_at_loop else (side == "L")
+                    side_par[(street, sid)] = left_par if travel_left else 1 - left_par
+        if side_par:
+            st_of = dict(zip(address_df["id"], address_df["street"]))
+            num_of = dict(zip(address_df["id"], address_df["number"]))
+            par = [side_par.get((st_of.get(a), b)) for a, b in zip(scored["address_id"], scored["source_id"])]
+            new_same = [s0 if p is None else int(num_of[a]) % 2 == p
+                        for a, p, s0 in zip(scored["address_id"], par, scored["same_side"].astype(bool))]
+            scored = scored.assign(same_side=np.array(new_same, dtype=bool))
+    order._CUL_POS.clear()
+    if order.CUL_LOTS_M is not None:
+        # lots around a dead end: their houses count for either side (and take the lot's place, load_positions)
+        order._CUL_POS.update(order.load_cul_de_sacs(dsn, region, town))
+        on_lot = [(st, b) in order._CUL_POS for st, b in zip(scored["address_id"].map(dict(zip(address_df["id"], address_df["street"]))), scored["source_id"])]
+        scored = scored.assign(same_side=scored["same_side"].astype(bool) | np.array(on_lot, dtype=bool))
     # The building at a number's road-start spot counts more in road order (rate_spots.RATE_BONUS).
     scored = rate_spots.rate_rescore(scored)
     # Numbers the addresser put across the road (cross_side.py).
@@ -456,6 +556,31 @@ def _evaluate(dsn, region, town, save=False, ranges="tiger", train_df=None):
     positions = order.load_positions(dsn, region, town)
     side_dirs = order.load_side_directions(dsn, region, town) if order.SIDE_DIRECTIONS else None
     order.set_guard_town(dsn, town)
+    if order.EMPTY_LOT_PLACES:
+        # empty house-sized lots are places too (a house hidden by trees): each joins its side's numbers' candidates
+        # as the weakest one, at its frontage; a number placed there is dropped (unplaced) after road order
+        places = order.empty_lot_places(dsn, region, town, loaded[1])
+        if places:
+            num_of = dict(zip(address_df["id"], address_df["number"]))
+            st_of = dict(zip(address_df["id"], address_df["street"]))
+            own = scored[scored["same_side"].astype(bool)]
+            weakest = own.sort_values(["address_id", "score", "source_id"]).drop_duplicates("address_id").set_index("address_id")
+            if order.EMPTY_LOT_SCORE == "median":
+                weakest = weakest.assign(score=own.groupby("address_id")["score"].median().reindex(weakest.index))
+            by_side = defaultdict(list)
+            for street, pid, along, lat, lon, par in places:
+                by_side[(street, par)].append((pid, lat, lon))
+                positions[(street, pid)] = along
+            extra = []
+            for aid, tmpl in weakest.iterrows():
+                for pid, lat, lon in by_side.get((st_of.get(aid), int(num_of[aid]) % 2), []):
+                    row = tmpl.copy()
+                    row["source_id"], row["lat"], row["lon"], row["same_side"] = pid, lat, lon, True
+                    if "dist_vs_nearest_road" in row.index:
+                        row["dist_vs_nearest_road"] = 0.0
+                    extra.append(row.rename(None).to_dict() | {"address_id": aid})
+            if extra:
+                scored = pd.concat([scored, pd.DataFrame(extra)], ignore_index=True)
     if parcels:
         # Each ordinary multi-building tax lot is one place along the road.
         parcel_of = {sid: info["parcel"] for sid, info in parcels["buildings"].items()}
@@ -509,6 +634,8 @@ def _evaluate(dsn, region, town, save=False, ranges="tiger", train_df=None):
                                                           positions, skip=sheds)
     if loners.LONER_ONE:
         picks["ML+order"] = loners.one_number(picks["ML+order"], scored, address_df, loner_ids, owner_streets)
+    if order.EMPTY_LOT_PLACES:
+        picks["ML+order"] = {a: b for a, b in picks["ML+order"].items() if not str(b).startswith("empty:")}
     assessor_matched = set()
     extra_coords = None
     if parcels:
@@ -531,6 +658,10 @@ def _evaluate(dsn, region, town, save=False, ranges="tiger", train_df=None):
     # property (parcels.py); the 12 m grouping covers buildings without one.
     if parcels:
         property_of.update({sid: "parcel:" + info["parcel"] for sid, info in parcels["buildings"].items()})
+    if order.EMPTY_LOT_PLACES:  # a number on an empty lot is unplaced, in every method built from road order
+        for name in list(picks):
+            if isinstance(picks[name], dict):
+                picks[name] = {a: b for a, b in picks[name].items() if not str(b).startswith("empty:")}
     table = [summarize("M0 interpolation (today)", score_method(address_df, candidate_df, None, property_of))]
     for name, label in (("M1", "M1 snap to building"), ("M2", "M2 rank order"),
                         ("M3", "M3 rank order, no outbuildings"), ("ML", "ML ranker (LightGBM)"),
