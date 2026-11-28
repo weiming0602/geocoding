@@ -605,7 +605,17 @@ export type TrainingMethod =
   // each street side: ML + road order or rural shapes, whichever has fewer issues
   | 'best_option'
   // ML + road order, but numbers road order itself couldn't place are 'review', not the ranker's guess
-  | 'ml_order_review';
+  | 'ml_order_review'
+  | 'ml_order_fixes'
+  | 'ml_order_pins'
+  | 'walk_paths'
+  | 'range_trim'
+  | 'range_trim_sides'
+  | 'rural_lot_max'
+  | 'rural_split'
+  | 'bigger_road'
+  | 'across_line'
+  | 'cul_de_sac';
 
 export type TrainingTown = { region: string; town: string; runDate: string; addresses: number };
 

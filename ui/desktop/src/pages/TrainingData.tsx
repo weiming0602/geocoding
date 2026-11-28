@@ -60,6 +60,16 @@ const METHOD_LABELS: Record<TrainingMethod, string> = {
   rural_osm: 'Rural shapes on OSM roads only (no TIGER), internal',
   best_option: 'Best option per street side (fewest issues), no tax roll',
   ml_order_review: 'ML + road order, numbers road order could not place left for review',
+  ml_order_fixes: 'Test 2026-11-20: road order + side fix, own-driveway homes, count fixes (no E911)',
+  ml_order_pins: 'Test 2026-11-20: same + E911 two-number buildings pinned (best case, internal)',
+  walk_paths: 'Test 2026-11-25: ML + road order + coastal lot walk + own driveways (no range trim)',
+  range_trim: 'Test 2026-11-25: same + range trim (TIGER ranges pulled in to the street\'s own numbers)',
+  range_trim_sides: 'Test 2026-11-25: same + range trim only where the two sides\' TIGER ends disagree (20+)',
+  rural_lot_max: 'Test 2026-11-25: same + rural lot rule (a rural lot\'s 2 biggest buildings are its homes; barns 600 m2+ not counted)',
+  rural_split: 'Test 2026-11-25: same + a rural lot\'s houses are separate places, one number each, only lots with two house-sized buildings (100 m2+, 75%+ of the biggest)',
+  bigger_road: 'Test 2026-11-25: rural lot rule + a house tied to two roads goes to the bigger road when its driveway agrees (3 Sequoia Drive)',
+  across_line: 'Test 2026-11-26: rural lot rule + a house on the next town\'s tax lot takes that lot\'s street (3 Sequoia Drive: Yarmouth lot 607 Granite St)',
+  cul_de_sac: 'Test 2026-11-27: previous + a house at a dead end may cross sides only when the ranker clearly prefers it and its side keeps a house per number (Carriage Rd 4-20; Gray Partridge Ln, Alling Dr). Gray also: loop numbered the way the entry road runs straight into (Krames Point Rd) + a shore house beside an empty lot may carry its number (52/54 Aquilla Rd)',
 };
 const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   ml_order: 'ml',
@@ -85,6 +95,16 @@ const BASE_METHOD: Record<TrainingMethod, TrainingMethod> = {
   rural_osm: 'ml_order',
   best_option: 'ml_order',
   ml_order_review: 'ml_order',
+  ml_order_fixes: 'ml_order',
+  ml_order_pins: 'ml_order',
+  walk_paths: 'ml_order',
+  range_trim: 'ml_order',
+  range_trim_sides: 'ml_order',
+  rural_lot_max: 'ml_order',
+  rural_split: 'ml_order',
+  bigger_road: 'ml_order',
+  across_line: 'ml_order',
+  cul_de_sac: 'ml_order',
   house_on_lot: 'ml_order',
 };
 // Rural shapes (data/session_2026-11-11_pownal/rural_shapes.py): what decided each number.
