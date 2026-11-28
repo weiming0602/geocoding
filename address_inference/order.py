@@ -180,6 +180,36 @@ def street_priority(address_df, street_classes) -> list:
 # at 77, 190, 300 and 371 m -- 12, 22, 42, 44 in order -- while 22's house,
 # deep behind lot 42, projects to 336 m, after lot 42's front house (315 m).
 LOT_FRONTAGE_M = 15
+# Owner (2026-11-26, 39/41 Maquoit Drive): a lot whose 15 m frontage buffer meets the street line in two places (lot
+# 41 near Maquoit's start AND where the road comes back round the peninsula) got the centroid of both stretches,
+# ~450 m along, so 41's house sat far past 51. With LOT_POS_NEAREST_PART, a building takes the stretch of its lot's
+# frontage nearest to itself. False = the old centroid.
+LOT_POS_NEAREST_PART = False
+LOT_POSITIONS_NEAREST_SQL = f"""
+WITH lines AS (SELECT street, g FROM street_lines WHERE ST_GeometryType(g) = 'ST_LineString'), bl AS (
+    SELECT l.street, l.g, bp.source_id, bp.parcel_id, b.inner_point, p.geom AS lot
+    FROM lines l
+    JOIN address_inference.parcels p
+      ON p.state_fips = %(state_fips)s AND p.town = %(town)s AND p.geom && ST_Expand(l.g, 0.0003)
+     AND ST_DWithin(p.geom::geography, l.g::geography, {LOT_FRONTAGE_M})
+    JOIN address_inference.building_parcels bp ON bp.parcel_id = p.parcel_id
+    JOIN address_inference.structures b ON b.state_fips = bp.state_fips AND b.source_id = bp.source_id
+    WHERE (SELECT count(*) FROM address_inference.building_parcels b2 WHERE b2.parcel_id = p.parcel_id) <= {{max_buildings}}
+), part AS (
+    SELECT DISTINCT ON (bl.street, bl.source_id) bl.street, bl.source_id, bl.g, bl.inner_point, d.geom AS piece
+    FROM bl CROSS JOIN LATERAL ST_Dump(ST_Intersection(bl.g, ST_Buffer(bl.lot::geography, {LOT_FRONTAGE_M})::geometry)) d
+    WHERE ST_Dimension(d.geom) = 1
+    ORDER BY bl.street, bl.source_id, ST_Distance(d.geom, bl.inner_point)
+)
+SELECT street, source_id,
+       ST_LineLocatePoint(g, ST_Centroid(piece)) * ST_Length(g::geography) AS along,
+       ST_Distance(g::geography, inner_point::geography) AS back_m,
+       ST_LineLocatePoint(g, ST_StartPoint(piece)) * ST_Length(g::geography) AS a,
+       ST_LineLocatePoint(g, ST_EndPoint(piece)) * ST_Length(g::geography) AS b
+FROM part
+"""
+
+
 LOT_POSITIONS_SQL = f"""
 WITH lines AS (SELECT street, g FROM street_lines), touch AS (
     SELECT l.street, p.parcel_id,
@@ -310,8 +340,12 @@ def load_positions(dsn, region, town, by_lot=BY_LOT, entry_min_back_m=None, entr
         if by_lot and not conn.execute("SELECT to_regclass('address_inference.building_parcels') IS NULL").fetchone()[0]:
             only = coastal_dead_ends(conn, params) if by_lot in ("coastal", "within") else None
             own_drive = own_drive_homes(conn, town) if LOT_OWN_DRIVE_M else set()
-            sql = LOT_POSITIONS_SQL.replace("{max_buildings}", str(LOT_MAX_BUILDINGS))
-            for street, source_id, along, back_m, lo, hi in conn.execute(sql, params).fetchall():
+            sql = (LOT_POSITIONS_NEAREST_SQL if LOT_POS_NEAREST_PART else LOT_POSITIONS_SQL).replace(
+                "{max_buildings}", str(LOT_MAX_BUILDINGS))
+            rows = conn.execute(sql, params).fetchall()
+            if LOT_POS_NEAREST_PART:
+                rows = [(st, sid, al, bk, min(a, b), max(a, b)) for st, sid, al, bk, a, b in rows]
+            for street, source_id, along, back_m, lo, hi in rows:
                 # Coastal dead ends (lots numbered in columns), and anywhere a
                 # house sits far back at the end of a long driveway: its
                 # number belongs where its lot -- the driveway -- meets the
@@ -361,9 +395,69 @@ def load_positions(dsn, region, town, by_lot=BY_LOT, entry_min_back_m=None, entr
                 base = (max if at_start else min)(out[(street, s)] for s, _ in members)
                 for s, dist in members:
                     out[(street, s)] = base - dist if at_start else base + dist
+                    if (street, s) in _RAW_POS:  # a split lot house past the end keeps this spot too
+                        _RAW_POS[(street, s)] = out[(street, s)]
+    if CUL_LOTS_M is not None:
+        for k, v in _CUL_POS.items():
+            if k in out:
+                out[k] = v
+                if k in _RAW_POS:
+                    _RAW_POS[k] = v
     return out
 
 
+# Owner (2026-11-26, Todd Brook Road, Freeport): around a cul-de-sac, lots first. The tax lots that come within
+# CUL_LOTS_M of a street's dead end are numbered in order around it (45, 55, 61 round Todd Brook's circle), then each
+# lot's number goes to the house on it (61's house sits 125 m back on its lot and projects 109 m before the end). With
+# CUL_LOTS_M set, those lots' buildings take a place past the end by the lot's angle around the dead end -- swept from
+# the street's left, over the far end, to its right -- and count for either side (evaluate swaps that in after
+# scoring; the model is untouched). None = off.
+CUL_LOTS_M = None
+CUL_ARC_M = 10.0  # meters of "along" per radian of sweep
+CUL_MIN_PIECE_M = 60.0  # the dead end of a street line at least this long (no TIGER stubs)
+_CUL_POS: dict = {}  # (street, source_id) -> place past the dead end
+CUL_LOTS_SQL = """
+WITH lines AS (SELECT street, g, ST_Length(g::geography) AS len FROM street_lines
+               WHERE ST_GeometryType(g) = 'ST_LineString'),
+ends AS (
+    SELECT street, ST_EndPoint(g) AS p, ST_LineInterpolatePoint(g, greatest(0, 1 - 30 / len)) AS q, len AS along, 1 AS sgn
+    FROM lines WHERE len >= %(min_len)s
+    UNION ALL
+    SELECT street, ST_StartPoint(g), ST_LineInterpolatePoint(g, least(1, 30 / len)), 0.0, -1
+    FROM lines WHERE len >= %(min_len)s
+), dead AS (
+    SELECT * FROM ends e
+    WHERE (SELECT count(*) FROM streets o WHERE o.geom && ST_Expand(e.p, 0.0001)
+             AND ST_DWithin(o.geom::geography, e.p::geography, 2)) <= 1
+), lots AS (
+    SELECT d.street, d.along, d.sgn, pc.parcel_id,
+           atan2((ST_X(d.p) - ST_X(d.q)) * (ST_Y(c.c) - ST_Y(d.p)) - (ST_Y(d.p) - ST_Y(d.q)) * (ST_X(c.c) - ST_X(d.p)) * cos(radians(ST_Y(d.p))) ^ 2,
+                 (ST_X(d.p) - ST_X(d.q)) * (ST_X(c.c) - ST_X(d.p)) * cos(radians(ST_Y(d.p))) ^ 2 + (ST_Y(d.p) - ST_Y(d.q)) * (ST_Y(c.c) - ST_Y(d.p))) AS theta
+    FROM dead d
+    JOIN address_inference.parcels pc ON pc.state_fips = %(state_fips)s AND pc.town = %(town)s
+         AND pc.geom && ST_Expand(d.p, 0.0006) AND ST_DWithin(pc.geom::geography, d.p::geography, %(bulb)s)
+    CROSS JOIN LATERAL (SELECT ST_PointOnSurface(pc.geom) AS c) c
+    WHERE (SELECT count(*) FROM address_inference.building_parcels b2 WHERE b2.parcel_id = pc.parcel_id) <= 3
+)
+SELECT l.street, bp.source_id, l.along + l.sgn * (pi() / 2 - l.theta + pi() / 2) * %(arc)s
+FROM lots l JOIN address_inference.building_parcels bp ON bp.parcel_id = l.parcel_id
+"""
+
+
+def load_cul_de_sacs(dsn, region, town) -> dict:
+    """{(street, source_id): place past the dead end} for buildings on lots around a dead end (CUL_LOTS_M)."""
+    params = {"region": region.id, "town": town, "state_fips": region.state_fips, "bulb": float(CUL_LOTS_M),
+              "arc": float(CUL_ARC_M), "min_len": float(CUL_MIN_PIECE_M)}
+    with psycopg.connect(dsn) as conn:
+        street_lines(conn, params)
+        return {(st, sid): float(v) for st, sid, v in conn.execute(CUL_LOTS_SQL, params).fetchall()}
+
+
+# Owner (2026-11-26, 39 Maquoit Drive): a house whose traced driveway (driveways.py) reaches this street as its
+# cheapest road, within DRIVE_CONFIRM_OFF_M of pavement, gets DRIVE_CONFIRM_BONUS in road order (untraced lot-fill and
+# eye-checked buildings get none). None/0 = off.
+DRIVE_CONFIRM_BONUS = None
+DRIVE_CONFIRM_OFF_M = 15.0
 PAST_END_BY_DISTANCE = False
 PAST_END_MIN_M = 30  # only buildings at least this far from the dead end
 PAST_END_SQL = """
@@ -483,6 +577,15 @@ END_SLOT_HOMES = True   # count only home buildings (their nearest road is this 
 MAX_PER_BUILDING = 2
 # Sharing a building costs this instead of SHARE_PENALTY on a street side with more numbers than houses. None = off.
 SURPLUS_SHARE_PENALTY = None
+# Owner (2026-11-25, 104/106 Maquoit Drive: two dwellings on one lot; 106's driveway merges into 104's in the NAIP
+# trace): count a side's numbers against its places -- with more numbers than places, a lot place holding 2+
+# dwellings (HOME_CLASSES, >= TWO_DWELLING_MIN_M2) may take a second number at TWO_DWELLING_SHARE, and
+# spread_within_lots gives each house one in order along the street. None = off.
+TWO_DWELLING_SHARE = None
+TWO_DWELLING_MIN_M2 = 40.0
+TWO_DWELLING_SURPLUS = True  # only on sides with more numbers than places; False = always allowed
+_TWO_DWELL_PLACES: set = set()
+_NEIGHBOR_LOTS: set = set()  # NEIGHBOR_SPLIT_MODE "share" lots (no surplus needed)
 
 
 def lane_end(df) -> pd.Series:
@@ -521,6 +624,71 @@ PIN_SCORE = 100.0  # a pinned pair's score: always chosen
 COUNT_RUNS = True  # on 2026-11-19: 7 towns, drop_and_empty trigger: Harpswell +9, New Gloucester +1, others 0, none broke
 COUNT_TRIGGER = "drop_and_empty"  # "any" (also two numbers on one place): Topsham -18, Gray -3; "drop_and_empty": only a run with a number left out and a house left empty
 COUNT_USE_ENDS = False  # also count from the side's start / to its end (no confident anchor needed)
+# Owner's count-first rule on rural roads (2026-11-25, Webster Road, Freeport: 46 empty lot | 48, 50 on lot "52"'s
+# two houses | 52 | 54 | 58, 62 on lot "62"'s two houses -- every number one house, in order). On a street side whose
+# homes are mostly on rural lots (LOT_MAX_HOMES's lots), the side's two ends count as anchors and a run may have up to
+# COUNT_RURAL_EXTRA_MAX more homes than numbers. Road order's ranker is unsure all along Webster (0.22-0.36; the only
+# 0.7 anchors were 24 and 114), so no run was counted and 50 stayed left out. Needs LOT_MAX_HOMES; best with
+# RURAL_SPLIT_LOTS (a rural lot's houses are separate places, not one lot place) and RURAL_NO_SHARE. False = off.
+COUNT_RURAL_ENDS = False
+COUNT_RURAL_EXTRA_MAX = 2
+RURAL_SPLIT_LOTS = False
+# ...only lots whose second building (after LOT_MAX_HOMES's skips, barns aside) is house-sized: >= RURAL_SPLIT_MIN_M2
+# and >= RURAL_SPLIT_MIN_RATIO of the biggest (Webster's lot "52": 149/121 m2, lot "62": 165/139 m2). Splitting
+# every rural lot cost Freeport 82 (Flying Point -11, Durham -10): a garage kept as a lot's "second home" became
+# its own place and took a number. None = split every rural lot.
+RURAL_SPLIT_MIN_M2 = None
+RURAL_SPLIT_MIN_RATIO = 0.6
+_RURAL_SPLIT: set = set()
+RURAL_SPLIT_SQL = """
+WITH b AS (
+    SELECT bp.parcel_id, bp.source_id, coalesce(nullif(bl.roof_m2, 0), s.sqmeters) AS m2
+    FROM address_inference.building_parcels bp
+    JOIN address_inference.structures s ON s.state_fips = bp.state_fips AND s.source_id = bp.source_id
+    LEFT JOIN address_inference.building_lidar bl ON bl.state_fips = s.state_fips AND bl.source_id = s.source_id
+    WHERE bp.state_fips = '23' AND bp.source_id = ANY(%(rural)s) AND NOT bp.source_id = ANY(%(skipped)s)
+      AND (%(barn)s::float IS NULL OR coalesce(nullif(bl.roof_m2, 0), s.sqmeters) < %(barn)s::float)
+), r AS (
+    SELECT parcel_id, source_id, m2, row_number() OVER (PARTITION BY parcel_id ORDER BY m2 DESC, source_id) AS rk,
+           max(m2) OVER (PARTITION BY parcel_id) AS top
+    FROM b
+)
+SELECT b.source_id FROM b JOIN r r2 ON r2.parcel_id = b.parcel_id AND r2.rk = 2
+WHERE r2.m2 >= %(min_m2)s AND r2.m2 >= %(ratio)s * r2.top
+"""
+# Owner (2026-11-26, Maquoit Drive lot 72, Freeport): along the coast a lot normally holds one house (space and
+# privacy), but some hold two similar houses (lot 72: a new house by the road + an older one by the water, numbered
+# 72 and 70). With SHORE_SPLIT_M set, a lot with a building within SHORE_SPLIT_M of water whose second building
+# (after LOT_MAX_HOMES's skips) is house-sized -- >= SHORE_SPLIT_MIN_M2 and >= SHORE_SPLIT_MIN_RATIO of the biggest
+# (lidar roof or outline, whichever is bigger) -- has its two biggest buildings as separate places, each at its own
+# spot along the road. None = off.
+SHORE_SPLIT_M = None
+SHORE_SPLIT_MIN_M2 = 80.0
+SHORE_SPLIT_MIN_RATIO = 0.4
+SHORE_SPLIT_RESIDENTIAL = True
+_SHORE_SPLIT: set = set()
+SHORE_SPLIT_SQL = """
+WITH b AS (
+    SELECT bp.parcel_id, bp.source_id, greatest(coalesce(bl.roof_m2, 0), s.sqmeters) AS m2,
+           s.occ_cls = 'Residential' AS res
+    FROM address_inference.building_parcels bp
+    JOIN address_inference.structures s ON s.state_fips = bp.state_fips AND s.source_id = bp.source_id
+    JOIN towns t ON t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s) AND ST_Intersects(t.geom, s.inner_point)
+    LEFT JOIN address_inference.building_lidar bl ON bl.state_fips = s.state_fips AND bl.source_id = s.source_id
+    WHERE bp.state_fips = '23' AND NOT bp.source_id = ANY(%(skipped)s)
+), lots AS (
+    SELECT parcel_id FROM b GROUP BY parcel_id
+    HAVING count(*) BETWEEN 2 AND %(max_n)s AND bool_or(source_id = ANY(%(shore)s))
+), r AS (
+    SELECT b.*, row_number() OVER (PARTITION BY b.parcel_id ORDER BY m2 DESC, source_id) AS rk,
+           max(m2) OVER (PARTITION BY b.parcel_id) AS top
+    FROM b JOIN lots USING (parcel_id)
+)
+SELECT r.source_id FROM r JOIN r r2 ON r2.parcel_id = r.parcel_id AND r2.rk = 2
+JOIN r r1 ON r1.parcel_id = r.parcel_id AND r1.rk = 1
+WHERE r.rk <= 2 AND r2.m2 >= %(min_m2)s AND r2.m2 >= %(ratio)s * r2.top
+  AND (NOT %(res_only)s OR (r1.res AND r2.res))
+"""
 COUNT_SURPLUS_MAX = 0  # runs with up to this many more numbers than houses (some houses hold two)
 COUNT_EXTRA_MAX = 0  # runs with up to this many more home places than numbers (all numbers placed)
 COUNT_SIDE_MAJORITY = False  # a run's houses: same-side candidates for at least half its numbers
@@ -551,7 +719,11 @@ def count_runs(mapping, numbers, order, direction, street, positions, home, prob
     # (number, place index) anchors; with COUNT_USE_ENDS the side's two ends count as anchors too (Maquoit Drive,
     # Freeport: road order is confident about no number on either side, so no run between anchors exists)
     anchors = [(n, idx.get(mapping[n])) for n in conf]
-    if COUNT_USE_ENDS:
+    homes = [b for b in order if (street, b) in home]
+    rural_side = (COUNT_RURAL_ENDS and bool(homes)
+                  and sum(str(b) in _RURAL_PLACES for b in homes) >= WALK_SHORE_SHARE * len(homes))
+    extra_max = COUNT_RURAL_EXTRA_MAX if rural_side else COUNT_EXTRA_MAX
+    if COUNT_USE_ENDS or rural_side:
         anchors = [(-np.inf, -1)] + anchors + [(np.inf, len(order))]
     for (a, ia), (z, iz) in zip(anchors, anchors[1:]):
         if ia is None or iz is None or iz - ia < 2:
@@ -574,7 +746,7 @@ def count_runs(mapping, numbers, order, direction, street, positions, home, prob
                              and (_SIZE.get(b) or 0) < COUNT_SKIP_SMALL_M2)
                      and not (COUNT_SKIP_ANCHOR_LOT and _LOT.get(b) in anchor_lots)]
         extra = len(run_b) - len(run_n)
-        if not run_n or extra > COUNT_EXTRA_MAX or (extra < 0 and -extra > COUNT_SURPLUS_MAX):
+        if not run_n or extra > extra_max or (extra < 0 and -extra > COUNT_SURPLUS_MAX):
             continue
         used = [mapping.get(n) for n in run_n]
         placed = [u for u in used if u]
@@ -695,6 +867,135 @@ def monotone_assign(P, share_penalty=None, max_per_building=None, skip_score=Non
                 out[i - 1 - step] = j - 1
             i, j = i - 1 - c, j - 1
     return D[k, m], out
+
+
+# Owner's lot walk (2026-11-25, 60 Maquoit Drive): walk the road lot by lot and add up the road passed -- wide shore
+# lots take more road per number, narrow ones less -- and the next number lands where that road fits its gap. With
+# WALK_WEIGHT set, road order also pays WALK_WEIGHT x misfit between each two consecutive placed numbers on a side:
+# misfit = |road between their places - number gap x the side's meters per number| in numbers, capped at WALK_CAP.
+# A slid stretch (every number one house ahead) breaks that fit where it starts and ends. None = off.
+WALK_WEIGHT = None
+WALK_CAP = 3.0
+WALK_MAX_SKIP = 2  # numbers left out between two placed ones that the walk still links
+# "side": one meters-per-number for the whole side; "local": half the median spacing of the WALK_LOCAL_WINDOW places
+# each side of a place (two numbers per house on one side), so village and rural stretches each keep their own pace
+WALK_RATE = "side"
+# Owner (2026-11-25): the walk only on roads along the coast. With WALK_SHORE_M set, a street side (or with
+# WALK_SHORE_BY "street", the whole street) walks only when at least WALK_SHORE_SHARE of its places have a building
+# within WALK_SHORE_M of open water (building_water, NAIP). None = every road.
+WALK_SHORE_M = None
+WALK_SHORE_SHARE = 0.5
+WALK_SHORE_BY = "side"
+_SHORE_PLACES: set = set()  # places (buildings and lot:pid) with a building within WALK_SHORE_M of water
+# Owner (2026-11-25, Webster Road, Freeport): rural lots have big space around their buildings, like the coast's. With
+# WALK_RURAL, a street (side) also walks when WALK_SHORE_SHARE of its places are on rural lots (LOT_MAX_HOMES's lots:
+# >= LOT_MAX_HOMES_MIN_LOT_M2, residential). Webster's 88-26 over 1.4 km pulled every even spot ~190 m back: road
+# order left 50 out and 52-58 each took the house before theirs. Needs LOT_MAX_HOMES on. False = coast only.
+WALK_RURAL = False
+_RURAL_PLACES: set = set()
+WALK_LOCAL_WINDOW = 4
+# Score of leaving a number out inside the walk (owner: "we don't drop street numbers easily"; at 0, 102 and 106
+# Maquoit were dropped and fell back onto 120/122's house). None = SKIP_SCORE as road order.
+WALK_SKIP_SCORE = None
+
+
+# Owner (2026-11-27, 38 Aquilla Road, Gray: "38 should be a primary building ... vegetation between 36 and 38, 38 and
+# 40 worked as separators for privacy"): a number missing between two neighbors on a side (36, 40: no 38 in the list)
+# is a house E911 never pointed at. Road order gets GAP_SKIP_BONUS for each house it leaves free between two
+# consecutive placed numbers, up to the count of numbers missing between them (none for free houses where nothing is
+# missing). 38's house stays free instead of taking 40. None = off.
+GAP_SKIP_BONUS = None
+
+
+def walk_assign(P, along, nums, share_penalty=None, skip_score=None):
+    """monotone_assign plus the lot-walk cost between consecutive placed numbers (at most 2 per building)."""
+    penalty = SHARE_PENALTY if share_penalty is None else share_penalty
+    skip = SKIP_SCORE if skip_score is None else skip_score
+    skip = 0.0 if skip is None else skip
+    if WALK_SKIP_SCORE is not None:
+        skip = float(WALK_SKIP_SCORE)
+    k, m = P.shape
+    pen = np.broadcast_to(np.asarray(penalty, dtype=float), (m,)).copy()
+    if (MAX_PER_BUILDING or 1) < 2:
+        pen[:] = np.inf
+    span_n = float(nums[-1] - nums[0])
+    rate = (float(along.max() - along.min()) / span_n) if span_n > 0 else 0.0
+    if rate <= 0 or k < 2:
+        return monotone_assign(P, share_penalty=share_penalty, skip_score=skip_score)
+    rate_j = np.full(m, rate)
+    if WALK_RATE == "local" and m >= 3:
+        gaps = np.diff(along)
+        for j in range(m):
+            w = gaps[max(0, j - WALK_LOCAL_WINDOW): j + WALK_LOCAL_WINDOW]
+            w = w[w > 1.0]
+            if len(w):
+                rate_j[j] = max(float(np.median(w)) / 2, 1.0)
+    NEG = -np.inf
+    F = np.full((k, m, 2), NEG)
+    bi = np.full((k, m, 2), -1, dtype=np.int64)
+    bj = np.full((k, m, 2), -1, dtype=np.int64)
+    bc = np.full((k, m, 2), -1, dtype=np.int64)
+    dx = along[None, :] - along[:, None]  # [j_prev, j]
+    ahead = np.triu(np.ones((m, m), dtype=bool), 1)
+    cols = np.arange(m)
+    between = np.maximum(cols[None, :] - cols[:, None] - 1, 0).astype(float)  # free places between j_prev and j
+
+    def misfit(dpos, dn):
+        r = rate_j[None, :] if np.ndim(dpos) == 2 else rate_j
+        return np.minimum(np.abs(dpos - dn * r) / r / max(dn, 2) * 2, WALK_CAP)
+
+    for i in range(k):
+        F[i, :, 0] = P[i] + skip * i  # the first placed number
+        for ip in range(max(0, i - 1 - WALK_MAX_SKIP), i):
+            dn = float(nums[i] - nums[ip])
+            cost = WALK_WEIGHT * misfit(dx, dn)
+            if GAP_SKIP_BONUS is not None:
+                # numbers missing between them (same parity, minus the ones the list has but this pass skips)
+                missing = max(dn / 2.0 - 1.0 - (i - ip - 1), 0.0)
+                cost = cost - GAP_SKIP_BONUS * np.minimum(between, missing)
+            for c in (0, 1):
+                src = F[ip, :, c]
+                if not np.isfinite(src).any():
+                    continue
+                G = np.where(ahead, src[:, None] - cost, NEG) + skip * (i - ip - 1)
+                jb = G.argmax(axis=0)
+                cand = G[jb, cols] + P[i]
+                upd = cand > F[i, :, 0]
+                F[i, upd, 0] = cand[upd]
+                bi[i, upd, 0], bj[i, upd, 0], bc[i, upd, 0] = ip, jb[upd], c
+        if i > 0:
+            cand = F[i - 1, :, 0] + P[i] - pen - WALK_WEIGHT * misfit(0.0, float(nums[i] - nums[i - 1]))
+            ok = np.isfinite(cand)
+            F[i, ok, 1] = cand[ok]
+            bi[i, ok, 1], bj[i, ok, 1], bc[i, ok, 1] = i - 1, cols[ok], 0
+    total, state = skip * k, None
+    for i in range(k):
+        for c in (0, 1):
+            j = int(F[i, :, c].argmax())
+            v = F[i, j, c] + skip * (k - 1 - i)
+            if v > total:
+                total, state = v, (i, j, c)
+    out = {}
+    while state is not None and state[0] >= 0:
+        i, j, c = state
+        out[i] = j
+        state = (int(bi[i, j, c]), int(bj[i, j, c]), int(bc[i, j, c])) if bi[i, j, c] >= 0 else None
+    return total, out
+
+
+def _road_assign(P, share_penalty, order_, direction, street, positions, numbers):
+    """monotone_assign, or walk_assign when WALK_WEIGHT is set and every place has a position."""
+    if WALK_WEIGHT is None or any((street, b) not in positions for b in order_):
+        return monotone_assign(P, share_penalty=share_penalty)
+    if WALK_SHORE_M is not None:
+        places = order_ if WALK_SHORE_BY == "side" else [b for (s_, b) in positions if s_ == street]
+        shore = bool(places) and sum(str(b) in _SHORE_PLACES for b in places) >= WALK_SHORE_SHARE * len(places)
+        rural = (WALK_RURAL and bool(places)
+                 and sum(str(b) in _RURAL_PLACES for b in places) >= WALK_SHORE_SHARE * len(places))
+        if not (shore or rural):
+            return monotone_assign(P, share_penalty=share_penalty)
+    along = np.array([positions[(street, b)] * direction for b in order_], dtype=float)
+    return walk_assign(P, along, np.asarray(numbers, dtype=float), share_penalty=share_penalty)
 
 
 # Townhouse buildings: a run of 1-3 consecutive numbers, at most two of one
@@ -963,6 +1264,11 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
     lane = lane | drive_match(scored, address_df)  # end of a mapped drive from this street: its lane house
     if lane.any():
         scored = scored.assign(p=scored["p"] + LANE_BONUS * lane)
+    if DRIVE_CONFIRM_BONUS and {"drive_best", "drive_off_m"} <= set(scored.columns):
+        # owner (39 Maquoit Drive): the traced driveway confirms the house is this street's -- it outweighs a nearby
+        # side road (Retriever Lane) and TIGER stubs that pull the ranker toward untraced neighbors
+        confirm = (scored["drive_best"] == 1) & (scored["drive_off_m"] <= DRIVE_CONFIRM_OFF_M).fillna(False)
+        scored = scored.assign(p=scored["p"] + DRIVE_CONFIRM_BONUS * confirm)
     home_pool = home_pool | lane
     if TREE_COVERED is not None and "canopy_over" in scored.columns:
         home_pool = home_pool | (scored["canopy_over"] >= TREE_COVERED).fillna(False)
@@ -1196,11 +1502,19 @@ def order_constrained_picks(address_df, scored_df, positions, fallback,
                 # 83/91, 115/127 and 42/44 share buildings; at the full SHARE_PENALTY road order slid the side instead)
                 share = SURPLUS_SHARE_PENALTY
             if share is None and two_home_places:
-                vec = np.array([_PLACE_SHARE.get(b, LOT_SHARE_PENALTY) if b in two_home_places else np.inf
+                surplus = k > len(home_buildings or candidates) or not TWO_DWELLING_SURPLUS
+                vec = np.array([np.inf if (b in _TWO_DWELL_PLACES and not surplus and b not in _NEIGHBOR_LOTS)
+                                else _PLACE_SHARE.get(b, LOT_SHARE_PENALTY) if b in two_home_places else np.inf
                                 for b in order], dtype=float)
-                total, match = monotone_assign(P, share_penalty=vec if np.isfinite(vec).any() else None)
+                total, match = _road_assign(P, vec if np.isfinite(vec).any() else None, order, direction, street,
+                                            positions, numbers)
             else:
-                total, match = monotone_assign(P, share_penalty=share)
+                sp = share
+                if RURAL_NO_SHARE and _RURAL_BUILDINGS and not townhouses:
+                    # owner's rule: a house on a rural lot is one home with one number, never a duplex
+                    base = SHARE_PENALTY if share is None else share
+                    sp = np.array([np.inf if b in _RURAL_BUILDINGS else float(base) for b in order], dtype=float)
+                total, match = _road_assign(P, sp, order, direction, street, positions, numbers)
             if best is None or total > best[0]:
                 best = (total, {numbers[i]: order[j] for i, j in match.items()}, direction, order)
         if COUNT_RUNS and not townhouses:
@@ -1387,6 +1701,62 @@ WHERE s.sqmeters >= %(min_m2)s
   AND ((NOT %(back_only)s AND (n.fronts OR n.close)) OR (%(back_only)s AND NOT n.any_front AND n.close))
   AND ST_Area(ST_Intersection(s.geom, p.geom)::geography) >= %(share)s * ST_Area(s.geom::geography)
 """
+# Owner (2026-11-27, 52/54 Aquilla Road, Gray: "e911 is correct ... assume it is empty on 52, and 54 as multiple
+# buildings with 52"): along the shore an empty road-fronting lot's number goes on the house next door, which then
+# carries two numbers (E911 puts 52 and 54 on 54's house). With SHORE_EMPTY_NEIGHBOR_M set, a house (>= STRADDLE_MIN_M2,
+# within that many m of water) on a lot touching an empty road-fronting house-sized lot gets a second slot (as
+# STRADDLE's). None = off.
+SHORE_EMPTY_NEIGHBOR_M = None
+# ...and only houses: residential, at most this outline (Gray's Portland Road: 584-641 m2 village stores that NAIP's
+# water mask put 0-26 m from "water" took second numbers, -8). None = any size.
+SHORE_EMPTY_NEIGHBOR_MAX_M2 = None
+SHORE_EMPTY_NEIGHBOR_SQL = """
+WITH empty AS (
+  SELECT p.parcel_id, p.geom FROM address_inference.parcels p
+  WHERE p.town = %(town)s AND ST_Area(p.geom::geography) BETWEEN 300 AND 20000
+    AND NOT EXISTS (SELECT 1 FROM address_inference.building_parcels bp WHERE bp.parcel_id = p.parcel_id)
+    AND EXISTS (SELECT 1 FROM address_inference.parcel_frontage f
+                JOIN address_inference.street_match_segments m ON m.tlid = f.tlid AND m.town = p.town
+                WHERE f.parcel_id = p.parcel_id)
+)
+SELECT DISTINCT s.source_id
+FROM empty e
+JOIN address_inference.parcels q ON q.geom && ST_Expand(e.geom, 0.0001) AND q.parcel_id <> e.parcel_id
+     AND ST_DWithin(q.geom::geography, e.geom::geography, 1.5)
+JOIN address_inference.building_parcels bp ON bp.parcel_id = q.parcel_id
+JOIN address_inference.structures s ON s.source_id = bp.source_id
+JOIN address_inference.building_water w ON w.source_id = s.source_id
+WHERE s.sqmeters >= %(min_m2)s AND w.water_dist_m <= %(water)s
+  AND (%(max_m2)s::float IS NULL OR (s.sqmeters <= %(max_m2)s::float
+       AND s.prim_occ IN ('Single Family Dwelling', 'Multi - Family Dwelling', 'Manufactured Home')))
+"""
+# ...and the second slot sits where the empty lot meets the road, not at the house (owner: 54's house takes two lots,
+# so 52's slot is lot 52's place along the road, between 50 and 54). False = at the house.
+SHORE_EMPTY_NEIGHBOR_AT_LOT = False
+_DUP_POS: dict = {}  # (street, source_id) -> meters along the street of the empty lot it also carries
+SHORE_EMPTY_NEIGHBOR_POS_SQL = """
+WITH empty AS (
+  SELECT p.parcel_id, p.geom FROM address_inference.parcels p
+  WHERE p.town = %(town)s AND ST_Area(p.geom::geography) BETWEEN 300 AND 20000
+    AND NOT EXISTS (SELECT 1 FROM address_inference.building_parcels bp WHERE bp.parcel_id = p.parcel_id)
+), fronts AS (
+  SELECT e.parcel_id, e.geom, m.label_street, st.geom AS sg
+  FROM empty e JOIN address_inference.parcel_frontage f ON f.parcel_id = e.parcel_id
+  JOIN address_inference.street_match_segments m ON m.tlid = f.tlid AND m.town = %(town)s
+  JOIN address_inference.streets_ext st ON st.tlid = f.tlid
+)
+SELECT DISTINCT ON (s.source_id, fr.label_street) s.source_id, fr.label_street,
+       ST_LineLocatePoint(l.g, ST_ClosestPoint(fr.sg, ST_Centroid(fr.geom))) * ST_Length(l.g::geography)
+FROM fronts fr
+JOIN street_lines l ON l.street = fr.label_street AND ST_GeometryType(l.g) = 'ST_LineString'
+JOIN address_inference.parcels q ON q.geom && ST_Expand(fr.geom, 0.0001) AND q.parcel_id <> fr.parcel_id
+     AND ST_DWithin(q.geom::geography, fr.geom::geography, 1.5)
+JOIN address_inference.building_parcels bp ON bp.parcel_id = q.parcel_id
+JOIN address_inference.structures s ON s.source_id = bp.source_id
+JOIN address_inference.building_water w ON w.source_id = s.source_id
+WHERE s.sqmeters >= %(min_m2)s AND w.water_dist_m <= %(water)s
+ORDER BY s.source_id, fr.label_street, ST_Distance(s.geom::geography, fr.geom::geography)
+"""
 WITHIN_NO_ROOF_FACTOR = 0.25  # "min"/"min_near": a footprint lidar measured with no roof counts this share of its size
 
 
@@ -1415,6 +1785,79 @@ OTHER_STREET_MAX_BUILDINGS = None
 # Imagery first (owner): a building whose traced driveway visibly reaches this street (<= LANE_MAX_OFF_M off
 # pavement) is never dropped by OTHER_STREET_LOTS (89 Allen Point Road: 0 m off pavement to Allen Point Rd).
 OTHER_STREET_DRIVEWAY_WINS = False
+# A building whose tax lot is in the next town (no lot in this town's data) takes that lot's tax-roll street here --
+# only for OTHER_STREET_LOTS, never as a model input (2026-11-26: linking those lots for the model too,
+# dataset.PARCELS_ACROSS_LINE, cost Freeport 30 -- Webster -11, Bow -10 -- through the retrained ranker). 3 Sequoia
+# Drive's house is on Yarmouth's lot "607 GRANITE STREET". Needs LOT_ADDRESSES_ACROSS_LINE. False = off.
+OTHER_STREET_ACROSS_LINE = False
+_ACROSS_PARCEL: dict = {}  # source_id -> parcel_id, for buildings whose lot is another town's
+ACROSS_PARCEL_SQL = """
+SELECT bp.source_id, bp.parcel_id
+FROM address_inference.building_parcels bp
+JOIN address_inference.parcels p ON p.parcel_id = bp.parcel_id AND p.state_fips = bp.state_fips
+WHERE bp.state_fips = '23' AND p.town <> %(town)s AND p.geom && (
+    SELECT ST_Expand(t.geom, 0.005) FROM towns t WHERE t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s) LIMIT 1)
+"""
+# Owner's rule (2026-11-25, 3 Sequoia Drive, Freeport): a house tied to two roads belongs to the bigger road. With
+# BIGGER_ROAD_TIE_M set, a building within BIGGER_ROAD_NEAR_M of another street and no more than BIGGER_ROAD_TIE_M
+# farther from it than from this street is no place in this street's order when that road is at least
+# BIGGER_ROAD_RATIO times as long (TIGER, around the town). The 607
+# Granite Street house stands 29 m from Sequoia Drive and 30 m from Granite Street; road order gave it 3 Sequoia and
+# 5-19 each slid one house. None = off.
+BIGGER_ROAD_TIE_M = None
+BIGGER_ROAD_NEAR_M = 40.0
+BIGGER_ROAD_RATIO = 1.5
+# ...and only when the house's traced driveway reaches the bigger road at least as easily (cost <= this street's x
+# BIGGER_ROAD_DRIVE); no trace to both roads = the house stays. 607 Granite: 474 to Granite vs 648 to Sequoia. Without
+# it the rule cost Freeport 32 in the village grid (Main Street -7, Veronica Lane -4). None = distance alone.
+BIGGER_ROAD_DRIVE = None
+_DRIVE_COST: dict = {}  # source_id -> {canonical road: driveway cost}
+_ROAD_DIST: dict = {}  # source_id -> {E911 street: meters to its nearest matched TIGER piece}
+# "Bigger" = the named road's whole TIGER length around the town (Granite Street 3.6 km vs Sequoia Drive 0.8 km);
+# not its number count here (Granite has 7 Freeport numbers, Sequoia 23).
+_ROAD_LEN: dict = {}  # E911 street -> meters of TIGER road with its names within ~3 km of the town
+ROAD_LEN_SQL = """
+WITH names AS (
+    SELECT DISTINCT sms.label_street, s.fullname
+    FROM address_inference.street_match_segments sms JOIN streets s ON s.tlid::text = sms.tlid::text
+    WHERE sms.town = %(town)s AND s.fullname IS NOT NULL
+), t AS (SELECT geom FROM towns WHERE state_abbr = 'ME' AND upper(name) = upper(%(town)s))
+SELECT n.label_street, sum(ST_Length(s.geom::geography))
+FROM names n JOIN streets s ON s.fullname = n.fullname JOIN t ON ST_DWithin(s.geom, t.geom, 0.03)
+GROUP BY 1
+"""
+ROAD_DIST_SQL = """
+SELECT bs.source_id, sms.label_street, min(bs.dist_m)
+FROM address_inference.street_match_segments sms
+JOIN address_inference.building_segments bs ON bs.tlid = sms.tlid AND bs.state_fips = %(state_fips)s
+WHERE sms.town = %(town)s AND bs.dist_m <= %(near)s
+GROUP BY 1, 2
+"""
+
+
+def bigger_road_rows(df, address_df):
+    """Boolean array: the row's building is tied to a clearly bigger street than the address's (BIGGER_ROAD_TIE_M)."""
+    if BIGGER_ROAD_TIE_M is None or not _ROAD_DIST:
+        return np.zeros(len(df), dtype=bool)
+    from .street_names import canonical
+    size = _ROAD_LEN
+    street_of = dict(zip(address_df["id"], address_df["street"]))
+    out = []
+    for a, b in zip(df["address_id"], df["source_id"]):
+        st, dists = street_of.get(a), _ROAD_DIST.get(b, {})
+        mine = dists.get(st)
+        costs = _DRIVE_COST.get(b, {})
+
+        def drive_ok(other):
+            if BIGGER_ROAD_DRIVE is None:
+                return True
+            c_mine, c_other = costs.get(canonical(st)), costs.get(canonical(other))
+            return c_mine is not None and c_other is not None and c_other <= BIGGER_ROAD_DRIVE * c_mine
+        out.append(mine is not None and any(
+            other != st and d <= BIGGER_ROAD_NEAR_M and d <= mine + BIGGER_ROAD_TIE_M
+            and size.get(other, 0) >= BIGGER_ROAD_RATIO * max(size.get(st, 0), 1) and drive_ok(other)
+            for other, d in dists.items()))
+    return np.array(out, dtype=bool)
 
 
 # Owner's rule (location, like the driveway): a building whose tax lot
@@ -1440,9 +1883,30 @@ def load_lot_fronts_cached():
 
 
 def set_guard_town(dsn, town):
+    _ACROSS_PARCEL.clear()
+    if OTHER_STREET_ACROSS_LINE:
+        with psycopg.connect(dsn) as conn:
+            _ACROSS_PARCEL.update(dict(conn.execute(ACROSS_PARCEL_SQL, {"town": town}).fetchall()))
+    _ROAD_DIST.clear()
+    _ROAD_LEN.clear()
+    if BIGGER_ROAD_TIE_M is not None:
+        with psycopg.connect(dsn) as conn:
+            for b, st, d in conn.execute(ROAD_DIST_SQL, {"state_fips": "23", "town": town, "near": BIGGER_ROAD_NEAR_M}):
+                _ROAD_DIST.setdefault(b, {})[st] = d
+            _ROAD_LEN.clear()
+            _ROAD_LEN.update({st: float(m) for st, m in conn.execute(ROAD_LEN_SQL, {"town": town})})
+            _DRIVE_COST.clear()
+            if BIGGER_ROAD_DRIVE is not None:
+                from .street_names import canonical
+                for b, road, cost in conn.execute(
+                        "SELECT source_id, road, cost FROM address_inference.building_driveways WHERE source_id = ANY(%s)",
+                        (list(_ROAD_DIST),)):
+                    c = canonical(road)
+                    _DRIVE_COST.setdefault(b, {})[c] = min(cost, _DRIVE_COST.get(b, {}).get(c, float("inf")))
     _NEAR_WATER.clear()
     _WATER_DIST.clear()
-    reach = max((m for m in (WITHIN_SHORE_M, SHORE_TWO_HOMES_M) if m is not None), default=None)
+    reach = max((m for m in (WITHIN_SHORE_M, SHORE_TWO_HOMES_M, WALK_SHORE_M, LOT_OWN_PATH_SHORE_M, SHORE_SPLIT_M) if m is not None),
+                default=None)
     if reach is not None:
         with psycopg.connect(dsn) as conn:
             if conn.execute("SELECT to_regclass('address_inference.building_water')").fetchone()[0]:
@@ -1461,6 +1925,29 @@ def set_guard_town(dsn, town):
     _NEAR_SMALL.clear()
     if SHED_SMALL_ROOF_M2 is not None:
         _NEAR_SMALL.update(load_near_small(dsn, town))
+    _LOT_EXTRA.clear()
+    _RURAL_BUILDINGS.clear()
+    if LOT_MAX_HOMES is not None:
+        _LOT_EXTRA.update(load_lot_extra(dsn, town))
+        if RURAL_NO_SHARE or WALK_RURAL or COUNT_RURAL_ENDS or RURAL_SPLIT_LOTS:
+            with psycopg.connect(dsn) as conn:
+                _RURAL_BUILDINGS.update(r[0] for r in conn.execute(RURAL_BUILDINGS_SQL, {
+                    "town": town, "min_lot": LOT_MAX_HOMES_MIN_LOT_M2, "max_n": int(LOT_MAX_HOMES_MAX_BUILDINGS),
+                    "res_only": bool(LOT_MAX_HOMES_RESIDENTIAL)}))
+            _RURAL_SPLIT.clear()
+            if RURAL_SPLIT_LOTS and RURAL_SPLIT_MIN_M2 is not None:
+                with psycopg.connect(dsn) as conn:
+                    _RURAL_SPLIT.update(r[0] for r in conn.execute(RURAL_SPLIT_SQL, {
+                        "rural": list(_RURAL_BUILDINGS), "skipped": list(_LOT_EXTRA), "barn": LOT_MAX_HOMES_BARN_M2,
+                        "min_m2": float(RURAL_SPLIT_MIN_M2), "ratio": float(RURAL_SPLIT_MIN_RATIO)}))
+    _SHORE_SPLIT.clear()
+    if SHORE_SPLIT_M is not None:
+        shore = [b for b, d in _WATER_DIST.items() if d is not None and d <= SHORE_SPLIT_M]
+        with psycopg.connect(dsn) as conn:
+            _SHORE_SPLIT.update(r[0] for r in conn.execute(SHORE_SPLIT_SQL, {
+                "town": town, "skipped": list(_LOT_EXTRA), "shore": shore, "max_n": int(LOT_MAX_BUILDINGS),
+                "min_m2": float(SHORE_SPLIT_MIN_M2), "ratio": float(SHORE_SPLIT_MIN_RATIO),
+                "res_only": bool(SHORE_SPLIT_RESIDENTIAL)}))
     _TOUCHING.clear()
     if SHED_TOUCH_M is not None:
         _TOUCHING.update(load_touching(dsn, town))
@@ -1473,6 +1960,9 @@ def set_guard_town(dsn, town):
         into, total = load_merged(dsn, town, MERGE_TOUCHING_M)
         _MERGED_INTO.update(into)
         _MERGED_SIZE.update(total)
+    _SAME_ROOF_DROP.clear()
+    if MERGE_SAME_ROOF_M is not None:
+        _SAME_ROOF_DROP.update(load_same_roof(dsn, town, MERGE_SAME_ROOF_M))
     _COMBINED_RATIO.clear()
     if SHED_COMBINED_SIZE:
         with psycopg.connect(dsn) as conn:
@@ -1494,8 +1984,21 @@ def set_guard_town(dsn, town):
             _STRADDLE.update(r[0] for r in conn.execute(STRADDLE_SQL, {
                 "town": town, "min_m2": float(STRADDLE_MIN_M2), "share": float(STRADDLE_MIN_SHARE),
                 "near_m": float(STRADDLE_NEAR_M), "back_only": bool(STRADDLE_BACK_ONLY)}))
+    if SHORE_EMPTY_NEIGHBOR_M is not None:
+        with psycopg.connect(dsn) as conn:
+            _STRADDLE.update(r[0] for r in conn.execute(SHORE_EMPTY_NEIGHBOR_SQL, {
+                "town": town, "min_m2": float(STRADDLE_MIN_M2), "water": float(SHORE_EMPTY_NEIGHBOR_M),
+                "max_m2": None if SHORE_EMPTY_NEIGHBOR_MAX_M2 is None else float(SHORE_EMPTY_NEIGHBOR_MAX_M2)}))
+    _DUP_POS.clear()
+    if SHORE_EMPTY_NEIGHBOR_M is not None and SHORE_EMPTY_NEIGHBOR_AT_LOT:
+        with psycopg.connect(dsn) as conn:
+            street_lines(conn, {"region": "me", "town": town, "state_fips": "23"})
+            for sid, street, along in conn.execute(SHORE_EMPTY_NEIGHBOR_POS_SQL, {
+                    "town": town, "min_m2": float(STRADDLE_MIN_M2), "water": float(SHORE_EMPTY_NEIGHBOR_M)}):
+                if along is not None:
+                    _DUP_POS[(street, sid)] = float(along)
     _OCC.clear()
-    if LOT_TWO_DWELLINGS or LOT_OWN_DRIVE_M or SHORE_TWO_HOMES_M is not None:
+    if LOT_TWO_DWELLINGS or LOT_OWN_DRIVE_M or SHORE_TWO_HOMES_M is not None or TWO_DWELLING_SHARE is not None:
         with psycopg.connect(dsn) as conn:
             _OCC.update(dict(conn.execute(OCC_SQL, {"town": town}).fetchall()))
     _SIZE.clear()
@@ -1507,6 +2010,14 @@ def set_guard_town(dsn, town):
                 if pid:
                     _LOT[sid] = pid
     _OWN_DRIVE.clear()
+    if LOT_OWN_PATH_M is not None:
+        with psycopg.connect(dsn) as conn:
+            if conn.execute("SELECT to_regclass('address_inference.lot_own_paths')").fetchone()[0]:
+                for a, b in conn.execute(OWN_PATH_SQL, {"m": float(LOT_OWN_PATH_M), "share": float(LOT_OWN_PATH_SHARE),
+                                                         "join": float(LOT_OWN_PATH_JOIN_M)}):
+                    if LOT_OWN_PATH_SHORE_M is None or all(
+                            _WATER_DIST.get(x, 1e9) <= LOT_OWN_PATH_SHORE_M for x in (a, b)):
+                        _OWN_DRIVE.update((a, b))
     if LOT_OWN_DRIVE_M:
         with psycopg.connect(dsn) as conn:
             _OWN_DRIVE.update(own_drive_homes(conn, town))
@@ -1714,9 +2225,13 @@ def load_near_biggest(dsn, town, near) -> dict:
 SHED_SMALL_ROOF_M2 = None
 SHED_SMALL_NEAR_M = 60.0
 SHED_SMALL_RATIO = 0.5
+# ...and a building lidar sees no roof on (roof_m2 = 0) counts by its outline (owner, 2026-11-25, 48 Webster Road:
+# road order put 48 on a 71 m2 outline with no roof in the lidar and no driveway, 59 m from 48's 149 m2-roof house,
+# and 50-78 each slid one house). False = such buildings are never outbuildings here.
+SHED_SMALL_ZERO_ROOF = False
 _NEAR_SMALL: dict = {}
 NEAR_SMALL_SQL = """
-SELECT s.source_id, bl.roof_m2 / nullif((
+SELECT s.source_id, (CASE WHEN bl.roof_m2 > 0 THEN bl.roof_m2 ELSE s.sqmeters END) / nullif((
            SELECT max(coalesce(nullif(ol.roof_m2, 0), o.sqmeters))
            FROM address_inference.structures o
            LEFT JOIN address_inference.building_lidar ol ON ol.state_fips = o.state_fips AND ol.source_id = o.source_id
@@ -1726,7 +2241,9 @@ SELECT s.source_id, bl.roof_m2 / nullif((
 FROM address_inference.structures s
 JOIN towns t ON t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s) AND ST_Intersects(t.geom, s.inner_point)
 JOIN address_inference.building_lidar bl ON bl.state_fips = s.state_fips AND bl.source_id = s.source_id
-WHERE s.state_fips = '23' AND bl.roof_m2 > 0 AND bl.roof_m2 < %(max_roof)s
+WHERE s.state_fips = '23'
+  AND ((bl.roof_m2 > 0 AND bl.roof_m2 < %(max_roof)s)
+       OR (%(zero_roof)s AND coalesce(bl.roof_m2, 0) = 0 AND s.sqmeters < %(max_roof)s))
 """
 
 
@@ -1807,6 +2324,126 @@ def load_merged(dsn, town, near):
         total[rep] = sum(size.get(m, 0) for m in members)
         into.update({m: rep for m in members if m != rep})
     return into, total
+# Owner's "attached = one building", seen in lidar (2026-11-27, 38/40 Aquilla Road, Gray): two FEMA outlines 13.9 m
+# apart on lots "38" and "40" carry the very same lidar roof (286 m2 at 5.59 m) -- one roof grown over both, a house and
+# its garage under one roofline. The roadside piece took 40 and 42-52 each slid one house. With MERGE_SAME_ROOF_M set,
+# outlines within that many m reporting an identical roof (area and height) are one building, whatever the lots say:
+# the one farthest from its road stands for it (the house back toward the water; the garage sits by the road), the
+# others take no number. None = off.
+MERGE_SAME_ROOF_M = None
+_SAME_ROOF_DROP: set = set()
+SAME_ROOF_SQL = """
+WITH t AS (
+    SELECT s.source_id, s.geom, l.roof_m2, l.roof_h,
+           (SELECT min(bs.dist_m) FROM address_inference.building_segments bs
+             WHERE bs.state_fips = s.state_fips AND bs.source_id = s.source_id) AS road_m
+    FROM address_inference.structures s
+    JOIN address_inference.building_lidar l ON l.state_fips = s.state_fips AND l.source_id = s.source_id
+    JOIN towns tw ON tw.state_abbr = 'ME' AND upper(tw.name) = upper(%(town)s) AND ST_Intersects(tw.geom, s.inner_point)
+    WHERE s.state_fips = '23' AND l.roof_m2 > 0 AND l.roof_h IS NOT NULL
+)
+SELECT a.source_id, b.source_id, a.road_m, b.road_m
+FROM t a JOIN t b ON a.source_id < b.source_id AND a.roof_m2 = b.roof_m2 AND a.roof_h = b.roof_h
+ AND a.geom && ST_Expand(b.geom, 0.0005) AND ST_DWithin(a.geom::geography, b.geom::geography, %(near)s)
+"""
+
+
+def load_same_roof(dsn, town, near):
+    """Outlines to drop: every member of an identical-roof group but the one farthest from its road."""
+    parent, road = {}, {}
+
+    def find(x):
+        while parent.setdefault(x, x) != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+    with psycopg.connect(dsn) as conn:
+        for a, b, ra, rb in conn.execute(SAME_ROOF_SQL, {"town": town, "near": float(near)}):
+            road[a], road[b] = ra if ra is not None else -1, rb if rb is not None else -1
+            parent[find(a)] = find(b)
+    groups = defaultdict(list)
+    for x in parent:
+        groups[find(x)].append(x)
+    drop = set()
+    for members in groups.values():
+        keep = max(members, key=lambda m: (road.get(m, -1), m))
+        drop.update(m for m in members if m != keep)
+    return drop
+
+
+# Owner (2026-11-27, 52 Aquilla Road, Gray: "covered by vegetation completely ... but space is still there, we can
+# evaluate its exist by the space"): a house-sized lot fronting the street with no building on it is still a place
+# along the road. Trees hid 52's house from every footprint source, so 40-50 each took the house before theirs. With
+# EMPTY_LOT_PLACES on, each such lot is a candidate place ("empty:<parcel>") at its frontage, on its side of the road,
+# for that side's numbers; a number placed there is left unplaced (no building seen) rather than taking a neighbor's
+# house. Lot shapes only, never the tax roll's numbers.
+EMPTY_LOT_PLACES = False
+EMPTY_LOT_MIN_FRONT_M = 15.0
+EMPTY_LOT_MIN_M2 = 800.0
+EMPTY_LOT_MAX_M2 = 20000.0
+# Owner (2026-11-27, Aquilla Road on the lake: "close to coast line, quite expensive, can't be left empty at all"):
+# only empty lots within this many m of open water (address_inference.water) count -- inland vacant lots (Gray -27
+# with all 293) don't. None = every empty lot.
+EMPTY_LOT_WATER_M = None
+# The empty place's ranker score: "weakest" (its side's weakest candidate for that number) or "median".
+EMPTY_LOT_SCORE = "weakest"
+EMPTY_LOT_SQL = """
+WITH segs AS (
+    SELECT sms.label_street, st.tlid, st.geom FROM address_inference.street_match_segments sms
+    JOIN address_inference.streets_ext st ON st.tlid = sms.tlid
+    WHERE sms.region_id = %(region)s AND sms.town = %(town)s
+), lots AS (
+    SELECT DISTINCT ON (p.parcel_id, s.label_street) p.parcel_id, s.label_street, s.tlid, s.geom AS sg,
+           ST_Centroid(p.geom) AS c
+    FROM address_inference.parcel_frontage pf
+    JOIN address_inference.parcels p ON p.parcel_id = pf.parcel_id
+    JOIN segs s ON s.tlid = pf.tlid
+    WHERE pf.frontage_m >= %(front)s
+      AND ST_Area(p.geom::geography) BETWEEN %(min_m2)s AND %(max_m2)s
+      AND NOT EXISTS (SELECT 1 FROM address_inference.building_parcels bp WHERE bp.parcel_id = p.parcel_id)
+      -- waterfront: a neighboring house (within 60 m of the lot) stands within %(water)s m of water
+      AND (%(water)s::float IS NULL OR EXISTS (
+           SELECT 1 FROM address_inference.structures nb
+           JOIN address_inference.building_water bw ON bw.source_id = nb.source_id
+           WHERE nb.geom && ST_Expand(p.geom, 0.001) AND bw.water_dist_m <= %(water)s::float
+             AND ST_DWithin(nb.geom::geography, p.geom::geography, 60)))
+    ORDER BY p.parcel_id, s.label_street, pf.frontage_m DESC
+)
+SELECT lots.parcel_id, lots.label_street, lots.tlid,
+       ST_LineLocatePoint(l.g, ST_ClosestPoint(lots.sg, lots.c)) * ST_Length(l.g::geography) AS along,
+       ST_Y(lots.c), ST_X(lots.c),
+       -- side of the segment: sign of the cross product at the lot's projection
+       (SELECT CASE WHEN (ST_X(b) - ST_X(a)) * (ST_Y(lots.c) - ST_Y(a)) - (ST_Y(b) - ST_Y(a)) * (ST_X(lots.c) - ST_X(a)) > 0
+                    THEN 'L' ELSE 'R' END
+          FROM (SELECT ST_LineInterpolatePoint(lots.sg, greatest(t - 0.01, 0)) a,
+                       ST_LineInterpolatePoint(lots.sg, least(t + 0.01, 1)) b
+                  FROM (SELECT ST_LineLocatePoint(lots.sg, lots.c) t) tt) ab)
+FROM lots JOIN street_lines l ON l.street = lots.label_street
+WHERE ST_GeometryType(l.g) = 'ST_LineString'
+"""
+
+
+def empty_lot_places(dsn, region, town, segments):
+    """[(street, place id, along m, lat, lon, parity)] for empty house-sized lots fronting a matched street."""
+    from .street_lines import street_lines as _lines
+    seg_of = {str(sg[1]): sg for sg in segments}
+    out = []
+    params = {"region": region.id, "town": town, "state_fips": region.state_fips, "front": EMPTY_LOT_MIN_FRONT_M,
+              "min_m2": EMPTY_LOT_MIN_M2, "max_m2": EMPTY_LOT_MAX_M2,
+              "water": None if EMPTY_LOT_WATER_M is None else float(EMPTY_LOT_WATER_M)}
+    with psycopg.connect(dsn) as conn:
+        _lines(conn, params)
+        for pid, street, tlid, along, lat, lon, side in conn.execute(EMPTY_LOT_SQL, params).fetchall():
+            sg = seg_of.get(str(tlid))
+            if sg is None or along is None:
+                continue
+            f = _house_number(sg[2] if side == "L" else sg[4])
+            if f is None:
+                continue
+            out.append((street, "empty:" + pid, float(along), lat, lon, f % 2))
+    return out
+
+
 # Owner (2026-11-19, 271 Cathance Road, Topsham): footprints that are solar arrays (address_inference/solar.py:
 # low lidar roof over a non-roof photo, or a dark square tracker) are never buildings. Needs solar.py run for the
 # town (address_inference.footprint_photo); without it nothing is dropped. False = off.
@@ -1814,10 +2451,75 @@ NOT_SOLAR = True  # Topsham 2026-11-19: +1 (271 Cathance), 0 broke; a no-op wher
 _SOLAR: set = set()
 
 
+# Owner's rule (2026-11-25, Webster Road, Freeport): a rural lot has big space around its buildings, but no more
+# than LOT_MAX_HOMES primary buildings; past that, the smaller ones are skipped (sheds, garages, barns' annexes).
+# 52 Webster: five buildings, E911's two houses are the two biggest (149, 121 m2); 71/36/36 m2 took wrong numbers.
+# Size = lidar roof, else outline. Rural = a lot of at least LOT_MAX_HOMES_MIN_LOT_M2 with at most
+# LOT_MAX_HOMES_MAX_BUILDINGS buildings (a mobile-home park's one lot -- 26 on "0 Veronica Lane" -- is not rural).
+# FEMA calls nearly every Freeport building a "Single Family Dwelling" (a 1,917 m2 barn too), so type can't help.
+# None = off.
+LOT_MAX_HOMES = None
+LOT_MAX_HOMES_MIN_LOT_M2 = 8000.0
+LOT_MAX_HOMES_MAX_BUILDINGS = 6
+# ...and only lots whose buildings FEMA all calls Residential (US Route One's store lots: -13 without this)
+LOT_MAX_HOMES_RESIDENTIAL = False
+# ...and a building this big on a house lot is a barn, not a primary building: it is neither counted among the lot's
+# homes nor skipped (59 Webster: a 1,284 m2 barn outranked E911's 312 m2 house, and 31-59 each slid one house).
+# None = every building is counted.
+LOT_MAX_HOMES_BARN_M2 = None
+_LOT_EXTRA: set = set()
+# ...and on those rural lots a house never holds two numbers (52 Webster: with its sheds skipped, 48 and 50 both took
+# e1e1 -- TIGER's 88-26 over 1.4 km pulls every spot ~190 m toward the low numbers -- and 52-58 slid one house, leaving
+# 58's house empty). Needs LOT_MAX_HOMES on. False = sharing costs SHARE_PENALTY as everywhere.
+RURAL_NO_SHARE = False
+_RURAL_BUILDINGS: set = set()
+RURAL_BUILDINGS_SQL = """
+SELECT bp.source_id
+FROM address_inference.parcels p
+JOIN towns t ON t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s) AND ST_Intersects(t.geom, ST_PointOnSurface(p.geom))
+JOIN address_inference.building_parcels bp ON bp.state_fips = p.state_fips AND bp.parcel_id = p.parcel_id
+JOIN address_inference.structures s ON s.state_fips = bp.state_fips AND s.source_id = bp.source_id
+WHERE p.state_fips = '23' AND ST_Area(p.geom::geography) >= %(min_lot)s
+  AND p.parcel_id IN (SELECT bp2.parcel_id FROM address_inference.building_parcels bp2
+                      JOIN address_inference.structures s2 ON s2.state_fips = bp2.state_fips AND s2.source_id = bp2.source_id
+                      WHERE bp2.state_fips = p.state_fips AND bp2.parcel_id = p.parcel_id
+                      GROUP BY bp2.parcel_id
+                      HAVING count(*) <= %(max_n)s AND (bool_and(s2.occ_cls = 'Residential') OR NOT %(res_only)s))
+"""
+LOT_EXTRA_SQL = """
+WITH lot AS (
+    SELECT p.state_fips, p.parcel_id
+    FROM address_inference.parcels p
+    JOIN towns t ON t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s) AND ST_Intersects(t.geom, ST_PointOnSurface(p.geom))
+    WHERE p.state_fips = '23' AND ST_Area(p.geom::geography) >= %(min_lot)s
+), ranked AS (
+    SELECT bp.source_id, count(*) OVER w AS n, bool_and(s.occ_cls = 'Residential') OVER w AS res,
+           row_number() OVER (w ORDER BY coalesce(nullif(bl.roof_m2, 0), s.sqmeters) DESC NULLS LAST, bp.source_id) AS rk
+    FROM lot
+    JOIN address_inference.building_parcels bp ON bp.state_fips = lot.state_fips AND bp.parcel_id = lot.parcel_id
+    JOIN address_inference.structures s ON s.state_fips = bp.state_fips AND s.source_id = bp.source_id
+    LEFT JOIN address_inference.building_lidar bl ON bl.state_fips = s.state_fips AND bl.source_id = s.source_id
+    WHERE %(barn)s::float IS NULL OR coalesce(nullif(bl.roof_m2, 0), s.sqmeters) < %(barn)s::float
+    WINDOW w AS (PARTITION BY lot.parcel_id)
+)
+SELECT source_id FROM ranked WHERE rk > %(keep)s AND n <= %(max_n)s AND (res OR NOT %(res_only)s)
+"""
+
+
+def load_lot_extra(dsn, town) -> set:
+    """source_ids of a rural lot's buildings past its LOT_MAX_HOMES biggest."""
+    with psycopg.connect(dsn) as conn:
+        return {r[0] for r in conn.execute(LOT_EXTRA_SQL, {
+            "town": town, "min_lot": LOT_MAX_HOMES_MIN_LOT_M2, "keep": int(LOT_MAX_HOMES),
+            "max_n": int(LOT_MAX_HOMES_MAX_BUILDINGS), "res_only": bool(LOT_MAX_HOMES_RESIDENTIAL),
+            "barn": LOT_MAX_HOMES_BARN_M2})}
+
+
 def load_near_small(dsn, town) -> dict:
     with psycopg.connect(dsn) as conn:
         return {sid: r for sid, r in conn.execute(NEAR_SMALL_SQL, {
-            "town": town, "near": SHED_SMALL_NEAR_M, "homes": list(HOME_CLASSES), "max_roof": SHED_SMALL_ROOF_M2})
+            "town": town, "near": SHED_SMALL_NEAR_M, "homes": list(HOME_CLASSES), "max_roof": SHED_SMALL_ROOF_M2,
+            "zero_roof": bool(SHED_SMALL_ZERO_ROOF)})
                 if r is not None}
 
 
@@ -1837,8 +2539,12 @@ def drop_near_sheds(scored_df):
         shed |= scored_df["source_id"].map(lambda b: _ATTACHED.get(b, 1.0)) < 1.0
     if NOT_SOLAR and _SOLAR:
         shed |= scored_df["source_id"].isin(_SOLAR)
+    if LOT_MAX_HOMES is not None and _LOT_EXTRA:
+        shed |= scored_df["source_id"].isin(_LOT_EXTRA)
     if MERGE_TOUCHING_M is not None and _MERGED_INTO:
         shed |= scored_df["source_id"].isin(_MERGED_INTO.keys())
+    if MERGE_SAME_ROOF_M is not None and _SAME_ROOF_DROP:
+        shed |= scored_df["source_id"].isin(_SAME_ROOF_DROP)
     return scored_df[~shed]
 
 
@@ -2714,6 +3420,20 @@ JOIN towns t ON t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s) AND ST_I
 ORDER BY d.source_id, d.cost
 """
 _OWN_DRIVE: set = set()  # own_drive_homes for the current town (set_guard_town)
+# Owner (2026-11-25, 104/106 Maquoit Drive): a second home's driveway is the sign it is its own address. With
+# LOT_OWN_PATH_M set, two dwellings on one lot are separate places when one's own way to the road (own_paths.py,
+# traced with other roofs blocked) runs apart on pavement for >= LOT_OWN_PATH_M and >= LOT_OWN_PATH_SHARE of its
+# apart stretch, and meets the other's way only within LOT_OWN_PATH_JOIN_M of the road. None = off.
+LOT_OWN_PATH_M = None
+LOT_OWN_PATH_SHARE = 0.7
+LOT_OWN_PATH_JOIN_M = 15.0
+# ...only where both dwellings stand within this many m of open water (coastal homes; owner: business lots differ).
+# Everywhere, Freeport 2026-11-25: -53 (US Route One -21, Baker Road -13: units of complexes). None = everywhere.
+LOT_OWN_PATH_SHORE_M = None
+OWN_PATH_SQL = """
+SELECT source_id, other_id FROM address_inference.lot_own_paths
+WHERE paved_apart_m >= %(m)s AND paved_apart_m >= %(share)s * apart_m AND join_road_m <= %(join)s
+"""
 OWN_DRIVE_LOTS_SQL = """
 SELECT bp.source_id, bp.parcel_id, s.prim_occ, s.sqmeters, ST_Y(s.inner_point), ST_X(s.inner_point)
 FROM address_inference.building_parcels bp
@@ -2799,10 +3519,14 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
     parcel_of: {source_id: parcel id}; buildings without one stay single."""
     scored_df = drop_near_sheds(scored_df)
     df = scored_df.assign(p=probabilities(scored_df))
+    if BIGGER_ROAD_TIE_M is not None:
+        df = df[~bigger_road_rows(df, address_df)]
     if OTHER_STREET_LOTS and streets_of_lot:
         from .street_names import canonical
         street_of = {a: canonical(st) for a, st in zip(address_df["id"], address_df["street"])}
         lot_of = df["source_id"].map(parcel_of)
+        if OTHER_STREET_ACROSS_LINE and _ACROSS_PARCEL:
+            lot_of = lot_of.fillna(df["source_id"].map(_ACROSS_PARCEL))
         if OTHER_STREET_MAX_BUILDINGS is not None:
             # a big lot can front several streets (89 Allen Point Road's lot holds 5 houses, the tax roll
             # calls it "10 Merriman Cove Rd"): its one tax-roll street says nothing about each house
@@ -2856,7 +3580,10 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
         lot_size[pid] += 1
     # Ordinary lots only: a condo or apartment parcel (Harvest Ridge Road's
     # townhouses, 2 Village View) holds many numbered buildings.
-    key = {b: ("lot:" + pid if 1 < lot_size[pid] <= LOT_MAX_BUILDINGS else b) for b, pid in parcel_of.items()}
+    key = {b: ("lot:" + pid if 1 < lot_size[pid] <= LOT_MAX_BUILDINGS
+               and not (RURAL_SPLIT_LOTS and b in (_RURAL_SPLIT if RURAL_SPLIT_MIN_M2 is not None
+                                                    else _RURAL_BUILDINGS))
+               and b not in _SHORE_SPLIT else b) for b, pid in parcel_of.items()}
     if LOT_SPREAD_MAX_M is not None and {"lat", "lon"} <= set(df.columns):
         # Owner (141/157 Baker Road): buildings of one big lot far apart are separate places, not one
         xy = df.drop_duplicates("source_id").set_index("source_id")[["lat", "lon"]]
@@ -2904,11 +3631,22 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
     for b in (_NEIGHBOR_SPLIT if NEIGHBOR_SPLIT_MODE == "split" else ()):
         if b in key:
             key[b] = b
-    if LOT_OWN_DRIVE_M and _OWN_DRIVE:
+    if (LOT_OWN_DRIVE_M or LOT_OWN_PATH_M is not None) and _OWN_DRIVE:
         for b in _OWN_DRIVE:
             if b in key:
                 key[b] = b
     df["place"] = df["source_id"].map(lambda b: key.get(b, b))
+    _RURAL_PLACES.clear()
+    if WALK_RURAL or COUNT_RURAL_ENDS:
+        for b in _RURAL_BUILDINGS:
+            _RURAL_PLACES.add(str(b))
+            _RURAL_PLACES.add(str(key.get(b, key.get(str(b), b))))
+    _SHORE_PLACES.clear()
+    if WALK_SHORE_M is not None:
+        for b, d in _WATER_DIST.items():
+            if d is not None and d <= WALK_SHORE_M:
+                _SHORE_PLACES.add(str(b))
+                _SHORE_PLACES.add(str(key.get(b, key.get(str(b), b))))
     expanded = set()  # (street, building) placed on its own by COUNT_MATCH_LOTS
     LAST_EXPANDED.clear()
     if COUNT_MATCH_LOTS and "sqmeters" in df.columns and "same_side" in df.columns:
@@ -3059,11 +3797,13 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
             positions_place[(street, b)] = positions[(street, b)]
     for (street, b), along in _RAW_POS.items():
         # a split house sits at its own spot along the road, not its lot's (only here, never in the ranker's inputs)
-        if NEIGHBOR_SPLIT_MODE == "split" and b in _NEIGHBOR_SPLIT and (street, b) in positions_place:
+        if (((NEIGHBOR_SPLIT_MODE == "split" and b in _NEIGHBOR_SPLIT) or (LOT_OWN_PATH_M is not None and b in _OWN_DRIVE)
+             or b in _SHORE_SPLIT)
+                and (street, b) in positions_place):
             positions_place[(street, b)] = along
     for (street, b), along in positions.items():
         if b in straddle_dups:
-            positions_place[(street, "dup:" + b)] = along
+            positions_place[(street, "dup:" + b)] = _DUP_POS.get((street, b), along)
     if LOT_SHARE_PENALTY is not None and "sqmeters" in df.columns:
         size = df.drop_duplicates("source_id").set_index("source_id")["sqmeters"].to_dict()
         by_lot = defaultdict(list)
@@ -3074,8 +3814,21 @@ def lot_picks(address_df, scored_df, positions, fallback, parcel_of, lot_reserve
                                      if len(s) >= 2 and sorted(s)[-2] >= LOT_SHARE_MIN_RATIO * max(s)
                                      and sorted(s)[-2] >= LOT_SHARE_MIN_M2}
     _PLACE_SHARE.clear()
+    _TWO_DWELL_PLACES.clear()
+    _NEIGHBOR_LOTS.clear()
+    if TWO_DWELLING_SHARE is not None and _OCC and "sqmeters" in df.columns:
+        size = df.drop_duplicates("source_id").set_index("source_id")["sqmeters"].to_dict()
+        n_dw = defaultdict(int)
+        for b, pid in parcel_of.items():
+            if _OCC.get(b) in HOME_CLASSES and (size.get(b) or 0) >= TWO_DWELLING_MIN_M2:
+                n_dw[pid] += 1
+        lots2 = {"lot:" + pid for pid, c in n_dw.items() if c >= 2}
+        _TWO_DWELL_PLACES.update(lots2)
+        _PLACE_SHARE.update({pl: float(TWO_DWELLING_SHARE) for pl in lots2})
+        kwargs["two_home_places"] = set(kwargs.get("two_home_places") or ()) | lots2
     if _NEIGHBOR_SPLIT and NEIGHBOR_SPLIT_MODE == "share":
         share_lots = {"lot:" + parcel_of[b] for b in _NEIGHBOR_SPLIT if b in parcel_of}
+        _NEIGHBOR_LOTS.update(share_lots)
         _PLACE_SHARE.update({pl: float(NEIGHBOR_SHARE_PENALTY) for pl in share_lots})
         kwargs["two_home_places"] = set(kwargs.get("two_home_places") or ()) | share_lots
     picked = order_constrained_picks(address_df, scored_place, positions_place, fallback, **kwargs)
@@ -3210,15 +3963,25 @@ def parse_prop_loc(prop_loc):
 LOT_NUMBER_FROM_PROP_NUM = True
 
 
+# Lots just across the town line (within ~500 m of its box) are read from their own town's tax roll too: a house
+# there can be a candidate for this town's streets. False = this town's tax roll only.
+LOT_ADDRESSES_ACROSS_LINE = False
+
+
 def load_lot_addresses(dsn, region, town) -> dict:
     """{(number, canonical street): [parcel_id, ...]}"""
     out = defaultdict(list)
     with psycopg.connect(dsn) as conn:
         if conn.execute("SELECT to_regclass('address_inference.parcels') IS NULL").fetchone()[0]:
             return {}
-        for parcel_id, prop_loc in conn.execute(
-                LOT_ADDRESSES_SQL if LOT_NUMBER_FROM_PROP_NUM else LOT_ADDRESSES_OLD_SQL,
-                {"state_fips": region.state_fips, "town": town}).fetchall():
+        sql = LOT_ADDRESSES_SQL if LOT_NUMBER_FROM_PROP_NUM else LOT_ADDRESSES_OLD_SQL
+        if LOT_ADDRESSES_ACROSS_LINE:
+            # the lot's own tax roll, wherever the town line runs (607 Granite Street is Yarmouth's lot, its house a
+            # candidate for Freeport's Sequoia Drive)
+            sql = sql.replace("AND town = %(town)s", """AND (town = %(town)s OR geom && (
+                SELECT ST_Expand(t.geom, 0.005) FROM towns t WHERE t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s)
+                LIMIT 1))""")
+        for parcel_id, prop_loc in conn.execute(sql, {"state_fips": region.state_fips, "town": town}).fetchall():
             key = parse_prop_loc(prop_loc)
             if key:
                 out[key].append(parcel_id)

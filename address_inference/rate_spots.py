@@ -23,6 +23,24 @@ import psycopg
 from .street_lines import street_lines
 
 RATE_COLS = ["d_rate_len", "d_rate_town"]
+# Extra ranker inputs next to d_rate_len (owner, 2026-11-25, Maquoit Drive: shore lots are wider and take more road
+# per number -- 5 to 19 m between neighbors -- so be flexible by lot size):
+# WITH_LOCAL_RATE: d_rate_local, meters to the spot on stretch_curve(RATE_LOCAL_WINDOW) through TIGER's own spots;
+# WITH_LOT_RATE: d_rate_lots, d_rate_len in units of the candidate's lot frontage on the street (min LOT_RATE_MIN_M).
+# Both off: Freeport 2026-11-25 vs 2063.5 right -- local -41, lots -20.5, both -11 (Webster Road -10..-15 each time).
+WITH_LOCAL_RATE = False
+WITH_LOT_RATE = False
+LOT_RATE_MIN_M = 15.0
+_LOCAL: dict = {}  # street -> local curve (WITH_LOCAL_RATE)
+_LOT_FRONT: dict = {}  # (street, source_id) -> its lot's frontage m on the street (WITH_LOT_RATE)
+LOT_FRONT_SQL = """
+SELECT m.label_street, bp.source_id::text, sum(pf.frontage_m)
+FROM address_inference.street_match_segments m
+JOIN address_inference.parcel_frontage pf ON pf.tlid = m.tlid
+JOIN address_inference.building_parcels bp ON bp.parcel_id = pf.parcel_id
+WHERE m.town = %(town)s
+GROUP BY 1, 2
+"""
 # Off until proven on every town (owner: prove it).
 RATE_SPOTS = True  # 2026-11-15, with order.MATCH_BONUS 0.6: 7 towns 13,785 -> 14,238 right numbers (Freeport -1)
 # Also give the ranker the street's own meters per number (street_rate_m).
@@ -74,16 +92,21 @@ RATE_FIT = None
 # Freeport+Gray median spot error by street: gated at 0.5 keeps 53 of the 65 streets the fit improves by 20 m+
 # and drops 146 of the 220 it worsens). None = no gate.
 RATE_FIT_MIN_RATIO = 0.5
+# "local": every street with RATE_MIN_NUMBERS+ TIGER spots gets stretch_curve with RATE_LOCAL_WINDOW -- the rate
+# measured near each number, piece by piece, not over the whole street (owner, 2026-11-25, 60 Maquoit Drive: 39-58
+# are packed ~4 m/number on TIGER's 120 m piece 50-58, the street averages ~6 m, so 60's spot fell 130 m ahead on
+# 78's house and road order slid 60-76 back one house).
+RATE_LOCAL_WINDOW = 20
 
 
-def stretch_curve(ns, qs, direction):
+def stretch_curve(ns, qs, direction, window=None):
     """(sorted distinct numbers, smoothed meters along) from the street's (number, TIGER spot) pairs."""
     order_ = np.argsort(ns)
     ns, qs = ns[order_], qs[order_]
     uniq = np.unique(ns)
     fit = []
     for n in uniq:
-        w = np.abs(ns - n) <= STRETCH_WINDOW
+        w = np.abs(ns - n) <= (STRETCH_WINDOW if window is None else window)
         x, y = ns[w], qs[w]
         if len(set(x)) >= 2:
             i, j = np.triu_indices(len(x), 1)
@@ -121,10 +144,14 @@ def theil_line(ns, qs, direction, len_rate=None):
 def street_spots(dsn, region, town, address_df) -> dict:
     """{street: (start_m, direction +1/-1, rate_len m/number, length_m)} plus key None -> rate_town."""
     _STRETCH.clear()
+    _LOCAL.clear()
+    _LOT_FRONT.clear()
     params = {"region": region.id, "town": town, "state_fips": region.state_fips}
     a = address_df
     with psycopg.connect(dsn) as conn:
         street_lines(conn, params)
+        if WITH_LOT_RATE:
+            _LOT_FRONT.update({(st, b): float(f) for st, b, f in conn.execute(LOT_FRONT_SQL, {"town": town})})
         rows = conn.execute(M0_ALONG_SQL, {
             "ids": [str(x) for x in a["id"]], "streets": list(a["street"]),
             "lons": [float(x) for x in a["m0_lon"]], "lats": [float(x) for x in a["m0_lat"]]}).fetchall()
@@ -157,6 +184,12 @@ def street_spots(dsn, region, town, address_df) -> dict:
         out[street] = (0.0 if direction > 0 else length, direction, length / top, length, len(set(ns)))
         if STRETCH_MIN_M is not None and length >= STRETCH_MIN_M and len(set(ns)) >= 10:
             _STRETCH[street] = stretch_curve(ns, qs, direction)
+        if WITH_LOCAL_RATE and len(set(ns[~np.isnan(qs)])) >= RATE_MIN_NUMBERS:
+            ok_l = ~np.isnan(qs)
+            _LOCAL[street] = stretch_curve(ns[ok_l], qs[ok_l], direction, RATE_LOCAL_WINDOW)
+        if RATE_FIT == "local" and len(set(ns[~np.isnan(qs)])) >= RATE_MIN_NUMBERS:
+            ok_q = ~np.isnan(qs)
+            _STRETCH[street] = stretch_curve(ns[ok_q], qs[ok_q], direction, RATE_LOCAL_WINDOW)
         elif RATE_FIT == "theil":
             fit = theil_line(ns, qs, direction, length / top)
             if fit is not None:
@@ -192,12 +225,13 @@ def add_rate_features(candidate_df, address_df, spots, positions) -> pd.DataFram
     """candidate_df plus RATE_COLS (NaN where the street or the building's position is unknown)."""
     rate_town = spots.get(None)
     number_of = dict(zip(address_df["id"], address_df["number"]))
-    d_len, d_town, rates = [], [], []
+    d_len, d_town, rates, d_local, d_lots = [], [], [], [], []
     for aid, street, sid in zip(candidate_df["address_id"], candidate_df["street"], candidate_df["source_id"]):
         s = spots.get(street)
         q = positions.get((street, sid))
         if s is None or q is None:
-            d_len.append(np.nan); d_town.append(np.nan); rates.append(np.nan)
+            d_len.append(np.nan); d_town.append(np.nan); rates.append(np.nan); d_local.append(np.nan)
+            d_lots.append(np.nan)
             continue
         start, direction, rate_len, _length, _k = s
         rates.append(rate_len)
@@ -206,8 +240,16 @@ def add_rate_features(candidate_df, address_df, spots, positions) -> pd.DataFram
         spot = (float(np.interp(n, curve[0], curve[1])) if curve is not None
                 else start + direction * n * rate_len)
         d_len.append(abs(q - spot))
+        loc = _LOCAL.get(street)
+        d_local.append(abs(q - float(np.interp(n, loc[0], loc[1]))) if loc is not None else np.nan)
+        front = _LOT_FRONT.get((street, str(sid)))
+        d_lots.append(abs(q - spot) / max(front or 0.0, LOT_RATE_MIN_M))
         d_town.append(abs(q - (start + direction * n * rate_town)) if rate_town else np.nan)
     out = candidate_df.assign(d_rate_len=d_len, d_rate_town=d_town)
+    if WITH_LOCAL_RATE:
+        out = out.assign(d_rate_local=d_local)
+    if WITH_LOT_RATE:
+        out = out.assign(d_rate_lots=d_lots)
     if WITH_STREET_RATE:
         # the street's own meters per number: lets the ranker learn where the
         # distance measure holds (rural roads ~7.5 m) and where it doesn't

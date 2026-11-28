@@ -35,6 +35,7 @@ const METHODS = [
   'assessor', 'assessor_e911roads',
   'pattern', 'pattern_pairs', 'pattern_ml',
   'rural_shapes', 'rural_swapped', 'rural_osm', 'best_option', 'ml_order_review',
+  'ml_order_fixes', 'ml_order_pins', 'walk_paths', 'range_trim', 'range_trim_sides', 'rural_lot_max', 'rural_split', 'bigger_road', 'across_line', 'cul_de_sac',
   'ml_order_e911roads', 'ml_e911roads',
   'ml_order_auto', 'ml_auto',
   'ml_order_list', 'ml_list',
@@ -44,7 +45,7 @@ const METHODS = [
 const BASE_METHOD = Object.fromEntries(
   METHODS.map((m) => [
     m,
-    (m === 'rural_shapes' || m === 'rural_swapped' || m === 'rural_osm' || m === 'best_option' || m === 'ml_order_review' || m === 'house_on_lot') ? 'ml_order' : m.startsWith('pattern') ? 'assessor' : m.startsWith('assessor') ? m.replace('assessor', 'ml_order') : m.replace('ml_order', 'ml'),
+    (m === 'rural_shapes' || m === 'rural_swapped' || m === 'rural_osm' || m === 'best_option' || m === 'ml_order_review' || m === 'ml_order_fixes' || m === 'ml_order_pins' || m === 'house_on_lot' || m === 'walk_paths' || m === 'range_trim' || m === 'range_trim_sides' || m === 'rural_lot_max' || m === 'rural_split' || m === 'bigger_road' || m === 'across_line' || m === 'cul_de_sac') ? 'ml_order' : m.startsWith('pattern') ? 'assessor' : m.startsWith('assessor') ? m.replace('assessor', 'ml_order') : m.replace('ml_order', 'ml'),
   ])
 );
 

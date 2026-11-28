@@ -413,9 +413,15 @@ FROM address_inference.building_parcels bp
 JOIN address_inference.parcels p ON p.parcel_id = bp.parcel_id AND p.state_fips = bp.state_fips
 JOIN address_inference.structures s ON s.state_fips = bp.state_fips AND s.source_id = bp.source_id
 {lidar_join}
-WHERE bp.state_fips = %(state_fips)s AND p.town = %(town)s
+WHERE bp.state_fips = %(state_fips)s AND {town_clause}
 ORDER BY bp.source_id
 """
+# Buildings whose tax lot lies in the next town (within ~500 m of this town's box) get that lot too (2026-11-26: the
+# house 3 Sequoia Drive, Freeport took is on Yarmouth's lot "607 GRANITE STREET" -- with no lot, the tax roll's street
+# name never reached OTHER_STREET_LOTS). Pair with order.LOT_ADDRESSES_ACROSS_LINE. False = this town's lots only.
+PARCELS_ACROSS_LINE = False
+_ACROSS_CLAUSE = """(p.town = %(town)s OR p.geom && (
+    SELECT ST_Expand(t.geom, 0.005) FROM towns t WHERE t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s) LIMIT 1))"""
 FRONTAGE_SQL = """
 SELECT pf.parcel_id, pf.tlid, pf.frontage_m
 FROM address_inference.parcel_frontage pf
@@ -517,10 +523,12 @@ def sized(sql: str, conn) -> str:
     """`sql` with {size} / {lidar_join} / {ratio} filled in for this database."""
     use = LIDAR_SIZE and not conn.execute(
         "SELECT to_regclass('address_inference.building_lidar') IS NULL").fetchone()[0]
+    town_clause = _ACROSS_CLAUSE if PARCELS_ACROSS_LINE else "p.town = %(town)s"
     if not use:
-        return sql.format(size="s.sqmeters", lidar_join="", ratio=size_ratio_sql("s.sqmeters", False))
+        return sql.format(size="s.sqmeters", lidar_join="", ratio=size_ratio_sql("s.sqmeters", False),
+                          town_clause=town_clause)
     size = "greatest(s.sqmeters, bl.roof_m2)"
-    return sql.format(size=size, ratio=size_ratio_sql(size, True),
+    return sql.format(size=size, ratio=size_ratio_sql(size, True), town_clause=town_clause,
                       lidar_join="LEFT JOIN address_inference.building_lidar bl\n"
                                  "  ON bl.state_fips = s.state_fips AND bl.source_id = s.source_id")
 
@@ -647,15 +655,227 @@ def apply_tiger_repairs(segments, candidates, town):
     return out, cands
 
 
+# Own ranges, step 1 (owner, 2026-11-25, Lower Flying Point Road 241, Freeport): one TIGER piece ranged odd 165-289
+# over 746 m while the street's odd numbers on it stop at 245 (247-289 don't exist; 291 is on the next piece), so every
+# spot fell up to 250 m short. With RANGE_TRIM on, a piece side's end is pulled in to the street's own last number
+# inside its range when the empty overshoot is >= RANGE_TRIM_SHARE of the range and >= RANGE_TRIM_MIN numbers. Uses
+# only TIGER and the number list being placed (never E911 positions). Numbers another piece of the street covers
+# with a tighter range don't count as this piece's.
+RANGE_TRIM = False
+RANGE_TRIM_SHARE = 0.25
+RANGE_TRIM_MIN = 20
+RANGE_TRIM_ENDS = "both"  # "high", "low" or "both"
+# Facing sides gate (2026-11-25, Yarmouth): on a piece with ranges on both sides whose TIGER numbers at an end are
+# within this many of each other, that end is trimmed only when the facing side's numbers stop short there too.
+# West Elm 436-598 / 437-599: odd 567 reaches the end, even stops at 544 -> a real empty stretch (trimming stretched
+# every even spot one house forward). East Elm 599-497 / 598-498: both stop short (533, 570) -> TIGER ran past the
+# street, trimmed. Lower Flying Point 250-100 / 289-165 disagree (39, 65) -> trimmed. None = no gate; one-sided
+# pieces are always trimmed.
+RANGE_TRIM_SIDES_DIFF = None
+
+
+def trim_ranges(segments, addresses):
+    """segments with each piece side's range pulled in to the numbers that really fall in it (RANGE_TRIM)."""
+    nums = defaultdict(set)
+    for a in addresses:
+        if a[1] is not None:
+            nums[a[2]].add(int(a[1]))
+    sides = defaultdict(list)  # street -> [(seg index, from idx, to idx, lo, hi)]
+    facing = {}  # (seg index, from idx) -> the other side's (from, to), None when one-sided
+    for i, seg in enumerate(segments):
+        for fi, ti in ((2, 3), (4, 5)):
+            f, t = _int_or_none(seg[fi]), _int_or_none(seg[ti])
+            if f is None or t is None or f % 2 != t % 2:
+                continue
+            of, ot = (4, 5) if fi == 2 else (2, 3)
+            one_sided = _int_or_none(seg[of]) is None or _int_or_none(seg[ot]) is None
+            sides[seg[0]].append((i, fi, ti, min(f, t), max(f, t), one_sided))
+            facing[(i, fi)] = None if one_sided else (int(seg[of]), int(seg[ot]))
+    # pass 1: each side's wanted trims, by where on the piece they are ("start" = the from-address end)
+    wants = {}  # (seg index, from idx) -> {"start"|"end": new number}
+    for street, rs in sides.items():
+        have = nums.get(street, set())
+        for i, fi, ti, lo, hi, one_sided in rs:
+            par = lo % 2
+            mine = []
+            for n in have:
+                # a one-sided piece also carries the other parity (it borrows this range: Circle Drive's evens)
+                if (n % 2 != par and not one_sided) or not lo <= n <= hi:
+                    continue
+                tighter = any(j != i and l2 % 2 == n % 2 and l2 <= n <= h2 and h2 - l2 < hi - lo
+                              for j, _f, _t, l2, h2, _o in rs)
+                if not tighter:
+                    mine.append(n)
+            if not mine:
+                continue
+            top, bot = max(mine), min(mine)
+            top += (top - par) % 2  # keep the range's own parity: an even top on an odd range ends one above
+            bot = max(par, bot - (bot - par) % 2)
+            f, t = int(segments[i][fi]), int(segments[i][ti])
+            w = {}
+            if RANGE_TRIM_ENDS in ("high", "both") and hi - top >= max(RANGE_TRIM_MIN, RANGE_TRIM_SHARE * (hi - lo)):
+                w["start" if f > t else "end"] = top
+            if RANGE_TRIM_ENDS in ("low", "both") and bot - lo >= max(RANGE_TRIM_MIN, RANGE_TRIM_SHARE * (hi - lo)):
+                w["start" if f <= t else "end"] = bot
+            if w:
+                wants[(i, fi)] = w
+    # pass 2: the facing-sides gate, then apply
+    out = [list(seg) for seg in segments]
+    for (i, fi), w in wants.items():
+        ti = fi + 1
+        f, t = int(segments[i][fi]), int(segments[i][ti])
+        other = facing.get((i, fi))
+        nf, nt = f, t
+        for end, value in w.items():
+            if RANGE_TRIM_SIDES_DIFF is not None and other is not None:
+                agree = abs((f, t)[end == "end"] - other[end == "end"]) < RANGE_TRIM_SIDES_DIFF
+                if agree and end not in wants.get((i, 6 - fi), {}):
+                    continue  # the sides agree and the facing side's numbers reach this end: a real empty stretch
+            if end == "start":
+                nf = value
+            else:
+                nt = value
+        if (nf, nt) != (f, t) and nf != nt and (nf < nt) == (f < t):
+            out[i][fi], out[i][ti] = str(nf), str(nt)
+            TRIMMED.append((segments[i][0], segments[i][1], "L" if fi == 2 else "R", (f, t), (nf, nt)))
+    return [tuple(seg) for seg in out]
+
+
+TRIMMED: list = []
+# The reliability inputs (TIGER inflation/unevenness) keep reading TIGER's own ranges: the trim repairs the spots, but
+# "TIGER overshot here" is still true (Webster Road, Freeport: trimming its far piece 109-199 -> 109-113 made the
+# street look clean and cost 31-93 on another piece, -16). False = they read the trimmed ranges.
+RANGE_TRIM_KEEP_RELIABILITY = True
+_UNTRIMMED: list = []
+
+
+def reliability_segments(segments):
+    """The segments the reliability inputs should read (TIGER's own ranges when the trim is on)."""
+    return _UNTRIMMED if (RANGE_TRIM and RANGE_TRIM_KEEP_RELIABILITY and _UNTRIMMED) else segments
+
+
+# Lot fill (fill_lots.py) buildings ignored as candidates below these outline sizes (2026-11-25, Freeport: lidar
+# patches under 60 m2 were E911's house 4 of 19 times and took 9 wrong numbers vs 2 right -- Webster Road 32 sat on a
+# 37 m2 patch). None = keep all.
+LOT_FILL_LIDAR_MIN_M2 = None
+LOT_FILL_MS_MIN_M2 = None
+
+
+# Owner-confirmed E911 label fixes (e911_corrections.py; Maquoit Drive 72-80, Freeport): E911 stays the teacher and
+# grader, these few points just get the building Google, the tax roll and the owner agree on. Never a model input.
+E911_CORRECTIONS = True
+LAST_CORRECTED = [0]
+
+
+# Owner's cul-de-sac (Gray, Krames Point Road): TIGER draws the loop at a dead
+# end as one closed piece, so its from/to can't say which way round the numbers
+# run (start = end). The addresser drives in and keeps going the way the entry
+# road runs straight into: Krames Point's entry arrives at 81 deg, the loop's
+# clockwise branch leaves at 78, its counter-clockwise (TIGER's) at 143 -- E911
+# numbers it clockwise, and every number had its mirror house. True = such a
+# loop is reversed (geometry flipped, left/right ranges swapped so each parity
+# stays on its side of the road, attached houses' t -> 1-t and side flipped)
+# when its reverse branch is the straighter continuation of the entry road.
+LOOP_STRAIGHT_DIRECTION = False
+LOOP_REVERSE_SQL = """
+WITH loops AS (
+    SELECT st.tlid, st.geom FROM address_inference.street_match_segments sms
+    JOIN address_inference.streets_ext st ON st.tlid = sms.tlid
+    WHERE sms.region_id = %(region)s AND sms.town = %(town)s
+      AND ST_IsClosed(st.geom) AND ST_NPoints(st.geom) >= 4
+), entry AS (  -- the road arriving at the loop's start/end point (the longest one touching it)
+    SELECT DISTINCT ON (l.tlid) l.tlid, l.geom,
+           CASE WHEN ST_DWithin(ST_StartPoint(o.geom)::geography, ST_StartPoint(l.geom)::geography, 2)
+                THEN degrees(ST_Azimuth(ST_PointN(o.geom, 2), ST_StartPoint(o.geom)))
+                ELSE degrees(ST_Azimuth(ST_PointN(o.geom, ST_NPoints(o.geom) - 1), ST_EndPoint(o.geom))) END AS arrive
+    FROM loops l JOIN streets o ON o.tlid <> l.tlid AND o.geom && ST_Expand(ST_StartPoint(l.geom), 0.0001)
+     AND ST_DWithin(o.geom::geography, ST_StartPoint(l.geom)::geography, 2)
+    ORDER BY l.tlid, ST_Length(o.geom::geography) DESC
+)
+SELECT tlid, ST_AsText(ST_Reverse(geom)) FROM entry
+WHERE abs(((degrees(ST_Azimuth(ST_EndPoint(geom), ST_PointN(geom, ST_NPoints(geom) - 1))) - arrive + 540)::numeric %% 360) - 180)
+    < abs(((degrees(ST_Azimuth(ST_StartPoint(geom), ST_PointN(geom, 2))) - arrive + 540)::numeric %% 360) - 180)
+"""
+
+
+def reverse_loops(segments, candidates, reversed_wkt):
+    """Segments/candidates with each loop in {tlid: reversed WKT} run the other way round."""
+    if not reversed_wkt:
+        return segments, candidates
+    segs = []
+    for seg in segments:
+        wkt = reversed_wkt.get(str(seg[1]))
+        if wkt is not None:
+            seg = list(seg)
+            seg[2], seg[3], seg[4], seg[5] = seg[4], seg[5], seg[2], seg[3]  # L <- R, R <- L
+            seg[6] = wkt
+            seg[8], seg[9] = seg[9], seg[8]
+            seg = tuple(seg)
+        segs.append(seg)
+    cands = []
+    for c in candidates:
+        if str(c[2]) in reversed_wkt:
+            c = list(c)
+            c[3] = {"L": "R", "R": "L"}.get(c[3], c[3])
+            c[4] = 1.0 - c[4]
+            c = tuple(c)
+        cands.append(c)
+    return segs, cands
+
+
+LAST_LOOPS_REVERSED = []
+
+# The same owner's rule without touching ranges (no retraining): after scoring,
+# a house attached to a loop's unranged entry road takes its side from where
+# it sits along that road -- left of travel driving in = the loop's left
+# (L) parity, right = the other (Krames Point: 5 on the right, 2/4/6 left).
+LOOP_ENTRY_SIDE = False
+
+# The loop's unnumbered entry road (same street, no TIGER range) -- used by LOOP_ENTRY_SIDE below.
+LOOP_ENTRY_SQL = """
+SELECT l.tlid, e.tlid,
+       ST_DWithin(ST_StartPoint(e.geom)::geography, ST_StartPoint(l.geom)::geography, 2) AS starts_at_loop,
+       ST_Length(e.geom::geography), ST_Length(l.geom::geography), ls.label_street
+FROM address_inference.street_match_segments ls
+JOIN address_inference.streets_ext l ON l.tlid = ls.tlid
+JOIN address_inference.street_match_segments es ON es.region_id = ls.region_id AND es.town = ls.town
+     AND es.label_street = ls.label_street AND es.tlid <> ls.tlid
+JOIN address_inference.streets_ext e ON e.tlid = es.tlid
+WHERE ls.region_id = %(region)s AND ls.town = %(town)s
+  AND ST_IsClosed(l.geom) AND ST_NPoints(l.geom) >= 4 AND NOT ST_IsClosed(e.geom)
+  AND coalesce(e.lfromadd, '') = '' AND coalesce(e.rfromadd, '') = ''
+  AND ST_DWithin(e.geom::geography, ST_StartPoint(l.geom)::geography, 2)
+"""
+
+
+
 def load(dsn, region, town: str):
     params = {"region": region.id, "town": town, "state": region.state_abbr,
               "state_fips": region.state_fips, "radius": TRUE_BUILDING_RADIUS_M}
     with psycopg.connect(dsn) as conn:
         addresses = conn.execute(ADDRESSES_SQL, params).fetchall()
+        if E911_CORRECTIONS:
+            # confirmed wrong E911 points get the owner-checked building, for labels and scoring alike
+            from . import e911_corrections
+            addresses, LAST_CORRECTED[0] = e911_corrections.apply(addresses, e911_corrections.load(conn, town))
         segments = conn.execute(SEGMENTS_SQL, params).fetchall()
         candidates = conn.execute(sized(CANDIDATES_SQL, conn), params).fetchall()
         if TIGER_REPAIR:
             segments, candidates = apply_tiger_repairs(segments, candidates, town)
+        LAST_LOOPS_REVERSED.clear()
+        if LOOP_STRAIGHT_DIRECTION:
+            rev = dict(conn.execute(LOOP_REVERSE_SQL, params).fetchall())
+            LAST_LOOPS_REVERSED.extend(rev)
+            segments, candidates = reverse_loops(segments, candidates, rev)
+        mins = {k: v for k, v in (("lot_lidar", LOT_FILL_LIDAR_MIN_M2), ("lot_ms", LOT_FILL_MS_MIN_M2)) if v}
+        if mins:
+            small = {r[0] for src, m2 in mins.items() for r in conn.execute(
+                "SELECT source_id FROM address_inference.structures WHERE source = %s AND sqmeters < %s", (src, float(m2)))}
+            candidates = [c for c in candidates if c[1] not in small]
+        TRIMMED.clear()
+        _UNTRIMMED[:] = segments
+        if RANGE_TRIM:
+            segments = trim_ranges(segments, addresses)
         parcels = load_parcels(conn, params)
         if parcels is not None:
             parcels["pools"] = load_pools(conn)
@@ -759,6 +979,44 @@ def list_range_number(number, side_numbers, segments, min_inflation=None):
     return min(max(eq, t_lo), t_hi)
 
 
+# Owner (2026-11-26, Shore Drive, Freeport): TIGER's line stops mid-peninsula and a private drive no map has goes on
+# ~140 m to 63-93, so every number was expected 25-35% too early along the 420 m line and the odd side slid two houses
+# back. With PAST_END_EXTEND, a dead-end piece with at least PAST_END_EXT_MIN_BUILDINGS buildings (>= _MIN_M2) beyond
+# its end -- nearest to this piece, the farthest >= PAST_END_EXT_MIN_M out -- has its numbers' spots (M0 only; sides,
+# t and everything else stay TIGER's) laid along the line plus a path through those buildings in order of distance
+# from the end. Only our own footprints and TIGER; no E911, no OSM. False = off.
+PAST_END_EXTEND = False
+PAST_END_EXT_MIN_BUILDINGS = 3
+PAST_END_EXT_MIN_M = 30.0
+PAST_END_EXT_MIN_M2 = 40.0
+LAST_EXTENDED: list = []
+
+
+def extend_past_end(seg, cands):
+    """Sets seg["m0_points"] (the line plus a path through the buildings past its dead end) when it qualifies."""
+    pts = seg["points"]
+    if len(pts) < 2:
+        return
+    for t_end, dead, end_pt in ((1, seg.get("dead_end", True), pts[-1]), (0, seg.get("dead_start", True), pts[0])):
+        if not dead:
+            continue
+        past = {}
+        for c in cands:
+            if (c["tlid"] != seg["tlid"] or not c["at_end"] or c["t"] != t_end
+                    or (c.get("nearest_tlid") is not None and c["nearest_tlid"] != seg["tlid"])
+                    or (c.get("sqmeters") or 0) < PAST_END_EXT_MIN_M2
+                    or not beyond_end(pts, c["t"], c["lat"], c["lon"])):
+                continue
+            past[c["source_id"]] = (float(haversine_m(end_pt[1], end_pt[0], c["lat"], c["lon"])), c["lon"], c["lat"])
+        chain = sorted(past.values())
+        if len(chain) < PAST_END_EXT_MIN_BUILDINGS or chain[-1][0] < PAST_END_EXT_MIN_M:
+            continue
+        path = [(lon, lat) for _d, lon, lat in chain]
+        base = seg.get("m0_points", pts)
+        seg["m0_points"] = base + path if t_end == 1 else list(reversed(path)) + base
+        LAST_EXTENDED.append((seg["label_street"], seg["tlid"], len(chain), round(chain[-1][0])))
+
+
 def build(addresses, segments, candidates, parcels=None, ranges="tiger"):
     """Returns (address_df, candidate_df). Pure: takes the rows load()
     returns, so it's testable without a database.
@@ -794,6 +1052,10 @@ def build(addresses, segments, candidates, parcels=None, ranges="tiger"):
     for row in candidates:
         cand = dict(zip(cand_keys, row))
         cands_by_street[cand["label_street"]].append(cand)
+    if PAST_END_EXTEND:
+        for street, segs in segs_by_street.items():
+            for seg in segs:
+                extend_past_end(seg, cands_by_street.get(street, []))
 
     side_numbers = defaultdict(set)
     for _, number, street, *_rest in addresses:
@@ -817,7 +1079,7 @@ def build(addresses, segments, candidates, parcels=None, ranges="tiger"):
             address_rows.append(addr)
             continue
         seg, side, fraction, span = cover
-        m0_lon, m0_lat = interpolate_along_line(seg["points"], fraction, OFFSET_FEET,
+        m0_lon, m0_lat = interpolate_along_line(seg.get("m0_points", seg["points"]), fraction, OFFSET_FEET,
                                                 "left" if side == "L" else "right")
         addr.update(m0_lat=m0_lat, m0_lon=m0_lon, cover_tlid=seg["tlid"], cover_side=side, f=fraction,
                     cover_borrowed=seg.get("filled_side") == side)
@@ -903,6 +1165,58 @@ def _access_distance(addr, source_id, d_m0, parcels) -> float:
     if point is None:
         return d_m0
     return float(haversine_m(addr["m0_lat"], addr["m0_lon"], point[0], point[1]))
+
+
+# Owner (2026-11-26, Todd Brook Road, Freeport): around a cul-de-sac the numbers run on round the circle (45, 55, 61
+# past TIGER's end: 61 sits across from 45, on the "even" side of the line), so a house whose place on the street is
+# within CUL_DE_SAC_M of a dead end counts for either side -- road order only (evaluate swaps it in after scoring;
+# the model's same_side is untouched). None = off.
+CUL_DE_SAC_M = None
+CUL_DE_SAC_PARITY_CHECK = False
+CUL_DE_SAC_SHORT_CHECK = False  # truthy: an end house only crosses to a side with more numbers than houses; "giver": never from a side already short
+CUL_DE_SAC_HOUSE_P = 0.05  # SHORT_CHECK="count": a house a side "considers" has own-side p at least this
+CUL_DE_SAC_PARITY_RATIO = 1.0  # a side switch needs this many times the house's own side's best p
+# ...only toward the parity the ranker likes at least as much for that house
+CUL_DE_SAC_SKIP_COASTAL = True  # owner: dead ends running out to the shore (order.coastal_dead_ends) are no cul-de-sacs
+# ...or (CUL_DE_SAC_ENTRY_M) a house whose traced driveway (driveways.py) meets its road within this many meters of a
+# dead end of that road: Todd Brook's 45, 55 and 61 all enter at TIGER's end, though 61 sits 125 m back and projects
+# 109 m before it. None = off.
+CUL_DE_SAC_ENTRY_M = None
+CUL_DE_SAC_MIN_PIECE_M = 60.0
+CUL_DE_SAC_NEAR_M = 150.0
+CUL_DE_SAC_ENTRY_SQL = """
+WITH d AS (
+    SELECT bd.source_id, bd.road, ST_SetSRID(ST_MakePoint(bd.entry_lon, bd.entry_lat), 4326) AS entry
+    FROM address_inference.building_driveways bd
+    JOIN address_inference.structures s ON s.state_fips = bd.state_fips AND s.source_id = bd.source_id
+    JOIN towns t ON t.state_abbr = 'ME' AND upper(t.name) = upper(%(town)s) AND ST_Intersects(t.geom, s.inner_point)
+    WHERE bd.entry_lat IS NOT NULL
+)
+SELECT DISTINCT d.source_id, d.road FROM d
+JOIN address_inference.streets_ext st ON st.geom && ST_Expand(d.entry, 0.001) AND upper(st.fullname) = upper(d.road)
+CROSS JOIN LATERAL (VALUES (ST_StartPoint(st.geom)), (ST_EndPoint(st.geom))) e(p)
+JOIN address_inference.structures b ON b.source_id = d.source_id
+WHERE ST_DWithin(e.p::geography, d.entry::geography, %(m)s)
+  AND ST_Length(st.geom::geography) >= %(min_piece)s           -- a real road's end, not a TIGER stub
+  AND ST_DWithin(e.p::geography, b.inner_point::geography, %(near)s)  -- the house itself is by that end
+  AND NOT EXISTS (SELECT 1 FROM streets o WHERE o.tlid <> st.tlid AND o.geom && ST_Expand(e.p, 0.0001)
+                  AND ST_DWithin(o.geom::geography, e.p::geography, 2))
+"""
+
+
+def _end_dist(best, past_end, seg_by_tlid, dead_by_tlid):
+    """Meters along the street from the building's place to the nearest dead end of its piece (0 past the end)."""
+    if past_end:
+        return 0.0
+    seg = seg_by_tlid.get(best["tlid"])
+    if seg is None or not seg.get("length_m"):
+        return np.nan
+    if CUL_DE_SAC_MIN_PIECE_M and seg["length_m"] < CUL_DE_SAC_MIN_PIECE_M:
+        return np.nan  # a TIGER stub's loose end is no cul-de-sac (Maquoit Drive's 19 m and 32 m starts took 39 across)
+    dead_start, dead_end = dead_by_tlid.get(best["tlid"], (False, False))
+    out = [d for d, dead in ((best["t"] * seg["length_m"], dead_start), ((1 - best["t"]) * seg["length_m"], dead_end))
+           if dead]
+    return float(min(out)) if out else np.nan
 
 
 def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_cands, parcels=None):
@@ -1000,6 +1314,7 @@ def _candidates_for(addr, cover_seg, side, fraction, span, street_segs, street_c
             "d_m0": d_m0,
             "on_cover_segment": on_cover is not None,
             "same_side": same_side,
+            "end_dist_m": _end_dist(best, past_end, seg_by_tlid, dead_by_tlid),  # not a feature (CUL_DE_SAC_M)
             "beyond_end": past_end,
             "dt": abs(on_cover["t"] - fraction) * cover_seg["length_m"] if on_cover else np.nan,
             # Raw "how far along" vs "how many numbers along" from the range's
